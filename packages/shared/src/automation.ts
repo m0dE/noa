@@ -89,7 +89,8 @@ export const APPROVAL_TIMEOUT_MS = 10 * 60_000;
 /**
  * The browser methods that change something: each may wait for an approval
  * (so a caller's timeout for them must allow APPROVAL_TIMEOUT_MS more).
- * Reads, screenshots, scrolling and switching tabs never wait.
+ * Reads, screenshots, scrolling and switching tabs never wait; of the dialog
+ * answers, only OK on a confirm or prompt and Leave on "Leave site?" may.
  */
 export const APPROVAL_GATED_METHODS = [
   "browser.click",
@@ -101,6 +102,7 @@ export const APPROVAL_GATED_METHODS = [
   "browser.navigate",
   "browser.openTabs",
   "browser.closeTabs",
+  "browser.handleDialog",
 ] as const satisfies readonly BrowserMethod[];
 export type ApprovalGatedMethod = (typeof APPROVAL_GATED_METHODS)[number];
 

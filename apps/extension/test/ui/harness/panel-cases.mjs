@@ -818,6 +818,34 @@ export const PANEL_CASES = [
       await p.close();
     },
   },
+  // A page's browser dialogs in a run: one quiet line each among the steps, what the dialog said and how it was
+  // answered ("→ OK", "→ Cancel (automatically after 10 s)"), who answered it and where in its tooltip.
+  {
+    names: ["panel-dialog"],
+    async run({ ctx, size, scheme, label, fail, openPanel, shoot, checkLayout, reportErrors }) {
+      const p = await openPanel(ctx, "dialog", "#chat-log .ev-dialog");
+      // The steps fold once there are three tool calls: open them to see the lines.
+      await p.evaluate(() => document.querySelectorAll("#chat-log details.ev-steps").forEach((d) => (d.open = true)));
+      const lines = await p.evaluate(() =>
+        [...document.querySelectorAll("#chat-log .ev-dialog")].map((e) => ({
+          text: e.textContent,
+          title: e.title,
+          inSteps: !!e.closest(".ev-steps"),
+          fits: e.scrollWidth <= e.clientWidth + 1,
+        })),
+      );
+      const want = [
+        { text: "Dialog: Delete “Report Q3”? → OK", title: "A confirm dialog the page opened on reports.example.com in tab t1, answered by the agent" },
+        { text: "Dialog: Leave site? Changes you made may not be saved. → Cancel (automatically after 10 s)", title: "A beforeunload dialog the page opened on reports.example.com in tab t1, answered by Noa, because nobody did in time" },
+      ];
+      if (JSON.stringify(lines.map(({ text, title }) => ({ text, title }))) !== JSON.stringify(want)) fail(`dialog lines ${JSON.stringify(lines)}`);
+      if (!lines.every((l) => l.inSteps && l.fits)) fail(`dialog lines layout ${JSON.stringify(lines)}`);
+      await checkLayout(p, `dialog ${label}`);
+      await shoot(p, "panel-dialog", size, scheme);
+      reportErrors(p, `dialog ${label}`);
+      await p.close();
+    },
+  },
   // An action waiting for the user's OK (automation level "Ask before posting, sending or paying"): the approval card
   // with what, where, why and the exact text, answered by a click (Allow once) or a key (Alt+N denies); an earlier
   // allowed one keeps one quiet line.
@@ -1745,7 +1773,7 @@ export const PANEL_CASES = [
         if (await p.evaluate(() => window.__requests.some((r) => r.type === "voice.realtime"))) fail("Standard asked for the realtime relay");
         const problems = await orbCheck(p);
         if (problems.length) fail(`hands-free orb: ${problems.join("; ")}`);
-        if ((await p.textContent(".voice-caption")) !== "Hands-free: say what to do · “stop” to end") fail(`orb caption "${await p.textContent(".voice-caption")}"`);
+        if ((await p.textContent(".voice-caption")) !== "Listening · go ahead · say “stop” to end") fail(`orb caption "${await p.textContent(".voice-caption")}"`);
         await p.waitForFunction(() => document.getElementById("now-text").value.length > 0, null, { timeout: 15_000 });
         if (!(await p.evaluate(() => document.activeElement === document.getElementById("now-text")))) fail("the box lost the cursor");
         await checkLayout(p, `voice-mic-standard ${label}`);
@@ -1810,7 +1838,7 @@ export const PANEL_CASES = [
   // The voice strip (voice-bar.ts) while the fake microphone hears a voice: one line, "Voice on · <its tab>" (the tab's
   // name cut short when narrow) and "Hearing you", the
   // time on, a small meter, no buttons; the controls in the composer row (the mic, filled in the live colour, ends voice;
-  // Mute next to it); the box glowing with "Listening… just talk"; the background told the tab (its toolbar badge) and,
+  // Mute next to it); the box glowing with "Listening · go ahead"; the background told the tab (its toolbar badge) and,
   // when the mic ends it by keyboard, that it ended (the badge goes). With reduced motion nothing pulses.
   {
     names: ["panel-voicebar-hearing", "panel-voicebar-reduced"],
@@ -1855,11 +1883,11 @@ export const PANEL_CASES = [
         const want2 = (ok, what) => ok || fail(`${name} ${label}: ${what} ${JSON.stringify(look)}`);
         want2(look.label === "Voice on · Inbox (1) - ada.lovelace@ex…" && look.status === "Hearing you" && look.live === "Voice on: Listening", "state word / announcement");
         want2(/^0:0\d$/.test(look.time), "time on");
-        want2(look.hint === "Whisper voice · Just talk · say “stop” to end", "tooltip");
+        want2(look.hint === "Nova-3 voice · Just talk · say “stop” to end", "tooltip");
         want2(look.region[0] === "region" && look.region[1] === "Voice status", "strip region");
         want2(look.buttons === 0 && look.height <= 30, "a slim strip without buttons");
         want2(look.meter, "meter");
-        want2(look.placeholder === "Listening… just talk" && look.glow, "listening box");
+        want2(look.placeholder === "Listening · go ahead" && look.glow, "listening box");
         want2(look.micTitle === `End voice mode · ${VOICE_SHORTCUT_LABEL}` && look.micPressed === "true", "mic ends voice");
         want2(look.micFill !== "rgba(0, 0, 0, 0)" && look.micText === "Voice" && look.waves === 1, "Voice filled, still \"Voice\", its sound-wave icon");
         want2(JSON.stringify(look.mute) === JSON.stringify(["false", "Mute the microphone · Alt+M", "Mute the microphone · Alt+M", "", "live", 1, 28]), "Mute in the composer: a mic icon, named");
@@ -1879,7 +1907,7 @@ export const PANEL_CASES = [
           placeholder: document.getElementById("now-text").placeholder,
           glow: document.body.classList.contains("voice-live"),
         }));
-        if (after.reported?.listening !== false || after.reported?.tabId !== undefined || after.mic !== "idle" || after.mute || after.placeholder === "Listening… just talk" || after.glow)
+        if (after.reported?.listening !== false || after.reported?.tabId !== undefined || after.mic !== "idle" || after.mute || after.placeholder === "Listening · go ahead" || after.glow)
           fail(`${name} ${label}: after the mic ended it ${JSON.stringify(after)}`);
         reportErrors(p, `${name} ${label}`);
         await p.close();
@@ -2030,8 +2058,10 @@ export const PANEL_CASES = [
           ev({ type: "tool_call", id: "1", name: "navigate", args: { url: "https://mail.google.com/mail/u/0/#inbox" } });
           ev({ type: "tool_result", id: "1", name: "navigate", text: "Opened https://mail.google.com/mail/u/0/#inbox (title: Inbox)" });
         });
-        await waitPhase(p, "speaking");
-        if ((await spokenLast(p)) !== "Opening mail.google.com") fail(`milestone "${await spokenLast(p)}"`);
+        // Progress (milestones.ts PROGRESS): the new step, or, when the plan was said less than stepGapMs ago and the
+        // screenshots above took stillWorkingMs, "Still opening …".
+        await waitPhase(p, "speaking", 30_000);
+        if (!/^(Opening|Still opening) mail\.google\.com$/.test(await spokenLast(p))) fail(`progress line "${await spokenLast(p)}"`);
         await p.evaluate(() => window.__ttsRelease());
         await waitPhase(p, "working");
         const wl = await barCheck(p);
@@ -2051,7 +2081,7 @@ export const PANEL_CASES = [
         await p.waitForFunction(() => [...document.querySelectorAll("#chat-log .ev-spoken:not(.live) .ev-spoken-text")].some((e) => e.textContent === "Sarah says dinner moved to eight."));
         const lines = await p.evaluate(() => [...document.querySelectorAll("#chat-log .ev-spoken")].map((e) => [e.classList.contains("echo"), e.textContent]));
         if (JSON.stringify(lines) !== JSON.stringify([[true, "I'll open Gmail and read your newest email."], [false, "Sarah says dinner moved to eight."]])) fail(`spoken lines in the chat ${JSON.stringify(lines)}`);
-        if (await p.evaluate(() => window.__requests.some((r) => r.type === "voice.spoken" && /^Opening/.test(r.text)))) fail("a milestone was kept in the chat");
+        if (await p.evaluate(() => window.__requests.some((r) => r.type === "voice.spoken" && /^(Opening|Still )/.test(r.text)))) fail("a progress line was kept in the chat");
         if (await p.evaluate(() => window.__spoken.some((l) => /\*\*/.test(l)))) fail("a Markdown answer was read out");
 
         // The shortcut again ends it: the strip goes, the background hears the mic is off.
@@ -2070,7 +2100,7 @@ export const PANEL_CASES = [
         await waitPhase(p, "listening");
         await p.waitForSelector("#now-notice:not([hidden])");
         const tip = await p.textContent("#now-notice:not([hidden])");
-        if (!/^Realtime voice uses about 6¢ of usage credit a minute\. Whisper voice costs much less.Voice settings×$/.test(tip)) fail(`cost notice "${tip}"`);
+        if (!/^Realtime voice uses about 6¢ of usage credit a minute\. Nova-3 voice costs much less.Voice settings×$/.test(tip)) fail(`cost notice "${tip}"`);
         if (!(await p.evaluate(() => window.__requests.some((r) => r.type === "settings.save" && r.settings.realtimeCostNoticed === true)))) fail("the cost notice is not remembered");
         const rt = await p.evaluate(() => ({ protocols: window.__rt.protocols, sent: window.__rt.sent.map((e) => e.type), first: window.__rt.sent[0] }));
         if (JSON.stringify(rt.protocols) !== JSON.stringify(["noa", "bt.tok"])) fail(`subprotocols ${JSON.stringify(rt.protocols)}`);
@@ -2344,7 +2374,7 @@ export const PANEL_CASES = [
           live: document.body.classList.contains("voice-live"),
           placeholder: document.getElementById("now-text").placeholder,
         }));
-        if (remote.detail !== "Whisper voice · Listening in another window" || remote.meter || !remote.go || !remote.use || !remote.stop || remote.mic !== "idle" || remote.live || /Listening/i.test(remote.placeholder))
+        if (remote.detail !== "Nova-3 voice · Listening in another window" || remote.meter || !remote.go || !remote.use || !remote.stop || remote.mic !== "idle" || remote.live || /Listening/i.test(remote.placeholder))
           fail(`another tab's session ${JSON.stringify(remote)}`);
         await checkLayout(p, `handsfree-remote ${label}`);
         await shoot(p, "panel-handsfree-remote", size, scheme);
@@ -2381,14 +2411,14 @@ export const PANEL_CASES = [
           transcribed: window.__requests.some((r) => r.type === "voice.transcribe"),
           saved: window.__requests.some((r) => r.type === "settings.save" && "voiceEngine" in r.settings),
         }));
-        if (note.text !== "Realtime voice is unavailable on the server right now." || note.level !== "error" || JSON.stringify(note.actions) !== JSON.stringify(["Use Whisper voice"]) || note.transcribed || note.saved)
+        if (note.text !== "Realtime voice is unavailable on the server right now." || note.level !== "error" || JSON.stringify(note.actions) !== JSON.stringify(["Use Nova-3 voice"]) || note.transcribed || note.saved)
           fail(`unavailable note ${JSON.stringify(note)}`);
         await checkLayout(p, `handsfree-unavailable ${label}`);
         await shoot(p, "panel-handsfree-unavailable", size, scheme);
         // The user's choice: Standard, this once (Settings unchanged).
         await p.click("#now-notice .notice-action");
         await waitPhase(p, "listening");
-        if (await p.evaluate(() => window.__requests.some((r) => r.type === "settings.save" && "voiceEngine" in r.settings))) fail("Use Whisper voice changed Settings");
+        if (await p.evaluate(() => window.__requests.some((r) => r.type === "settings.save" && "voiceEngine" in r.settings))) fail("Use Nova-3 voice changed Settings");
         await p.evaluate(() => window.__push({ type: "panel.voice" }));
         await p.waitForFunction(() => document.querySelector("#voice-bar").hidden);
         reportErrors(p, `handsfree-unavailable ${label}`);
@@ -2425,6 +2455,103 @@ export const PANEL_CASES = [
         await p.waitForFunction(() => document.querySelector("#voice-bar").hidden);
         reportErrors(p, `handsfree-reconnecting ${label}`);
         await p.close();
+      }
+    },
+  },
+  // Hands-free starting (the owner's report: voice looked on while it was not listening, and "starting…" never
+  // changed). Until the microphone's audio reaches the engine nothing looks live: the strip grey, "Voice starting" and
+  // what it waits on ("Connecting…", "Opening the mic…"), the orb grey and pulsing with "Not listening yet · …", the
+  // box without its glow ("Not listening yet · wait for the sound"), the Voice button an outline. Then, at once, all of
+  // it goes live ("Listening"). A start that never gets there ends after START_TIMEOUT_MS with what went wrong and
+  // Try again.
+  {
+    names: ["panel-handsfree-connecting", "panel-handsfree-opening-mic", "panel-handsfree-start-failed"],
+    async run({ ctx, size, scheme, label, fail, want, openPanel, shoot, checkLayout, reportErrors, base }) {
+      await ctx.grantPermissions(["microphone"], { origin: base });
+      const look = (p) =>
+        p.evaluate(() => {
+          const bar = document.getElementById("voice-bar");
+          const orb = document.querySelector(".voice-orb");
+          const mic = document.querySelector("#now-actions .voice-mic");
+          return {
+            hidden: bar.hidden,
+            state: bar.dataset.state,
+            label: bar.querySelector(".vb-label").textContent,
+            status: bar.querySelector(".vb-status").textContent,
+            live: bar.querySelector("[aria-live=polite]").textContent,
+            barBg: getComputedStyle(bar).backgroundColor,
+            orb: orb.hidden ? null : orb.dataset.state,
+            caption: document.querySelector(".voice-caption").textContent,
+            placeholder: document.getElementById("now-text").placeholder,
+            glow: document.body.classList.contains("voice-live"),
+            micState: mic.dataset.state,
+            micWaiting: mic.dataset.waiting ?? null,
+            micFill: getComputedStyle(mic).backgroundColor,
+            mute: !document.querySelector("#now-actions .voice-mute").hidden,
+            notice: document.querySelector("#now-notice:not([hidden])")?.textContent ?? null,
+          };
+        });
+      const red = (bg) => /200, 35, 63|196, 42, 68/.test(bg);
+      const check = (seen, ok, what) => ok || fail(`${what} ${label}: ${JSON.stringify(seen)}`);
+      // A start whose microphone never delivers audio is opened first: its limit runs while the others are looked at.
+      let stuck = null;
+      if (want("panel-handsfree-start-failed", size, scheme)) {
+        stuck = await openPanel(ctx, "account", undefined, { edit: (d) => (d.state.settings.voiceEngine = "standard"), init: [installVoiceFakes, () => (navigator.mediaDevices.getUserMedia = () => new Promise(() => {}))] });
+        await stuck.evaluate(() => window.__push({ type: "panel.voice" }));
+      }
+
+      // Realtime connecting (the relay holds its session.created), then the microphone's audio: Listening.
+      if (want("panel-handsfree-connecting", size, scheme)) {
+        const p = await openPanel(ctx, "account", undefined, { init: [installVoiceFakes, () => (window.__rtMode = "hold")] });
+        await p.evaluate(() => window.__push({ type: "panel.voice" }));
+        await p.waitForFunction(() => window.__rt?.readyState === 1, null, { timeout: 10_000 });
+        const c = await look(p);
+        check(c, c.state === "starting" && c.label.startsWith("Voice starting") && c.status === "Connecting…" && c.live === "Voice starting: Connecting…", "connecting strip");
+        check(c, !red(c.barBg), "connecting strip is not live red");
+        check(c, c.orb === "opening" && c.caption === "Not listening yet · connecting…", "connecting orb");
+        check(c, c.placeholder === "Not listening yet · wait for the sound" && !c.glow, "connecting box");
+        check(c, c.micState === "handsfree" && c.micWaiting === "true" && !red(c.micFill) && !c.mute, "connecting Voice button");
+        await checkLayout(p, `handsfree-connecting ${label}`);
+        await shoot(p, "panel-handsfree-connecting", size, scheme);
+        // Connected: the fake microphone's audio goes to the narrator, and only then it listens.
+        await p.evaluate(() => window.__rt.emit({ type: "session.created", event_id: "ev1", session: { type: "realtime", model: "gpt-realtime-2.1" } }));
+        await p.waitForFunction(() => document.getElementById("voice-bar").dataset.phase === "listening", null, { timeout: 10_000 }).catch(() => fail(`never listening ${label}`));
+        const l = await look(p);
+        const appended = await p.evaluate(() => window.__rt.sent.some((e) => e.type === "input_audio_buffer.append"));
+        check(l, appended, "listening before any audio went to the narrator");
+        check(l, ["Listening", "Hearing you"].includes(l.status) && l.label.startsWith("Voice on") && red(l.barBg), "listening strip");
+        check(l, l.orb === "listening" && l.caption === "Listening · go ahead · say “stop” to end", "listening orb");
+        check(l, l.placeholder === "Listening · go ahead" && l.glow && l.micWaiting === null && red(l.micFill) && l.mute, "listening box and buttons");
+        await p.evaluate(() => window.__push({ type: "panel.voice" }));
+        await p.waitForFunction(() => document.querySelector("#voice-bar").hidden);
+        reportErrors(p, `handsfree-connecting ${label}`);
+        await p.close();
+      }
+
+      // Whisper with a microphone that does not open: "Opening the mic…".
+      if (want("panel-handsfree-opening-mic", size, scheme)) {
+        const p = await openPanel(ctx, "account", undefined, { edit: (d) => (d.state.settings.voiceEngine = "standard"), init: [installVoiceFakes, () => (navigator.mediaDevices.getUserMedia = () => new Promise(() => {}))] });
+        await p.evaluate(() => window.__push({ type: "panel.voice" }));
+        await p.waitForFunction(() => !document.getElementById("voice-bar").hidden, null, { timeout: 5000 });
+        const m = await look(p);
+        check(m, m.state === "starting" && m.status === "Opening the mic…" && m.caption === "Not listening yet · opening the mic…" && !m.glow && m.micWaiting === "true", "opening the mic");
+        await checkLayout(p, `handsfree-opening-mic ${label}`);
+        await shoot(p, "panel-handsfree-opening-mic", size, scheme);
+        await p.evaluate(() => window.__push({ type: "panel.voice" }));
+        await p.waitForFunction(() => document.querySelector("#voice-bar").hidden);
+        reportErrors(p, `handsfree-opening-mic ${label}`);
+        await p.close();
+      }
+
+      // The start that never got audio: it says so, with Try again (never "starting" for ever).
+      if (stuck) {
+        await stuck.waitForFunction(() => document.querySelector("#now-notice:not([hidden])"), null, { timeout: 40_000 }).catch(() => fail(`still starting after the limit ${label}`));
+        const f = await look(stuck);
+        check(f, f.hidden && f.orb === null && f.micState === "idle" && /The mic didn't start, so voice isn't listening/.test(f.notice ?? "") && /Try again/.test(f.notice ?? ""), "start failed");
+        await checkLayout(stuck, `handsfree-start-failed ${label}`);
+        await shoot(stuck, "panel-handsfree-start-failed", size, scheme);
+        reportErrors(stuck, `handsfree-start-failed ${label}`);
+        await stuck.close();
       }
     },
   },

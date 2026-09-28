@@ -131,6 +131,11 @@ export function buildSystemPrompt(opts: { tools: ToolName[]; jev: boolean; follo
       "When a task needs several pages (e.g. several emails, search results, profiles), open them together with open_tabs (their links' href from read_page) and read them with one read_page call using `tabs`, instead of opening them and going back one by one. Use switch_tab to act in one of them. Close tabs you no longer need with close_tabs. Tabs you opened stay open for this chat until it ends: when one needs the user (e.g. to sign in), pause and ask them to do it in that tab, then carry on there.",
     );
   }
+  if (tools.includes("handle_dialog")) {
+    rules.push(
+      'A browser dialog (alert, confirm, prompt, or "Leave site?") freezes its page, and every tool on that tab says so until it is answered: answer it with handle_dialog right away. Prefer Cancel (accept false). On "Leave site?", stay when the page holds changes that are not saved yet (save them first, or work in another tab); leave only when losing them is what the task wants. Never press OK on a confirm that deletes, sends, pays or discards anything the task does not ask for; such an OK waits for the user\'s approval like any other consequential action.',
+    );
+  }
   if (tools.includes("wait_for")) {
     rules.push(
       "When you must wait for something to happen on a page (a build or deploy to finish, a reply or status to change), call wait_for with what to look for (and the tab) instead of reading the page again and again: the browser watches it without you and answers when it happens, when the time is up or when the user writes. Give it a realistic number of minutes; when it answers \"still waiting\", call it again.",

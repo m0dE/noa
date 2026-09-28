@@ -136,6 +136,8 @@ const inTopFrame: Inject = async (tabId, func, args) => {
  */
 export class PageIndicators {
   private readonly shown = new Map<number, IndicatorVariant>();
+  /** Per tab, the last page script started: the next one runs after it, so they reach the page in order. */
+  private readonly queue = new Map<number, Promise<void>>();
 
   constructor(private readonly deps: { inject?: Inject; log?(message: string): void } = {}) {}
 
@@ -163,23 +165,30 @@ export class PageIndicators {
     return this.shown.has(tabId);
   }
 
-  /** Runs `fn` (a browser call) with the overlay, or its pill, hidden in that tab; nothing to hide: just runs it. */
+  /**
+   * Runs `fn` (a browser call) with the overlay, or its pill, hidden in that tab; nothing to hide: just runs it. The
+   * call does not wait for the overlay to come back: a dialog the call opened (a click on "Delete" that asks
+   * "Are you sure?") freezes the page, and a page script waits until someone answers it.
+   */
   async hiddenDuring<T>(tabId: number, part: HiddenPart, fn: () => Promise<T>): Promise<T> {
     if (!this.shown.has(tabId)) return fn();
     await this.run(tabId, hideIndicatorInPage, [part]);
     try {
       return await fn();
     } finally {
-      await this.run(tabId, hideIndicatorInPage, [null]);
+      void this.run(tabId, hideIndicatorInPage, [null]);
     }
   }
 
-  private async run(tabId: number, func: (...args: never[]) => unknown, args: unknown[]): Promise<void> {
-    try {
-      await this.inject(tabId, func, args);
-    } catch (err) {
-      this.deps.log?.(`overlay in tab ${tabId}: ${errorMessage(err)}`);
-    }
+  private run(tabId: number, func: (...args: never[]) => unknown, args: unknown[]): Promise<void> {
+    const next = (this.queue.get(tabId) ?? Promise.resolve()).then(
+      () => this.inject(tabId, func, args).then(() => undefined),
+    ).catch((err: unknown) => this.deps.log?.(`overlay in tab ${tabId}: ${errorMessage(err)}`));
+    this.queue.set(tabId, next);
+    void next.then(() => {
+      if (this.queue.get(tabId) === next) this.queue.delete(tabId);
+    });
+    return next;
   }
 }
 

@@ -836,8 +836,7 @@ body:has(.voice-orb:not([hidden])) .composer { z-index: var(--z-above-veil); }
   color: var(--muted); font-size: var(--text-sm); line-height: 1.4; text-align: center;
   max-width: min(320px, calc(100vw - 48px)); overflow-wrap: anywhere;
 }
-/* Hands-free starting (the microphone, the connection): the core dimmed. */
-.voice-orb[data-state="opening"] .voice-orb-core { opacity: 0.7; }
+/* Hands-free not listening yet (the connection, the microphone): grey and waiting (voice.css). */
 /* Hands-free: a quicker breath while a message waits to be sent; the core breathes while a line is said. */
 .voice-orb[data-state="sending"] .voice-orb-halo { animation-duration: 0.9s; }
 .voice-orb[data-state="speaking"] .voice-orb-core { animation: voice-breathe 1.2s ease-in-out infinite; }

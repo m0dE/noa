@@ -1,5 +1,6 @@
 export * from "./task.js";
 export * from "./browser.js";
+export * from "./dialog.js";
 export * from "./tools.js";
 export * from "./native.js";
 export * from "./events.js";

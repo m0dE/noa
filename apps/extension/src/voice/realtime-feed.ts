@@ -2,7 +2,9 @@
  * What the Realtime narrator is told about the chat: short text notes made
  * from the agent's events, each saying whether the narrator should speak
  * about it (and as what), by the one policy in narrator-policy.ts: the
- * result, the agent's question, a problem, and now and then a meaningful step.
+ * result, the agent's question, a problem; and progress while it works (a
+ * new step, "Still …" after a long silence: milestones.ts ProgressPacer,
+ * said as it is, never in the narrator's words: FeedNote.line).
  * What only echoes the user's request (their voice message, their words, the
  * agent restating it) is not passed on. Only milestones (milestones.ts), the
  * agent's own text (clipped, as context) and the short result lines
@@ -11,6 +13,7 @@
  */
 import { USER_STOP_REASON, type AgentEvent } from "@noa/shared";
 import { freshMemory, narrationOf, type NarrationMemory, type SpokenKind } from "./narrator-policy.js";
+import { ProgressPacer } from "./milestones.js";
 import { approvalLine } from "./approval-voice.js";
 
 /** The agent's text is passed on up to this many characters (the narrator summarises it). */
@@ -22,6 +25,8 @@ export interface FeedNote {
   text: string;
   /** Ask the narrator to say something about it (as this kind of line); null: context only. */
   speak: SpokenKind | null;
+  /** A progress line (speak "milestone"): said as it is (realtime-client.ts progressResponse). */
+  line?: string;
 }
 
 const clip = (text: string, max: number) => {
@@ -31,13 +36,26 @@ const clip = (text: string, max: number) => {
 
 export class NarratorFeed {
   private memory: NarrationMemory = freshMemory();
+  private readonly progress = new ProgressPacer();
   /** The agent's latest words (context for a milestone). */
   private said: string | null = null;
 
   /** A request went to the agent at `now` (the narrator acknowledged it): what it says about it starts over. */
   request(now: number): void {
     this.memory = freshMemory(now);
+    this.progress.reset(now);
     this.said = null;
+  }
+
+  /** The narrator spoke at `now` (anything: an acknowledgement, an answer, a line): progress waits its turn after it. */
+  spoke(now: number): void {
+    this.progress.said(now);
+  }
+
+  /** While the agent works: "Still …" after a long silence (a note to say), else nothing. */
+  tick(now: number): FeedNote[] {
+    const line = this.progress.stillWorking(now);
+    return line ? [{ text: `Your update (progress): ${line}.`, speak: "milestone", line }] : [];
   }
 
   /** The user asked the agent something while it works on a request: its next words are the answer (said once). */
@@ -48,6 +66,7 @@ export class NarratorFeed {
   /** An event of the chat the session follows: the notes for the narrator. */
   push(ev: AgentEvent, now: number): FeedNote[] {
     const spoken = narrationOf(ev, this.memory, now);
+    if (spoken) this.progress.said(now);
     switch (ev.type) {
       case "assistant_text":
         if (ev.text.trim()) this.said = clip(ev.text, MAX_AGENT_TEXT);
@@ -58,9 +77,10 @@ export class NarratorFeed {
         this.request(this.memory.lastSpokenAt);
         return [{ text: `Your update: the user typed you a message: "${clip(ev.text, MAX_USER_TEXT)}". Do not reply to it.`, speak: null }];
       case "tool_call": {
-        if (!spoken) return [];
+        const line = this.progress.step(ev, now);
+        if (!line) return [];
         const context = this.said ? ` (You last wrote: "${this.said}")` : "";
-        return [{ text: `Your update (progress): ${spoken.line}.${context} Say it in a few words, in the first person, only if it is news to the user.`, speak: "milestone" }];
+        return [{ text: `Your update (progress): ${line}.${context}`, speak: "milestone", line }];
       }
       case "error":
         return spoken ? [{ text: `Your update (problem): "${spoken.line}" Tell the user briefly, in the first person.`, speak: "error" }] : [];

@@ -9,6 +9,7 @@ import type { BrowserCaller } from "@noa/core";
 import type { ApprovalRequest, Screenshot } from "@noa/shared";
 import { AgentTab, closeChatTabs, type TabMode } from "./agent-tab.js";
 import type { Cdp } from "./cdp.js";
+import { closeTabsAsking, DialogWatch, type DialogEvent } from "./dialogs.js";
 import { Driver } from "./driver.js";
 import { createBrowserCaller, tracedBrowser, type BrowserCallTrace, type VaultLike } from "./engine/browser-caller.js";
 import { isRestrictedError } from "./restricted.js";
@@ -79,7 +80,12 @@ export class AgentSlots implements SlotPool {
     private readonly onBrowserCall?: (sessionId: string, call: Parameters<BrowserCallTrace>[0]) => void,
     /** Approvals before actions (the automation level). Absent: nothing waits. */
     private readonly approvals?: SlotApprovals,
+    /** A JavaScript dialog of a session's run was answered (dialogs.ts): the line its events get. */
+    private readonly onDialog?: (sessionId: string, event: DialogEvent) => void,
   ) {}
+
+  /** Closes a run's tabs at its end without leaving a page silently: "Leave site?" is answered Cancel, and the tab stays. */
+  private readonly removeTabs = async (tabIds: number[]): Promise<void> => void (await closeTabsAsking(this.cdp, tabIds, { cancel: true }));
 
   /** Slot n, created on first use. Slot 0 is the first agent tab. */
   get(index: number): Slot {
@@ -89,8 +95,16 @@ export class AgentSlots implements SlotPool {
     const tab = new AgentTab(index, {
       isTaken: (tabId) => this.takenByOther(index, tabId),
       ...(isChatTab ? { isChatTab } : {}),
+      removeTabs: this.removeTabs,
     });
-    const driver = new Driver(this.cdp, tab, { knownTabs: () => this.allTabIds() });
+    const onDialog = this.onDialog;
+    const dialogs = new DialogWatch({
+      cdp: this.cdp,
+      session: () => slot.sessionId,
+      shortId: (tabId) => tab.shortId(tabId),
+      emit: (sessionId, event) => onDialog?.(sessionId, event),
+    });
+    const driver = new Driver(this.cdp, tab, { knownTabs: () => this.allTabIds(), dialogs });
     const cdp = this.cdp;
     const cleanedUp = () => this.cleanedUp();
     const onCall = this.onBrowserCall;
@@ -101,14 +115,15 @@ export class AgentSlots implements SlotPool {
           if (slot.sessionId) onCall(slot.sessionId, call);
         })
       : plain;
-    // Waiting (a wait_for slice, an unanswered approval) is left out of the turn's time limit (onWait).
-    const waiting = new Set<() => () => void>();
+    // Waiting (a wait_for slice, an unanswered approval) is left out of the turn's time limit (onWait). While the user
+    // decides, no dialog is answered for them: the agent's OK on it may be what they are asked about.
+    const waiting = new Set<() => () => void>([() => dialogs.hold()]);
     const startWait = () => {
       const ends = [...waiting].map((start) => start());
       return () => ends.forEach((end) => end());
     };
     // The gate is outside the timing: a browser call's time never includes the user deciding.
-    const gate = this.approvals ? new ApprovalGate(traced, () => slot.sessionId, this.approvals, startWait) : null;
+    const gate = this.approvals ? new ApprovalGate(traced, () => slot.sessionId, this.approvals, startWait, (t) => driver.openDialog(t)) : null;
     const gated = gate?.browser ?? traced;
     const slot: Slot = {
       index,
@@ -178,7 +193,7 @@ export class AgentSlots implements SlotPool {
     if (this.slotUsedBy(sessionId)) return;
     await this.cleanedUp();
     const inUse = new Set(await this.allTabIds());
-    await closeChatTabs(sessionId, async (tabId) => inUse.has(tabId) || !!(await this.isChatTab?.(tabId)));
+    await closeChatTabs(sessionId, async (tabId) => inUse.has(tabId) || !!(await this.isChatTab?.(tabId)), this.removeTabs);
   }
 
   /**

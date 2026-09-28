@@ -1,3 +1,4 @@
+import type { JsDialog } from "./dialog.js";
 import type { WaitCheck, WaitCheckParams } from "./wait.js";
 
 /**
@@ -187,6 +188,12 @@ export type BrowserMethods = {
    * holds or timeoutMs passes, then answers which one holds (met), or none yet. Reads only: never approval-gated.
    */
   "browser.waitFor": { params: WaitCheckParams; result: WaitCheck };
+  /**
+   * Answers the JavaScript dialog open in the current tab, or in `tab` (see dialog.ts): accept presses OK (Leave on
+   * "Leave site?"), otherwise Cancel (Stay); text is a prompt's answer. Fails when no dialog is open there. The
+   * result's tab: the short id of the tab it was in.
+   */
+  "browser.handleDialog": { params: { tab?: string; accept: boolean; text?: string }; result: { tab: string; dialog: JsDialog; accepted: boolean } };
   "vault.getCredential": {
     params: { site: string };
     result: { found: false; locked?: boolean } | { found: true; username: string; password: string };

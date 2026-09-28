@@ -26,8 +26,9 @@ export async function judgeAction(action: GateAction, opts: { jev?: SystemOneLik
   if (rules.verdict === "benign") return { consequential: false, reason: rules.reason, by: "rules" };
   if (rules.verdict === "consequential") return { consequential: true, kind: rules.kind, reason: rules.reason, by: "rules" };
   const unsure: Judgement = { consequential: true, ...(rules.kind ? { kind: rules.kind } : {}), reason: rules.reason, by: "unsure" };
-  // Jev judges elements; a key press depends on the site's shortcuts, which it does not know ("#" deletes in Gmail).
-  if (!opts.jev || action.method === "pressKey") return unsure;
+  // Jev judges elements; a key press depends on the site's shortcuts, which it does not know ("#" deletes in Gmail),
+  // and a dialog's OK on what the page does next, which it cannot see.
+  if (!opts.jev || action.method === "pressKey" || action.method === "handleDialog") return unsure;
   try {
     const j = await judgeWithJev(opts.jev, action, opts.pageText ?? "");
     if (j.kind === null) return j.confidence >= JUDGE_MIN_CONFIDENCE ? { consequential: false, reason: `Jev: nothing is sent or published (${j.confidence.toFixed(2)})`, by: "jev" } : unsure;

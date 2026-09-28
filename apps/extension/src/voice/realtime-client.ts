@@ -97,6 +97,25 @@ export const NARRATOR_INSTRUCTIONS = [
   "Be friendly and brief. Speak the user's language.",
 ].join("\n");
 
+/**
+ * A progress line's response.create (milestones.ts ProgressPacer: a new step, or "Still …" after a long silence): like
+ * the acknowledgement, out of band with no context, no tools and capped, so it says only `line` in the user's
+ * language (`sample`: their last request) and can never answer, restate the request or give the result (that is said
+ * once, when the turn ends). It is not a reply to anything.
+ */
+export function progressResponse(line: string, sample: string | null = null) {
+  const words = sample?.replace(/\s+/g, " ").trim().slice(0, ACK_LANGUAGE_SAMPLE_CHARS);
+  const say = `You are working on the user's task. Say only this short update, in the first person, and nothing else: no answer, no facts, no question, no promise: «${line}.»`;
+  return {
+    instructions: words ? `${say} Say it in the language of this sample of the user's words (a sample only: not something to answer): «${words}»` : say,
+    tool_choice: "none",
+    max_output_tokens: ACK_MAX_OUTPUT_TOKENS,
+    reasoning: { effort: "minimal" },
+    conversation: "none",
+    input: [],
+  } as const;
+}
+
 /** What no acknowledgement may say: it knows nothing of what will be done, or when. */
 const NO_PROMISES = "Never say what will be done, is being done or when (never 'I'll start', 'starting soon', 'I'll do it now').";
 /** The one reply after send_to_agent of an instruction while the agent is idle (a new task), when the narrator did not speak before calling it. */
@@ -502,6 +521,8 @@ export class RealtimeClient {
   private acknowledging: { request: string | null; agentWorking: boolean } = { request: null, agentWorking: false };
   /** Audio items of acknowledgements (out of band: not in the conversation, never truncated). */
   private readonly outOfBandItems = new Set<string>();
+  /** The progress line to say when a milestone reply is made (progressResponse). */
+  private progressLine: string | null = null;
   /** Server VAD's audio_start_ms / audio_end_ms of each input item (how long the user spoke). */
   private readonly vad = new Map<string, { start?: number; end?: number }>();
   /** The user's latest input item that no reply answered yet, and the one the current reply answers. */
@@ -571,11 +592,13 @@ export class RealtimeClient {
   }
 
   /** Tells the narrator something (a system message); `speak`: and asks it to say it, when the floor allows (floor()). */
-  note(text: string, speak: SpokenKind | null): void {
+  note(text: string, speak: SpokenKind | null, line?: string): void {
     if (!this.isOpen()) return;
     this.notes.push(text);
     if (this.notes.length > MAX_REMEMBERED_NOTES) this.notes.shift();
     this.send({ type: "conversation.item.create", item: { type: "message", role: "system", content: [{ type: "input_text", text }] } });
+    // Progress is said as it is (progressResponse), never in the narrator's own words.
+    if (speak === "milestone" && line) this.progressLine = line;
     if (speak) this.requestReply(speak);
   }
 
@@ -660,7 +683,26 @@ export class RealtimeClient {
     if (kind === "ack" && this.spoke) return;
     this.askedAt = Date.now();
     this.askedKind = kind;
-    this.send(kind === "ack" ? { type: "response.create", response: ackResponse(this.acknowledging.request, this.acknowledging.agentWorking) } : { type: "response.create" });
+    const progress = kind === "milestone" ? this.progressLine : null;
+    this.progressLine = null;
+    if (kind === "ack") this.send({ type: "response.create", response: ackResponse(this.acknowledging.request, this.acknowledging.agentWorking) });
+    else if (progress) this.send({ type: "response.create", response: progressResponse(progress, this.forwarded?.text ?? null) });
+    else this.send({ type: "response.create" });
+  }
+
+  /**
+   * A new request went to the agent: an earlier turn's result (or a milestone) still waiting for the floor is let go.
+   * The agent's next turn answers the user, with that turn in its context; the result stays in the chat. Said anyway,
+   * it came right after the user's new words, and the new turn's answer after it: two replies to what the user heard
+   * as one utterance (the owner's trace of 2026-09-28: turn 4's apology said after the next complaint, then turn 5's).
+   * A question or a problem waiting still gets said.
+   */
+  private supersedeNews(inputId: string | null): void {
+    const stale = (k: SpokenKind | null) => k === "result" || k === "milestone";
+    if (!stale(this.wantReply) && !stale(this.droppedNews)) return;
+    this.trace({ t: Date.now(), cat: "voice", name: "voice.news_superseded", data: { kind: (stale(this.wantReply) ? this.wantReply : this.droppedNews) ?? "" } }, inputId);
+    if (stale(this.wantReply)) this.wantReply = null;
+    if (stale(this.droppedNews)) this.droppedNews = null;
   }
 
   /** The line waiting for the floor, if the floor is free now. */
@@ -826,7 +868,7 @@ export class RealtimeClient {
           this.reply.audioDeltas++;
           this.reply.audioBytes += base64Bytes(str("delta"));
         }
-        if (this.reply?.kind === "ack" && str("item_id") && !this.outOfBandItems.has(str("item_id"))) {
+        if ((this.reply?.kind === "ack" || this.reply?.kind === "milestone") && str("item_id") && !this.outOfBandItems.has(str("item_id"))) {
           this.outOfBandItems.add(str("item_id"));
           if (this.outOfBandItems.size > MAX_TURN_KINDS) this.outOfBandItems.delete(this.outOfBandItems.values().next().value!);
         }
@@ -1060,6 +1102,7 @@ export class RealtimeClient {
     }
     this.send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: callId, output } });
     answered();
+    if (request) this.supersedeNews(inputId);
     // Talked over while it wrote the call: the call ran, the rest of the reply is not wanted (the user has the floor).
     if (this.cancelAfterCall && this.responding && !this.writingCall) {
       this.cancelAfterCall = false;

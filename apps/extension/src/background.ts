@@ -105,6 +105,7 @@ const slots: AgentSlots = new AgentSlots(
     // Allow & continue on a card a run paused for: that action, once, for the run that goes on (its session or task).
     preapproved: (sessionId, ask) => preapprovals.take([sessionId, runner.runningSessions.find((s: SessionInfo) => s.sessionId === sessionId)?.taskId], ask),
   },
+  (sessionId, event) => void sessions.note(sessionId, event),
 );
 const { tab: agentTab, driver, browser } = slots.get(0);
 const db = new IdbKvDb();
@@ -617,6 +618,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // Before anything is awaited: sidePanel.open() needs the key press as its user gesture.
 chrome.commands?.onCommand.addListener((command, tab) => void panelCommands.onCommand(command, tab));
 chrome.debugger.onDetach.addListener((source, reason) => cdp.handleDetach(source, String(reason)));
+// The agent's tabs' JavaScript dialogs (alert, confirm, prompt, "Leave site?"): see cdp.ts.
+chrome.debugger.onEvent.addListener((source, method, params) => cdp.handleEvent(source, method, params));
 chrome.runtime.onMessage.addListener((msg: UiRequest | ExtraRequest, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return false;
   // The overlay's pill on a page the agent controls (page-indicator.ts).

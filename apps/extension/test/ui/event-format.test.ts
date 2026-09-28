@@ -285,3 +285,20 @@ describe("scheduled from the chat", () => {
     expect(toolArgsSummary("schedule_task", { task: "Post gm on X\nfrom @alpha", schedule: { repeat: { cron: "0 9 * * *", tz: "UTC" } } })).toBe("Post gm on X");
   });
 });
+
+describe("a page's browser dialogs in the chat", () => {
+  const confirm = { type: "confirm" as const, message: "Delete “Report Q3”?", url: "https://reports.example.com/list" };
+
+  it("one quiet line: what the dialog said and how it was answered; who and where in its tooltip", () => {
+    expect(describeEvent({ type: "dialog", dialog: confirm, outcome: "accepted", by: "agent", tab: "t1" })).toEqual({
+      kind: "dialog",
+      text: "Dialog: Delete “Report Q3”? → OK",
+      title: "A confirm dialog the page opened on reports.example.com in tab t1, answered by the agent",
+    });
+    expect(describeEvent({ type: "dialog", dialog: { type: "beforeunload", message: "", url: "" }, outcome: "dismissed", by: "auto" })).toEqual({
+      kind: "dialog",
+      text: "Dialog: Leave site? Changes you made may not be saved. → Cancel (automatically after 10 s)",
+      title: "A beforeunload dialog the page opened, answered by Noa, because nobody did in time",
+    });
+  });
+});

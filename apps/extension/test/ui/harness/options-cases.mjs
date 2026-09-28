@@ -222,7 +222,7 @@ export const OPTION_CASES = [
   ["options-voice", "opt-paid", "#voice", () => {}, (p) => [
     ["on the AI section", async () => (await p.getAttribute("#tab-ai", "aria-selected")) === "true"],
     ["Realtime checked by default", () => p.isChecked("input[name=voiceEngine][value=realtime]")],
-    ["names", async () => (await p.locator(".opt[data-voice] .voice-name").allTextContents()).join(" | ") === "OpenAI Realtime (recommended) | OpenAI Whisper + browser voice"],
+    ["names", async () => (await p.locator(".opt[data-voice] .voice-name").allTextContents()).join(" | ") === "OpenAI Realtime (recommended) | Deepgram Nova-3 + browser voice"],
     ["costs from the server", () =>
       eventually(async () => (await p.locator(".opt[data-voice] .voice-cost").allTextContents()).join(" | ") === "about 6¢ of usage credit a minute | about 0.067¢ of usage credit a minute")],
     ["cost assumption and model as tooltip", async () => /speaks for 18 seconds.*Model: gpt-realtime-2\.1\.$/.test(await p.getAttribute(".opt[data-voice=realtime] .voice-cost", "title"))],

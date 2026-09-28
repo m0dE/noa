@@ -24,14 +24,17 @@ class FakeMic implements AudioSource {
   }
 }
 
-function events(): EngineEvents & { log: string[] } {
+function events(): EngineEvents & { log: string[]; captured: number } {
   const log: string[] = [];
-  return {
+  const ev = {
     log,
+    captured: 0,
     speech: () => void log.push("speech"),
     heard: (text, forward) => void log.push(`heard:${text}:${forward}`),
     partial: () => {},
     level: () => {},
+    openingMic: () => {},
+    capturing: () => void ev.captured++,
     narrating: () => {},
     said: () => void log.push("said"),
     narratorText: () => {},
@@ -41,8 +44,9 @@ function events(): EngineEvents & { log: string[] } {
     answerApproval: async () => "",
     endVoice: () => {},
     useThisTab: async () => "",
-    failed: (err) => void log.push(`failed:${String(err)}`),
-  };
+    failed: (err: unknown) => void log.push(`failed:${String(err)}`),
+  } satisfies EngineEvents & { log: string[]; captured: number };
+  return ev;
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
@@ -57,6 +61,18 @@ function setup(speaking = false) {
 }
 
 describe("StandardEngine", () => {
+  it("says when the microphone's first audio reaches it (once; muted, none does)", async () => {
+    const { mic, ev, engine } = setup();
+    engine.setMuted(true);
+    await engine.start();
+    mic.play(100, false);
+    expect(ev.captured).toBe(0);
+    engine.setMuted(false);
+    mic.play(100, false);
+    expect(ev.captured).toBe(1);
+    engine.stop();
+  });
+
   it("an utterance followed by a pause is reported once as speech, then heard (for the agent)", async () => {
     const { mic, ev, engine } = setup();
     await engine.start();

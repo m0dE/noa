@@ -65,6 +65,8 @@ export function describeForJev(a: GateAction): string {
       return `close the agent's tabs ${(a.tabs ?? []).join(", ")}`;
     case "switchXAccount":
       return `switch X to the signed-in account ${a.handle ?? ""} in its account menu`;
+    case "handleDialog":
+      return `answer the page's ${a.dialog?.type ?? "browser"} dialog${a.dialog ? ` ${JSON.stringify(a.dialog.message)}` : ""} with ${a.accept ? "OK" : "Cancel"}`;
   }
 }
 

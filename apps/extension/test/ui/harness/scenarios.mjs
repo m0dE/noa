@@ -623,6 +623,38 @@ export function scenario(kind) {
     state.tabChats = { "1": "s-appr" };
     sessions.unshift(conv);
   }
+  if (kind === "dialog") {
+    // A page's browser dialogs in a finished run: a harmless-looking "Clean up" asked confirm("Delete “Report Q3”?"),
+    // whose OK waited for the user's approval; then the agent's navigation met "Leave site?", which nobody answered,
+    // so it was cancelled automatically. Each dialog is one line among the steps.
+    const conv = {
+      sessionId: "s-dlg", source: "adhoc", title: "Clean up the old reports", instructions: "Clean up the old reports, then open the newsletter draft", brain: "claude-api", jev: false,
+      model: "claude-sonnet-5", startedAt: iso(-4), endedAt: iso(0), firstStartedAt: iso(-4), outcome: "done", summary: "Deleted Report Q3",
+    };
+    const frozen = (d) => `A browser dialog is open: ${d}. The page is frozen until it is answered: call handle_dialog (accept false: Cancel / Stay on the page; true: OK / Leave).`;
+    const dev = (minutes, e) => ({ ...e, ts: iso(minutes), sessionId: "s-dlg" });
+    const confirm = { type: "confirm", message: "Delete “Report Q3”?", url: "https://reports.example.com/list" };
+    eventsBySession["s-dlg"] = [
+      dev(-4, { type: "status", text: "Claude API (claude-sonnet-5)" }),
+      dev(-4, { type: "tool_call", id: "1", name: "act", args: { steps: [{ goal: "click Clean up", index: 4 }] } }),
+      dev(-4, { type: "tool_result", id: "1", name: "act", text: `step 1: "click Clean up": ${frozen("confirm “Delete “Report Q3”?”")}` }),
+      dev(-3, { type: "tool_call", id: "2", name: "handle_dialog", args: { accept: true } }),
+      dev(-3, { type: "approval_request", request: { id: "ap-d", action: "Confirm “Delete “Report Q3”?”", site: "reports.example.com", why: "deletes", kind: "delete", expiresAt: iso(7) } }),
+      dev(-3, { type: "approval_resolved", id: "ap-d", outcome: "allow_once" }),
+      dev(-3, { type: "dialog", dialog: confirm, outcome: "accepted", by: "agent", tab: "t1" }),
+      dev(-3, { type: "tool_result", id: "2", name: "handle_dialog", text: "Pressed OK on the confirm “Delete “Report Q3”?” in t1. Read the page to see what it did." }),
+      dev(-2, { type: "tool_call", id: "3", name: "navigate", args: { url: "https://docs.example.com/newsletter" } }),
+      dev(-2, { type: "tool_result", id: "3", name: "navigate", text: `navigate failed: ${frozen("beforeunload “Leave site? Changes you made may not be saved.”")}`, isError: true }),
+      dev(-1, { type: "dialog", dialog: { type: "beforeunload", message: "", url: "https://reports.example.com/list" }, outcome: "dismissed", by: "auto", tab: "t1" }),
+      dev(0, { type: "assistant_text", text: "Deleted **Report Q3**. The reports page then asked to leave with unsaved changes, so I stayed on it: nothing there was lost." }),
+      dev(0, { type: "task_end", outcome: "done", summary: "Deleted Report Q3" }),
+    ];
+    state.running = null;
+    state.runningTabs = {};
+    state.tabChats = { "1": "s-dlg" };
+    state.openConversations = ["s-dlg"];
+    sessions.unshift(conv);
+  }
   if (kind === "approval-paused") {
     // A daily scheduled post ran with nobody watching: its Post click needed the user's OK, so the run paused there.
     // Its long instructions open the thread; Jev picked for it; the run said why it paused. The page shows the card

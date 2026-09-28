@@ -35,6 +35,9 @@ export function renderEvent(v: EventView, onContinue?: () => void, scheduled?: S
   switch (v.kind) {
     case "status":
       return h("div.ev-status", null, v.text);
+    case "dialog":
+      // A step of the run like a status line, and worded like one.
+      return h("div.ev-status.ev-dialog", { title: v.title }, v.text);
     case "text":
       return renderText(v.text, v.id);
     case "tool":
@@ -247,13 +250,13 @@ export function renderText(text: string, id?: string): HTMLElement {
 }
 
 /** Tool calls and what goes with them: grouped, and folded once a run of them gets long. */
-const STEP_KINDS = new Set<EventView["kind"]>(["tool", "result", "jev", "status"]);
+const STEP_KINDS = new Set<EventView["kind"]>(["tool", "result", "jev", "status", "dialog"]);
 /** A group with this many tool calls folds to its summary line. */
 export const FOLD_STEPS = 3;
 
 /**
  * Appends an event's element to a conversation log. Tool calls, results,
- * Jev lines and status lines in a row go into one steps group; the group
+ * Jev lines, status and dialog lines in a row go into one steps group; the group
  * folds to "N steps" once it has FOLD_STEPS tool calls, unless the user
  * opened it.
  */

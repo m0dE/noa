@@ -62,6 +62,8 @@ export class RealtimeEngine implements HandsFreeEngine {
   private level = 0;
   private stopped = false;
   private muted = false;
+  /** The first audio went to the narrator (EngineEvents.capturing). */
+  private capturing = false;
   /** The agent works on a task of the chat (the client is told, also once it connects). */
   private agentWorking = false;
   /** The approval the chat waits on (answer_approval allows only this one, named). */
@@ -72,7 +74,11 @@ export class RealtimeEngine implements HandsFreeEngine {
     this.player =
       deps.player ??
       new PcmPlayer(REALTIME_SAMPLE_RATE, {
-        onStart: () => ev.narrating(),
+        onStart: () => {
+          // Anything it says holds the next progress line back (milestones.ts PROGRESS).
+          this.feed.spoke(Date.now());
+          ev.narrating();
+        },
         onIdle: () => {
           if (this.stopped) return;
           ev.said();
@@ -154,6 +160,7 @@ export class RealtimeEngine implements HandsFreeEngine {
     }
     if (this.muted) client.setMuted(true);
     client.setAgentWorking(this.agentWorking);
+    ev.openingMic();
     const source = this.deps.createSource();
     this.source = source;
     await source.start((s) => this.onSamples(s));
@@ -203,15 +210,17 @@ export class RealtimeEngine implements HandsFreeEngine {
   agentEvent(ev: AgentEvent, now: number): void {
     if (ev.type === "approval_request") this.approvalWaiting = ev.request;
     else if ((ev.type === "approval_resolved" && ev.id === this.approvalWaiting?.id) || ev.type === "task_end") this.approvalWaiting = null;
-    for (const n of this.feed.push(ev, now)) this.client?.note(n.text, n.speak);
+    for (const n of this.feed.push(ev, now)) this.client?.note(n.text, n.speak, n.line);
   }
 
   note(text: string): void {
     this.client?.note(text, null);
   }
 
-  tick(_now: number): void {
-    // Nothing is said on a clock: the narrator speaks for news only (narrator-policy.ts).
+  tick(now: number): void {
+    // While the agent works: "Still …" after a long silence (milestones.ts PROGRESS); news is said as it comes.
+    if (!this.agentWorking) return;
+    for (const n of this.feed.tick(now)) this.client?.note(n.text, n.speak, n.line);
   }
 
   /** Stops local playback; the narrator's memory keeps only what was heard. */
@@ -233,8 +242,8 @@ export class RealtimeEngine implements HandsFreeEngine {
         if (!text) return "Error: say what to send (text).";
         ev.forward(text, heard);
         // Asked while the agent works: its answer is its next words (a question asked when idle starts a turn whose
-        // end says it). Otherwise its acknowledgement is the narrator's line for now: milestones for it wait
-        // NARRATOR_MILESTONE_GAP_MS.
+        // end says it). Otherwise its acknowledgement is the narrator's line for now: progress waits
+        // PROGRESS.stepGapMs after it (milestones.ts).
         if (requestKind(args) === "question" && this.agentWorking) this.feed.question();
         else this.feed.request(Date.now());
         return SENT_OUTPUT;
@@ -277,7 +286,11 @@ export class RealtimeEngine implements HandsFreeEngine {
     }
     this.chunks = [];
     this.chunked = 0;
-    this.client?.appendAudio(toInt16(all));
+    if (!this.client || this.stopped) return;
+    this.client.appendAudio(toInt16(all));
+    if (this.capturing) return;
+    this.capturing = true;
+    this.deps.events.capturing();
   }
 }
 

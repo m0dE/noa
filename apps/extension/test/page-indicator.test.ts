@@ -43,6 +43,28 @@ describe("PageIndicators", () => {
     expect(order).toEqual([`${hideIndicatorInPage.name}(["pill"])`, `${hideIndicatorInPage.name}([null])`]);
   });
 
+  it("a call does not wait for the overlay to come back (a dialog the call opened freezes the page); later scripts in the tab run after it", async () => {
+    const order: string[] = [];
+    let unfreeze!: () => void;
+    const frozen = new Promise<void>((r) => (unfreeze = r));
+    const pages = new PageIndicators({
+      inject: async (_t, f, a) => {
+        order.push(`${f.name}(${JSON.stringify(a)})`);
+        // The page is frozen by the confirm the click opened: scripts wait until it is answered.
+        if (f.name === hideIndicatorInPage.name && a[0] === null && order.length === 2) await frozen;
+      },
+    });
+    await pages.show(4, "working");
+    order.length = 0;
+    await expect(pages.hiddenDuring(4, "pill", async () => Promise.reject(new Error("A browser dialog is open")))).rejects.toThrow("A browser dialog is open");
+    const next = pages.show(4, "needs-you");
+    await Promise.resolve();
+    expect(order).toEqual([`${hideIndicatorInPage.name}(["pill"])`, `${hideIndicatorInPage.name}([null])`]);
+    unfreeze();
+    await next;
+    expect(order.at(-1)).toBe(`${showIndicatorInPage.name}(${JSON.stringify([INDICATOR_TAG, "needs-you", INDICATOR_MESSAGE])})`);
+  });
+
   it("a tab without the overlay runs the call as it is (no page script)", async () => {
     const { pages, calls } = recording();
     expect(await pages.hiddenDuring(9, "all", async () => 1)).toBe(1);

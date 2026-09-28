@@ -1,6 +1,7 @@
 import type { AttachmentRef } from "./attachments.js";
 import type { ApprovalAnsweredBy, ApprovalOutcome, ApprovalRequest } from "./automation.js";
 import type { TitleBy } from "./chat-title.js";
+import type { DialogAnswer, DialogAnsweredBy, JsDialog } from "./dialog.js";
 import type { MemoryEntry } from "./memory.js";
 import type { TaskOutcome, TaskSource } from "./task.js";
 import type { ScheduleInput } from "./schedule.js";
@@ -116,6 +117,12 @@ export type AgentEvent =
   | { type: "approval_request"; request: ApprovalRequest }
   /** How that approval request ended (by: where the user answered it). Written by the extension. */
   | { type: "approval_resolved"; id: string; outcome: ApprovalOutcome; by?: ApprovalAnsweredBy }
+  /**
+   * A page of the run opened a JavaScript dialog (dialog.ts) and it was answered: by the agent (handle_dialog), by
+   * the extension because nobody did in time (auto), or in the browser (user). tab: the run's short id of its tab;
+   * text: a prompt's answer. Written by the extension, never by a brain.
+   */
+  | { type: "dialog"; dialog: JsDialog; outcome: DialogAnswer; by: DialogAnsweredBy; tab?: string; text?: string }
   /**
    * The agent's memory changed from this conversation (remember, forget, a task's run note): the chat shows
    * "Remembered: ..." with Undo. before / after: the entry before and after the change (null: it did not exist /

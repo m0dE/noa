@@ -14,6 +14,13 @@ export interface EngineEvents {
   heard(text: string, forward: boolean): void;
   /** The user's words so far. */
   partial(text: string): void;
+  /** The connection is up (Realtime): the microphone is being opened now. */
+  openingMic(): void;
+  /**
+   * The microphone's first audio reached the engine (once per start; muted, none does): it listens from now on. Until
+   * then the session does not say it listens.
+   */
+  capturing(): void;
   /** Microphone level, 0..1. */
   level(level: number): void;
   /** The narrator started talking by itself (Realtime). */
@@ -45,7 +52,10 @@ export interface HandsFreeEngine {
   readonly id: VoiceEngineId;
   /** Nothing is transcribed while a line is said (it would hear itself). */
   readonly halfDuplex: boolean;
-  /** Opens the microphone (and the connection). Rejects when it cannot start. */
+  /**
+   * Opens the microphone (and the connection). Rejects when it cannot start. Resolving does not mean audio flows:
+   * EngineEvents.capturing says when it does.
+   */
   start(): Promise<void>;
   stop(): void;
   /** Says a line (Standard; the Realtime narrator speaks for itself). */

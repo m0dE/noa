@@ -269,3 +269,83 @@ describe("a reply cut off is never kept as said (the trace's stray 'Said aloud: 
     expect(shown.at(-1)).toBe("The second email asks for a privacy policy.");
   });
 });
+
+/**
+ * The owner's report (2026-09-28, the trace of chat c614a109): "one utterance, two spoken replies". What happened:
+ * utterance A went into the running turn 4; while the user said B, turn 4 ended with its spoken line (the answer to
+ * A); that result waited for the floor behind the reply to B, which passed B on to the agent (a new turn 5); then the
+ * waiting result of turn 4 was said anyway, right after B, and turn 5's answer after it: two apologies in a row for
+ * what the user heard as one utterance.
+ */
+describe("a result waiting for the floor while the user's next request goes out (owner's report: two spoken replies to one utterance)", () => {
+  beforeAll(installMiniDom);
+
+  const TURN4 = "Yes, I'm sorry. I left the page without reading it first and your edit was lost.";
+  const TURN5 = "You're right, I'm sorry. You can still edit the post until about 10:42.";
+  const B = "It was fucking under editing and you just fucking, man.";
+
+  it("the earlier turn's result is let go once the reply holding the floor passed a new request on: only the new turn's answer is said", async () => {
+    const t = await panel();
+    const said: string[] = [];
+    // The narrator says the result of the latest update it was given.
+    t.socket.ourReply = (s, id, n) => {
+      const notes = s.sent.filter((e) => e.item?.role === "system").map((e) => String(e.item.content[0].text));
+      speaks(notes.at(-1)?.includes(TURN5) ? TURN5 : TURN4)(s, id, n);
+    };
+    // Each line as it is said (shown playing in the chat).
+    t.deps.onSpeaking = (line) => void (line && !said.includes(line.text) && said.push(line.text));
+    t.hf.setRunning(["s-old"]);
+    await settle();
+    const s = t.socket;
+    // The user says B while turn 4 still runs; the narrator's reply to B is being made.
+    s.event({ type: "input_audio_buffer.speech_started", item_id: "inB", audio_start_ms: 0 });
+    s.event({ type: "input_audio_buffer.speech_stopped", item_id: "inB", audio_end_ms: 4000 });
+    s.event({ type: "input_audio_buffer.committed", item_id: "inB" });
+    s.event({ type: "response.created", response: { id: "r_B" } });
+    s.event({ type: "conversation.item.input_audio_transcription.completed", item_id: "inB", content_index: 0, transcript: B });
+    // Turn 4 ends meanwhile, with its spoken line (the answer to A): it waits for the floor.
+    t.hf.onEvent(stamped({ type: "task_end", outcome: "done", summary: "Apologized", spoken: TURN4 }));
+    t.hf.setRunning([]);
+    await settle();
+    // The reply to B passes B on (a new turn) and is done.
+    s.event({ type: "response.output_item.added", item: { type: "function_call", name: "send_to_agent" } });
+    s.event({ type: "response.function_call_arguments.done", call_id: "c_B", name: "send_to_agent", arguments: JSON.stringify({ text: B, kind: "question" }) });
+    await settle();
+    s.event({ type: "response.done", response: { id: "r_B", status: "completed", output: [] } });
+    await settle(50);
+    expect(t.deps.send).toHaveBeenCalledTimes(1);
+    // Turn 5 answers B.
+    t.hf.setRunning(["s-old"]);
+    for (const ev of [
+      { type: "user_message", text: B, voice: true },
+      { type: "status", text: "Continuing the same Claude Code session" },
+      { type: "task_end", outcome: "done", summary: "Apologized for interrupting the user's edit", spoken: TURN5 },
+    ]) {
+      t.hf.onEvent(stamped(ev));
+    }
+    t.hf.setRunning([]);
+    await settle(80);
+    // One spoken reply for B: turn 5's answer (turn 4's is in the chat as its result).
+    expect({ replies: s.creates().length, said }).toEqual({ replies: 1, said: [TURN5] });
+  });
+
+  it("a question for the user waiting then (an approval) is still asked: only news is let go", async () => {
+    const t = await panel();
+    t.hf.setRunning(["s-old"]);
+    await settle();
+    const s = t.socket;
+    s.event({ type: "input_audio_buffer.speech_started", item_id: "inB", audio_start_ms: 0 });
+    s.event({ type: "input_audio_buffer.speech_stopped", item_id: "inB", audio_end_ms: 4000 });
+    s.event({ type: "input_audio_buffer.committed", item_id: "inB" });
+    s.event({ type: "response.created", response: { id: "r_B" } });
+    s.event({ type: "conversation.item.input_audio_transcription.completed", item_id: "inB", content_index: 0, transcript: B });
+    t.hf.onEvent(stamped({ type: "approval_request", request: { id: "ap1", action: "Click \"Post\"", site: "x.com", why: "publishes", expiresAt: new Date(Date.now() + 60_000).toISOString() } }));
+    await settle();
+    s.event({ type: "response.output_item.added", item: { type: "function_call", name: "send_to_agent" } });
+    s.event({ type: "response.function_call_arguments.done", call_id: "c_B", name: "send_to_agent", arguments: JSON.stringify({ text: B, kind: "question" }) });
+    await settle();
+    s.event({ type: "response.done", response: { id: "r_B", status: "completed", output: [] } });
+    await settle(50);
+    expect(s.creates()).toEqual([{ type: "response.create" }]);
+  });
+});

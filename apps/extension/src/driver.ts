@@ -1,7 +1,8 @@
-import { delay, PAGE_SETTLE_MS, urlMatches, type AgentTabInfo, type PageSnapshot, type Screenshot, type Sleep } from "@noa/shared";
+import { delay, dialogOpenText, PAGE_SETTLE_MS, urlMatches, type AgentTabInfo, type JsDialog, type PageSnapshot, type Screenshot, type Sleep } from "@noa/shared";
 import type { AgentTab } from "./agent-tab.js";
-import type { Cdp } from "./cdp.js";
+import { DialogOpenError, type Cdp } from "./cdp.js";
 import { CdpActions } from "./cdp-actions.js";
+import { closeTabsAsking, noDialogText, type DialogWatch } from "./dialogs.js";
 import { isTabLoaded, tabExists, tabUrl } from "./chrome-tabs.js";
 import { assertOpenable, BACKGROUND_SHOT_SKIPPED, NAV_TIMEOUT_MS, pollUntil, type Params as P, type Result as R } from "./driver-common.js";
 import { fallbackNote, FallbackDriver } from "./fallback-driver.js";
@@ -46,6 +47,11 @@ const WAIT_SLICE_GRACE_MS = 2000;
  * simulated input); other tabs of the run keep using the debugger. The first
  * result in fallback mode for a tab carries the fallback note (fallbackNote, naming the other extension when the page shows it). After a
  * navigation the debugger is tried again.
+ *
+ * A JavaScript dialog (alert, confirm, prompt, "Leave site?") freezes its page: a call on that tab fails at once
+ * with the dialog's text (DialogOpenError, see cdp.ts), also when the dialog opens during the call (a click that
+ * opens a confirm), and handleDialog answers it. The dialog watch (dialogs.ts) answers one nobody does in time; the
+ * next result says so.
  */
 export class Driver {
   private readonly sleep: Sleep;
@@ -63,14 +69,17 @@ export class Driver {
   private lastTab: number | null = null;
   /** The control overlay on the pages (page-indicator.ts): never in the agent's screenshots, never under its clicks. */
   private readonly indicator: Pick<PageIndicators, "hiddenDuring">;
+  /** The run's dialogs (who answered them, the automatic answers); absent: no automatic answers. */
+  private readonly dialogs: DialogWatch | undefined;
 
   constructor(
     private readonly cdp: Cdp,
     private readonly agent: AgentTab,
-    opts: { sleep?: Sleep; fallback?: FallbackDriver; knownTabs?: () => Promise<number[]>; indicator?: Pick<PageIndicators, "hiddenDuring"> } = {},
+    opts: { sleep?: Sleep; fallback?: FallbackDriver; knownTabs?: () => Promise<number[]>; indicator?: Pick<PageIndicators, "hiddenDuring">; dialogs?: DialogWatch } = {},
   ) {
     this.sleep = opts.sleep ?? delay;
     this.indicator = opts.indicator ?? pageIndicators;
+    this.dialogs = opts.dialogs;
     this.viaCdp = new CdpActions(cdp, this.sleep);
     this.fallback = opts.fallback ?? new FallbackDriver({ sleep: this.sleep });
     this.knownTabs = opts.knownTabs ?? (() => this.agent.tabIds());
@@ -283,6 +292,8 @@ export class Driver {
     const slice = inPage(args);
     const page = await Promise.race([slice, new Promise<undefined>((r) => (timer = setTimeout(() => r(undefined), p.timeoutMs + WAIT_SLICE_GRACE_MS)))])
       .catch(async (err: unknown) => {
+        // A dialog froze the page: it answers nothing until the dialog is answered.
+        if (err instanceof DialogOpenError) throw err;
         // A page that is navigating gives no answer; the debugger refused or dropped on a tab that is still there switches to the fallback.
         if ((isDebuggerBlocked(err) || isDebuggerDetached(err)) && (await tabExists(tabId))) throw err;
         return undefined;
@@ -322,11 +333,45 @@ export class Driver {
     return { tabs: infos.filter((t): t is AgentTabInfo => t !== null) };
   }
 
-  /** Closes tabs the agent opened (never the run's first tab). */
-  async closeTabs({ tabs }: P<"browser.closeTabs">): Promise<R<"browser.closeTabs">> {
-    const closed = await this.agent.close(tabs);
+  /**
+   * Closes tabs the agent opened (never the run's first tab). A tab whose page asks "Leave site?" stays open with
+   * the dialog, never left silently: the note says so, and handleDialog answers it.
+   */
+  async closeTabs({ tabs }: P<"browser.closeTabs">): Promise<WithNote<R<"browser.closeTabs">>> {
+    const asked: string[] = [];
+    const closed = await this.agent.close(tabs, async (tabIds) => {
+      const r = await closeTabsAsking(this.cdp, tabIds);
+      for (const a of r.asked) asked.push(`Not closed: ${dialogOpenText(a.dialog, (await this.agent.shortId(a.tabId)) ?? undefined)}`);
+      return r.closed;
+    });
     await this.forgetStrays();
-    return { closed, tabs: (await this.listTabs()).tabs };
+    const result = { closed, tabs: (await this.listTabs()).tabs };
+    return asked.length ? { ...result, note: asked.join("\n") } : result;
+  }
+
+  /** The JavaScript dialog open in the current tab, or in `tab` (a short id); null when none is. */
+  async openDialog(tab?: string): Promise<JsDialog | null> {
+    const tabId = tab === undefined ? await this.agent.tabId() : await this.agent.resolve(tab).catch(() => null);
+    return tabId === null ? null : this.cdp.dialogOf(tabId);
+  }
+
+  /**
+   * Answers the JavaScript dialog of the current tab, or of `tab`: accept presses OK (Leave), otherwise Cancel
+   * (Stay). A prompt's OK sends text (default: its prefilled answer).
+   */
+  async handleDialog({ tab, accept, text }: P<"browser.handleDialog">): Promise<WithNote<R<"browser.handleDialog">>> {
+    const tabId = tab === undefined ? await this.agent.ensureTab() : await this.agent.resolve(tab);
+    const id = (await this.agent.shortId(tabId)) ?? tab ?? "the current tab";
+    const dialog = this.cdp.dialogOf(tabId);
+    if (!dialog) throw new Error(noDialogText(id, this.dialogs?.lastAutoAnswered(tabId) ?? null));
+    this.dialogs?.answering(tabId, accept);
+    try {
+      await this.cdp.handleDialog(tabId, accept, dialog.type === "prompt" && accept ? (text ?? dialog.defaultPrompt ?? "") : undefined);
+    } catch (err) {
+      this.dialogs?.notAnswered(tabId);
+      throw err;
+    }
+    return this.withNewTabs({ tab: id, dialog, accepted: accept });
   }
 
   /** Closes every tab the agent opened in this run (called when a run ends). Returns how many. */
@@ -359,8 +404,12 @@ export class Driver {
       }
       if (!this.fallbackTabs.has(tabId)) {
         try {
+          // A frozen page answers nothing: fail before anything is sent to it (the control overlay included).
+          this.cdp.assertNoDialog(tabId);
           return await this.withNewTabs(await viaCdp(tabId));
         } catch (err) {
+          // Another tab's dialog names its tab, so the agent answers the right one.
+          if (err instanceof DialogOpenError) throw target === undefined ? err : new DialogOpenError(err.dialog, (await this.agent.shortId(tabId)) ?? undefined);
           const dropped = opts.droppedGoesFallback === true && isDebuggerDetached(err) && (await tabExists(tabId));
           if (!isDebuggerBlocked(err) && !dropped) throw err;
           this.enterFallback(tabId);
@@ -383,16 +432,17 @@ export class Driver {
   /**
    * Tells the agent about tabs a page of the run opened (a click that opens a
    * new tab), in the result's note: otherwise it keeps looking at the old tab
-   * for what happened.
+   * for what happened. So too about dialogs nobody answered in time (dialogs.ts).
    */
   private async withNewTabs<T extends object>(result: WithNote<T>): Promise<WithNote<T>> {
     const fresh = await this.agent.takeNewTabs().catch(() => []);
-    if (!fresh.length) return result;
+    const answered = this.dialogs?.takeNotes() ?? [];
+    if (!fresh.length && !answered.length) return result;
     const lines = fresh.map(
       (t) =>
         `A new tab opened from the page: ${t.id} ${JSON.stringify(t.title)} ${t.url}. Your current tab is still the one you were in: use switch_tab ${t.id} to work in the new one (read_page, act and screenshot work there).`,
     );
-    return { ...result, note: [result.note, ...lines].filter(Boolean).join("\n") };
+    return { ...result, note: [result.note, ...answered, ...lines].filter(Boolean).join("\n") };
   }
 
   /** Attaches the debugger to the tab (current: and makes it cdp's current tab), or marks the tab for fallback. */

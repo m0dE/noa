@@ -52,6 +52,18 @@
  * or Use voice here in another panel) keeps it muted, so a move never
  * turns the microphone on by itself.
  *
+ * It says it listens only once it does. Starting (the microphone check, the
+ * connection, the microphone opening) every surface says it does not listen
+ * yet and what it waits on: the strip in grey ("Voice starting ·
+ * Connecting…"), the orb grey ("Not listening yet · …"), the box without
+ * its glow, the Voice button unfilled. The moment the microphone's audio
+ * reaches the engine (EngineEvents.capturing) it listens: the listen-on
+ * sound, the strip and the orb turn live, "Listening · go ahead". A start
+ * that takes START_SLOW_MS says "Still …"; one not listening after
+ * START_TIMEOUT_MS ends with what went wrong and Try again. A dropped
+ * Realtime connection is "Reconnecting…" (not listening) until the new
+ * one's audio flows, with the sound again.
+ *
  * Audio lives in the side panel, not an offscreen document: the session is
  * started from the panel, shows itself there, and ends when the panel
  * closes, so the microphone is never on without the indicator in view.
@@ -86,17 +98,10 @@ import { asRealtimeFailure } from "../voice/realtime-client.js";
 import { VoiceError } from "../voice/transcribe.js";
 import { errorHelp } from "./error-help.js";
 import { Earcons, type Earcon } from "../voice/earcons.js";
-import { isMuteKey, remoteBarView, VoiceActivity, voiceBarView, type VoiceBarView } from "../voice/voice-bar-view.js";
+import { isMuteKey, LISTENING_CAPTION, notListeningCaption, remoteBarView, VoiceActivity, voiceBarView, type StartStep, type VoiceBarView } from "../voice/voice-bar-view.js";
 import { initVoiceBar } from "./voice-bar.js";
 import { errorTip, type HandsFreeControl, type VoiceInput, type VoiceTip } from "./voice-input.js";
 
-/** Under the orb while the engine starts. */
-const STARTING_TEXT = "Hands-free · starting…";
-
-/** Under the orb before anything was sent. */
-const ORB_CAPTION = "Hands-free: say what to do · “stop” to end";
-/** Under the orb while a dropped connection is made again. */
-const RECONNECTING_CAPTION = "Reconnecting voice…";
 /** Under the orb while muted (and nothing is being said). */
 const MUTED_CAPTION = "Microphone muted · Unmute to talk";
 
@@ -111,6 +116,11 @@ const ENGINE_NOTICE = "voice.engine";
  * server) is tried again after each of these waits; then the session ends and says so.
  */
 export const RECONNECT_DELAYS_MS = [500, 2_000, 5_000] as const;
+
+/** A start (or a reconnect) not listening after this long says it is still at it. */
+export const START_SLOW_MS = 6_000;
+/** A start (or a reconnect) not listening after this long ends, saying why, with Try again: it never stays starting. */
+export const START_TIMEOUT_MS = 25_000;
 
 /** How an engine's opening went: it runs, the session was stopped meanwhile, or it failed (why). */
 type Opened = "open" | "stopped" | { failed: unknown };
@@ -289,6 +299,20 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
   let startedAt = 0;
   /** The start sound was made: the stop sound goes with it. */
   let chimed = false;
+  /**
+   * Listening for real: the engine is open and the microphone's audio reached it (or it is muted: nothing is to
+   * reach it). Until then every surface says it does not listen yet.
+   */
+  let ready = false;
+  /** The engine is open (its start resolved). */
+  let opened = false;
+  /** The engine said its first audio came (EngineEvents.capturing). */
+  let capturing = false;
+  /** Not ready yet: what it waits on, and whether it has taken START_SLOW_MS. */
+  let step: StartStep = "microphone";
+  let slow = false;
+  let slowTimer: ReturnType<typeof setTimeout> | null = null;
+  let deadline: ReturnType<typeof setTimeout> | null = null;
   /** A voice on the microphone now ("Hearing you…"). */
   const activity = new VoiceActivity();
   /** What the bar last showed of it. */
@@ -346,13 +370,15 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
       deps.voice.showHandsFree(null);
       return;
     }
-    // Off while on: the engine is still starting (microphone, connection).
-    const phase = state.phase === "off" ? null : state.phase;
+    // Not listening yet (the microphone check, the connection, the microphone's first audio): starting.
+    const phase = state.phase === "off" || !ready ? null : state.phase;
     const elsewhere = !here();
     const t = now();
     hearing = activity.hearing(t);
     const view: VoiceBarView = voiceBarView({
       phase: phase ?? "starting",
+      step,
+      slow,
       hearing,
       muted: muted(),
       reconnecting,
@@ -363,16 +389,19 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     });
     bar.show(view);
     // The phase, and where the session is at home (for debugging and tests): its chat and its tabs.
-    deps.bar.dataset.phase = phase ?? "starting";
+    deps.bar.dataset.phase = phase ?? (reconnecting ? "reconnecting" : "starting");
     deps.bar.dataset.chat = chatNow() ?? "";
     deps.bar.dataset.tabs = [...ownTabs].join(",");
     // The orb veils the session's own tab until something was sent; its caption carries the words.
     const orb = !sent && phase !== "working" && !elsewhere;
+    // Not listening yet: the orb says so, and what it waits on.
+    const waiting = !phase ? notListeningCaption(reconnecting ? "reconnecting" : step, slow) : null;
     deps.voice.showHandsFree({
       orb,
       phase: phase ?? "opening",
-      caption: reconnecting ? RECONNECTING_CAPTION : phase === "sending" ? "Sending…" : caption || (!phase ? STARTING_TEXT : muted() ? MUTED_CAPTION : ORB_CAPTION),
+      caption: waiting ?? (phase === "sending" ? "Sending…" : caption || (muted() ? MUTED_CAPTION : LISTENING_CAPTION)),
       elsewhere,
+      listening: !!phase && !muted(),
       muted: muted(),
       mute: view.mute,
     });
@@ -461,6 +490,9 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
         if (effect.muted) deps.voice.setLevel(0);
         trace?.record({ t: Date.now(), cat: "voice", name: effect.muted ? "voice.mute" : "voice.unmute" });
         report();
+        // Muted it is as ready as it gets; unmuted before any audio came, it waits for it again (and not forever).
+        checkReady();
+        if (!ready) watchStart();
         break;
       case "cancelled":
         if (wroteBox) deps.composer.setDraft(boxBase);
@@ -558,7 +590,11 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
           // "Use this tab" (Standard) moves the session to the tab the user looks at, and says so.
           if (forward && spokenUseThisTab(text)) {
             forward = false;
-            void useViewedTab().then((outcome) => state.phase !== "off" && dispatch({ type: "say", text: useThisTabLine(outcome), now: now() }));
+            void useViewedTab().then((outcome) => {
+              if (state.phase === "off") return;
+              narration.said(now());
+              dispatch({ type: "say", text: useThisTabLine(outcome), now: now() });
+            });
           }
           if (forward && text.trim()) heard(text);
           dispatch({ type: "heard", text, forward, now: now() });
@@ -572,6 +608,16 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
         })(),
       partial: (text) => alive(() => showWords(text))(),
       level: (l) => onLevel(l),
+      openingMic: () => {
+        if (!on() || ready) return;
+        step = "microphone";
+        render();
+      },
+      capturing: () => {
+        if (!on()) return;
+        capturing = true;
+        checkReady();
+      },
       narrating: () => alive(() => dispatch({ type: "narrating", now: now() }))(),
       said: () =>
         alive(() => {
@@ -618,6 +664,8 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     const dropped = engine;
     engine = null;
     dropped?.stop();
+    // Not listening until the new connection's audio flows.
+    notReady("connecting");
     // What was being said is gone with the connection.
     endLine();
     if (state.phase === "speaking") dispatch({ type: "said", now: now() });
@@ -628,13 +676,14 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     const r = await connect("realtime", true, gen);
     // Ended meanwhile (finish() reset the rest).
     if (gen !== session) return;
-    reconnecting = false;
     if (r === "stopped") return;
     if (r !== "open") {
+      reconnecting = false;
       finish(null, "error");
       deps.notify(failureTip(r.failed));
       return;
     }
+    // "Reconnecting…" stays until its audio flows (checkReady).
     render();
   }
 
@@ -648,7 +697,7 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
   function failureTip(err: unknown): VoiceTip {
     if (err instanceof VoiceError) return errorTip(err, deps.openBilling);
     const f = asRealtimeFailure(err);
-    const standard = { label: "Use Whisper voice", run: () => void start("standard") };
+    const standard = { label: "Use Nova-3 voice", run: () => void start("standard") };
     if (f?.kind === "busy" || f?.kind === "replaced") return { text: f.message, level: "error", actions: [{ label: "Take over here", run: () => void start("realtime", false, true) }] };
     if (f?.transient) return { text: f.message, level: "error", actions: [{ label: "Try again", run: () => void start("realtime") }, standard] };
     if (f?.kind === "unavailable") return { text: f.message, level: "error", actions: [standard] };
@@ -666,6 +715,8 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
   async function openEngine(id: VoiceEngineId, takeover: boolean): Promise<Opened> {
     const e = deps.createEngine(id, events(), takeover ? { takeover } : undefined);
     engine = e;
+    opened = false;
+    capturing = false;
     // Muted before the microphone opens (a muted session moved here, or reconnecting while muted).
     if (muted()) e.setMuted(true);
     try {
@@ -690,6 +741,9 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     e.setTranscribing(state.phase !== "speaking");
     e.setAgentWorking?.(working);
     if (working) dispatch({ type: "agent", working, now: now() });
+    opened = true;
+    step = "microphone";
+    checkReady();
     return "open";
   }
 
@@ -737,11 +791,13 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     sent = false;
     wroteBox = false;
     startedAt = now();
+    const settings = deps.settings();
+    const id = picked ?? settings?.voiceEngine ?? "realtime";
+    // Realtime connects first; Whisper only opens the microphone.
+    notReady(id === "realtime" ? "connecting" : "microphone");
     bind(deps.activeTab());
     render();
     report();
-    const settings = deps.settings();
-    const id = picked ?? settings?.voiceEngine ?? "realtime";
     trace?.record({ t: Date.now(), cat: "voice", name: "voice.start", data: { engine: id, why: picked ? (takeover ? "taken over" : "chosen") : "settings", ...(takeover ? { takeover } : {}) } });
     try {
       const micAllowed = await deps.voice.ensureMic();
@@ -752,7 +808,7 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
       const check = checkEngine({ picked: id, engines, creditCents: deps.account()?.credit?.totalCents });
       if (check.blocked) {
         finish(null);
-        deps.notify({ key: ENGINE_NOTICE, text: check.blocked, level: "error", actions: [{ label: "Use Whisper voice", run: () => void start("standard") }] });
+        deps.notify({ key: ENGINE_NOTICE, text: check.blocked, level: "error", actions: [{ label: "Use Nova-3 voice", run: () => void start("standard") }] });
         return;
       }
       if (check.note) deps.notify({ key: ENGINE_NOTICE, text: check.note, level: "info", actions: [{ label: "Top up", run: deps.openBilling }] });
@@ -764,14 +820,13 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
         deps.notify(failureTip(r.failed));
         return;
       }
-      // The microphone is live.
-      chimed = true;
-      sound("start");
+      // The engine is open (it listens once its audio flows: checkReady).
       syncChat();
       timer = setInterval(() => {
         const t = now();
         dispatch({ type: "tick", now: t });
         engine?.tick(t);
+        stillWorking(t);
       }, HANDS_FREE.tickMs);
     } finally {
       if (gen === session) {
@@ -781,11 +836,68 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     }
   }
 
+  /** Not listening (a start, or a reconnect): what it waits on first, and a limit on how long it may take. */
+  function notReady(first: StartStep): void {
+    ready = opened = capturing = false;
+    step = first;
+    watchStart();
+  }
+
+  /** Says "Still …" after START_SLOW_MS, and ends it, saying why, after START_TIMEOUT_MS, unless it listens by then. */
+  function watchStart(): void {
+    clearStartTimers();
+    const gen = session;
+    slowTimer = setTimeout(() => {
+      slowTimer = null;
+      slow = true;
+      render();
+    }, START_SLOW_MS);
+    deadline = setTimeout(() => {
+      deadline = null;
+      if (gen === session && on() && !ready) startTimedOut();
+    }, START_TIMEOUT_MS);
+  }
+
+  function clearStartTimers(): void {
+    if (slowTimer) clearTimeout(slowTimer);
+    if (deadline) clearTimeout(deadline);
+    slowTimer = deadline = null;
+    slow = false;
+  }
+
+  /** It listens now (the engine open, its audio flowing; or muted): the listen-on sound, and every surface goes live. */
+  function checkReady(): void {
+    const next = on() && opened && (capturing || muted());
+    if (next === ready) return;
+    ready = next;
+    if (!next) return render();
+    clearStartTimers();
+    const again = reconnecting;
+    reconnecting = false;
+    trace?.record({ t: Date.now(), cat: "voice", name: "voice.listening", data: { engine: engine?.id ?? null, ...(again ? { reconnected: true } : {}) } });
+    chimed = true;
+    sound("start");
+    render();
+  }
+
+  /** Not listening after START_TIMEOUT_MS: it ends, saying what it waited on, with Try again. */
+  function startTimedOut(): void {
+    const id = engine?.id ?? deps.settings()?.voiceEngine ?? "realtime";
+    const connecting = step === "connecting";
+    const text = connecting ? "Voice couldn't connect, so it isn't listening." : "The mic didn't start, so voice isn't listening. Check no other app is using it.";
+    trace?.record({ t: Date.now(), cat: "error", name: "voice.failed", data: { engine: id, error: connecting ? "start timed out: connecting" : "start timed out: no microphone audio" } });
+    const muteAgain = muted();
+    finish(null, "error");
+    const actions = [{ label: "Try again", run: () => void start(id, muteAgain) }];
+    if (connecting && id === "realtime") actions.push({ label: "Use Nova-3 voice", run: () => void start("standard", muteAgain) });
+    deps.notify({ text, level: "error", actions });
+  }
+
   /** Once: what Realtime costs; the engine is changed in Settings. */
   function costNotice(engines: VoiceEngine[] | null): void {
     const rt = engines?.find((e) => e.id === "realtime");
     const cost = rt ? `Realtime voice uses ${costPerMinuteText(rt.approxCentsPerMinute)}.` : "Realtime voice uses usage credit by the minute.";
-    deps.notify({ key: ENGINE_NOTICE, text: `${cost} Whisper voice costs much less.`, level: "info", actions: [{ label: "Voice settings", run: deps.openVoiceSettings }] });
+    deps.notify({ key: ENGINE_NOTICE, text: `${cost} Nova-3 voice costs much less.`, level: "info", actions: [{ label: "Voice settings", run: deps.openVoiceSettings }] });
     void deps.saveSettings({ realtimeCostNoticed: true }).catch((err: unknown) => deps.log?.(`saving the cost notice failed: ${errorMessage(err)}`));
   }
 
@@ -801,6 +913,8 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     session++;
     starting = false;
     reconnecting = false;
+    clearStartTimers();
+    ready = opened = capturing = false;
     endLine();
     passing.clear();
     setCaption("");
@@ -948,6 +1062,18 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     if (!chat || !id || !answer) return false;
     void deps.answerApproval(chat, id, answer);
     return true;
+  }
+
+  /**
+   * Standard, while the agent works and the floor is free (not the user talking, nothing waiting to be sent or said):
+   * "Still …" after a long silence (Realtime's engine paces its own). Milestones are not kept in the chat.
+   */
+  function stillWorking(t: number): void {
+    if (engine?.id !== "standard" || !working || state.phase !== "working" || state.userSpeaking || state.queued) return;
+    const line = narration.tick(t);
+    if (!line) return;
+    passing.add(line);
+    dispatch({ type: "say", text: line, now: t });
   }
 
   /** Tells the engine (and, Standard, the narration) about an event of the session's chat. */

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { MILESTONE_GAP_MS, MilestoneThrottle, milestoneOf, siteName } from "../../src/voice/milestones.js";
+import type { AgentEvent } from "@noa/shared";
+import { milestoneOf, PROGRESS, ProgressPacer, siteName } from "../../src/voice/milestones.js";
 
 const call = (name: string, args: unknown = {}) => ({ type: "tool_call" as const, id: "1", name, args });
 
@@ -41,21 +42,59 @@ describe("milestoneOf", () => {
   });
 });
 
-describe("MilestoneThrottle", () => {
-  it("lets a milestone through at most every MILESTONE_GAP_MS, and never the same one twice in a row", () => {
-    const t = new MilestoneThrottle();
-    expect(t.offer("Opening x.com", 0)).toBe("Opening x.com");
-    expect(t.offer("Reading the page", 1000)).toBeNull();
-    expect(t.offer("Typing", MILESTONE_GAP_MS - 1)).toBeNull();
-    expect(t.offer("Typing", MILESTONE_GAP_MS)).toBe("Typing");
-    expect(t.offer("Typing", MILESTONE_GAP_MS * 3)).toBeNull();
-    expect(t.offer("Clicking through the page", MILESTONE_GAP_MS * 3)).toBe("Clicking through the page");
+describe("ProgressPacer: a line when the agent starts something new, 'Still …' after a long silence", () => {
+  const P = { stepGapMs: 8_000, stillWorkingMs: 18_000, maxSteps: 3 };
+  const call = (name: string, args: unknown = {}): AgentEvent => ({ type: "tool_call", id: "1", name, args });
+
+  it("PROGRESS: the thresholds", () => {
+    expect(PROGRESS).toEqual({ stepGapMs: 8_000, stillWorkingMs: 18_000, maxSteps: 5 });
   });
 
-  it("reset (a new turn) lets the next one through at once", () => {
-    const t = new MilestoneThrottle(5000);
-    expect(t.offer("Opening x.com", 0)).toBe("Opening x.com");
-    t.reset();
-    expect(t.offer("Opening x.com", 10)).toBe("Opening x.com");
+  it("a new kind of step (a site, reading, writing, an account) is said, stepGapMs after anything said; routine steps never", () => {
+    const p = new ProgressPacer(P);
+    p.reset(0);
+    // The user's request does not hold the first step back.
+    expect(p.step(call("navigate", { url: "https://x.com/a" }), 100)).toBe("Opening x.com");
+    expect(p.step(call("read_page"), 100 + P.stepGapMs - 1)).toBeNull();
+    // The same kind again is not new; routine steps never are.
+    expect(p.step(call("screenshot"), 100 + P.stepGapMs)).toBe("Looking at the page");
+    expect(p.step(call("read_page"), 100 + P.stepGapMs * 3)).toBeNull();
+    for (const name of ["click", "scroll", "switch_tab", "wait_for", "press_key"]) expect(p.step(call(name), 100 + P.stepGapMs * 4)).toBeNull();
+    // Another site is a new step; so is typing. At most maxSteps a request.
+    expect(p.step(call("type"), 100 + P.stepGapMs * 5)).toBe("Typing");
+    expect(p.step(call("navigate", { url: "https://mail.google.com/" }), 100 + P.stepGapMs * 7)).toBeNull();
+    p.reset(P.stepGapMs * 8);
+    expect(p.step(call("navigate", { url: "https://mail.google.com/" }), P.stepGapMs * 8)).toBe("Opening mail.google.com");
+  });
+
+  it("anything said (an acknowledgement, an answer) holds the next step back", () => {
+    const p = new ProgressPacer(P);
+    p.reset(0);
+    p.said(1_000);
+    expect(p.step(call("navigate", { url: "https://x.com/" }), 1_000 + P.stepGapMs - 1)).toBeNull();
+    expect(p.step(call("read_page"), 1_000 + P.stepGapMs)).toBe("Reading the page");
+  });
+
+  it("'Still …' once nothing was said for stillWorkingMs: about what the agent does now, once for each thing", () => {
+    const p = new ProgressPacer(P);
+    p.reset(0);
+    expect(p.stillWorking(P.stillWorkingMs - 1)).toBeNull();
+    // Nothing done yet: thinking.
+    expect(p.stillWorking(P.stillWorkingMs)).toBe("Still working on it");
+    expect(p.stillWorking(P.stillWorkingMs * 3)).toBeNull();
+    p.step(call("click"), P.stillWorkingMs * 3);
+    expect(p.stillWorking(P.stillWorkingMs * 4)).toBe("Still clicking through the page");
+    expect(p.stillWorking(P.stillWorkingMs * 6)).toBeNull();
+    // A new step right after it is still news; then the silence counts from that line.
+    const at = P.stillWorkingMs * 6;
+    expect(p.step(call("navigate", { url: "https://x.com/" }), at)).toBe("Opening x.com");
+    expect(p.stillWorking(at + P.stillWorkingMs - 1)).toBeNull();
+    expect(p.stillWorking(at + P.stillWorkingMs)).toBe("Still opening x.com");
+  });
+
+  it("voice started while the agent works: the silence counts from the first look", () => {
+    const p = new ProgressPacer(P);
+    expect(p.stillWorking(50_000)).toBeNull();
+    expect(p.stillWorking(50_000 + P.stillWorkingMs)).toBe("Still working on it");
   });
 });

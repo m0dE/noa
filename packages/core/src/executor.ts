@@ -10,6 +10,8 @@
 import {
   clipEventText,
   delay,
+  dialogAnswerLabel,
+  dialogLabel,
   errorMessage,
   isXSite,
   picksText,
@@ -104,6 +106,16 @@ function toolSpan(span: { t: number; elapsed: () => number }, id: string, name: 
   return { t: span.t, ms: span.elapsed(), cat: "tool", name: "tool", data };
 }
 
+/** handle_dialog's answer: which button it pressed on which dialog, and what that did to the page. */
+function dialogAnswered(r: BrowserMethods["browser.handleDialog"]["result"], text: string | undefined): string {
+  const { dialog, accepted, tab } = r;
+  const pressed = `Pressed ${dialogAnswerLabel(dialog.type, accepted ? "accepted" : "dismissed", dialog.type === "prompt" ? (text ?? dialog.defaultPrompt) : undefined)} on the ${dialogLabel(dialog)} in ${tab}.`;
+  if (dialog.type !== "beforeunload") return `${pressed} Read the page to see what it did.`;
+  return accepted
+    ? `${pressed} Left the page: the navigation or tab close goes on. Read the page or list_tabs to see where things are now.`
+    : `${pressed} Stayed on the page: nothing was navigated or closed, and its unsaved changes are still there.`;
+}
+
 /** Case- and slash-insensitive path key, for comparing upload paths with mediaPaths. */
 function pathKey(p: string): string {
   return p.trim().replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
@@ -145,7 +157,7 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
   let page: PageSnapshot | null = null;
   const follow = (method: BrowserMethod, params: unknown, result: unknown) => {
     if (method === "browser.readPage") page = (params as { tab?: string }).tab ? null : (result as PageSnapshot);
-    else if (method === "browser.navigate" || method === "browser.switchTab" || method === "browser.openTabs" || method === "browser.closeTabs" || method === "browser.clickXAccountEntry") page = null;
+    else if (method === "browser.navigate" || method === "browser.switchTab" || method === "browser.openTabs" || method === "browser.closeTabs" || method === "browser.clickXAccountEntry" || method === "browser.handleDialog") page = null;
   };
   /** Throws the refusal of a click or key that would publish on X while it is signed in as another account than the task's. */
   const checkXAccount = async (account: string, action: Parameters<typeof wrongXAccountRefusal>[1]) => {
@@ -219,6 +231,13 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
       case "close_tabs": {
         const r = await browser("browser.closeTabs", { tabs: (a as ToolArgsOf<"close_tabs">).tabs });
         return { text: `Closed ${r.closed.length ? r.closed.join(", ") : "no tabs"}. Open tabs:\n${formatTabs(r.tabs)}` };
+      }
+      case "handle_dialog": {
+        const { accept, text, tab } = a as ToolArgsOf<"handle_dialog">;
+        const params: BrowserMethods["browser.handleDialog"]["params"] = { accept };
+        if (text !== undefined) params.text = text;
+        if (tab !== undefined) params.tab = tab;
+        return { text: dialogAnswered(await browser("browser.handleDialog", params), text) };
       }
       case "screenshot": {
         const shot = await browser("browser.screenshot", {});

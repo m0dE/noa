@@ -46,6 +46,8 @@ async function started() {
     heard: noop,
     partial: noop,
     level: noop,
+    openingMic: noop,
+    capturing: noop,
     narrating: noop,
     said: noop,
     narratorText: noop,

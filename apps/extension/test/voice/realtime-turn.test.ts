@@ -242,6 +242,8 @@ function engineEvents(log: string[]): EngineEvents {
     heard: (t, f) => void log.push(`heard:${t}:${f}`),
     partial: (t) => void log.push(`partial:${t}`),
     level: () => {},
+    openingMic: () => {},
+    capturing: () => {},
     narrating: () => {},
     said: () => {},
     narratorText: () => {},
@@ -354,10 +356,12 @@ class FakeEngine implements HandsFreeEngine {
   ) {
     this.halfDuplex = id === "standard";
   }
-  start(): Promise<void> {
-    if (this.failure) return Promise.reject(this.failure);
+  async start(): Promise<void> {
+    if (this.failure) throw this.failure;
     if (!this.hold) this.release();
-    return this.ready;
+    await this.ready;
+    // The microphone's audio reaches it once it is open.
+    if (!this.stopped) this.events.capturing();
   }
   stop(): void {
     this.stopped = true;
@@ -580,7 +584,7 @@ describe("the side panel's hands-free session on Realtime", () => {
       expect(t.hf.active).toBe(false);
       const tip = t.tips.at(-1)!;
       expect(tip.text).toBe("Voice disconnected.");
-      expect(tip.actions?.map((a) => a.label)).toEqual(["Try again", "Use Whisper voice"]);
+      expect(tip.actions?.map((a) => a.label)).toEqual(["Try again", "Use Nova-3 voice"]);
       expect(t.saved).toEqual([]);
       expect(t.trace.filter((e) => e.name === "voice.reconnect").map((e) => e.data?.attempt)).toEqual([0, 1, 2, 3]);
       expect(t.trace.at(-1)).toMatchObject({ name: "voice.end", data: { why: "error" } });

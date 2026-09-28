@@ -66,6 +66,8 @@ export class StandardEngine implements HandsFreeEngine {
   private cutIn = false;
   private stopped = false;
   private muted = false;
+  /** The first audio reached the detector (EngineEvents.capturing). */
+  private capturing = false;
 
   constructor(private readonly deps: StandardEngineDeps) {}
 
@@ -206,6 +208,11 @@ export class StandardEngine implements HandsFreeEngine {
   }
 
   private onSamples(samples: Float32Array): void {
+    if (this.stopped) return;
+    if (!this.capturing) {
+      this.capturing = true;
+      this.deps.events.capturing();
+    }
     const joined = new Float32Array(this.pending.length + samples.length);
     joined.set(this.pending);
     joined.set(samples, this.pending.length);

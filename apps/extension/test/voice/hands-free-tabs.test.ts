@@ -8,8 +8,8 @@
  */
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { ExtensionSettings, VoiceEngineId, VoiceEnginesResponse } from "@noa/shared";
-import { initHandsFree, RECONNECT_DELAYS_MS, type HandsFreeDeps } from "../../src/sidepanel/hands-free.js";
-import type { HandsFreeLook } from "../../src/sidepanel/voice-input.js";
+import { initHandsFree, RECONNECT_DELAYS_MS, START_SLOW_MS, START_TIMEOUT_MS, type HandsFreeDeps } from "../../src/sidepanel/hands-free.js";
+import type { HandsFreeLook, VoiceTip } from "../../src/sidepanel/voice-input.js";
 import type { EngineEvents, HandsFreeEngine } from "../../src/voice/engine.js";
 import { HANDS_FREE } from "../../src/voice/hands-free.js";
 import { lookingHomeNote } from "../../src/voice/hands-free-tab.js";
@@ -28,11 +28,14 @@ class FakeEngine implements HandsFreeEngine {
     readonly events: EngineEvents,
     readonly takeover = false,
     private readonly begin: () => Promise<void> = async () => {},
+    /** The microphone's audio reaches it once it opened (false: none comes, as with a stuck audio pipeline). */
+    private readonly audio = true,
   ) {
     this.halfDuplex = id === "standard";
   }
-  start(): Promise<void> {
-    return this.begin();
+  async start(): Promise<void> {
+    await this.begin();
+    if (this.audio && !this.stopped) this.events.capturing();
   }
   stop(): void {
     this.stopped = true;
@@ -81,7 +84,7 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
  * A window's side panel, showing tab `shownTab` (its window's active tab); `id`: the page's id ("p1" runs the
  * session in these tests, "p2" is another window's panel). show(tab): the user switches tabs in its window.
  */
-function panel(shownTab: number, opts: { id?: string; engine?: VoiceEngineId; begin?: (n: number) => Promise<void> } = {}) {
+function panel(shownTab: number, opts: { id?: string; engine?: VoiceEngineId; begin?: (n: number) => Promise<void>; audio?: boolean } = {}) {
   let shown = shownTab;
   const engines: FakeEngine[] = [];
   const looks: (HandsFreeLook | null)[] = [];
@@ -89,11 +92,12 @@ function panel(shownTab: number, opts: { id?: string; engine?: VoiceEngineId; be
   /** Whether each report said the microphone is muted. */
   const mutedReports: boolean[] = [];
   const sounds: string[] = [];
+  const tips: (VoiceTip & { key?: string })[] = [];
   const bar = new MiniElement("div");
   const deps: HandsFreeDeps = {
     voice: { state: "idle", attachHandsFree: () => {}, showHandsFree: (l) => void looks.push(l), setLevel: () => {}, showTip: () => {}, ensureMic: async () => true, shortcutLabel: null },
     composer: { draft: () => "", setDraft: () => {} },
-    notify: () => {},
+    notify: (tip) => void tips.push(tip),
     activeTab: () => shown,
     panel: opts.id ?? "p1",
     chatOf: () => null,
@@ -111,7 +115,7 @@ function panel(shownTab: number, opts: { id?: string; engine?: VoiceEngineId; be
     openVoiceSettings: () => {},
     createEngine: (id, events, o) => {
       const n = engines.length;
-      const e = new FakeEngine(id, events, o?.takeover ?? false, opts.begin && (() => opts.begin!(n)));
+      const e = new FakeEngine(id, events, o?.takeover ?? false, opts.begin && (() => opts.begin!(n)), opts.audio ?? true);
       engines.push(e);
       return e;
     },
@@ -134,7 +138,7 @@ function panel(shownTab: number, opts: { id?: string; engine?: VoiceEngineId; be
     shown = tab;
     hf.refresh();
   };
-  return { hf, deps, engines, looks, reports, mutedReports, sounds, bar, button, show };
+  return { hf, deps, engines, looks, reports, mutedReports, sounds, tips, bar, button, show };
 }
 
 /** What the background says: panel p1 runs the session, for tab 1, and the user looks at `viewing`. */
@@ -542,6 +546,187 @@ describe("hands-free voice stopped and started again while it still starts (a do
       expect(t.engines).toHaveLength(3);
       expect(t.engines[2]!.stopped).toBe(false);
       expect(t.hf.phase).toBe("listening");
+      t.hf.toggle("button");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("hands-free voice says it listens only once it does (the owner's report: voice looked on while it was not listening, and 'starting…' never changed)", () => {
+  beforeAll(installMiniDom);
+
+  const status = (t: ReturnType<typeof panel>) => find(t.bar, "vb-status")!.textContent;
+
+  it("Realtime: Connecting…, then Opening the mic… until its audio reaches the engine; only then Listening, with the listen-on sound", async () => {
+    let connected!: () => void;
+    const t = panel(1, { audio: false, begin: () => new Promise<void>((r) => (connected = r)) });
+    t.hf.toggle("button");
+    await settle();
+    // Not listening yet: the strip, the orb and the box all say so; no sound.
+    expect([t.bar.dataset.state, status(t)]).toEqual(["starting", "Connecting…"]);
+    expect(t.looks.at(-1)).toMatchObject({ orb: true, phase: "opening", listening: false, caption: "Not listening yet · connecting…" });
+    expect(t.sounds).toEqual([]);
+    // The connection is up and the microphone open, but no audio has reached the engine.
+    connected();
+    await settle();
+    expect([t.bar.dataset.state, status(t)]).toEqual(["starting", "Opening the mic…"]);
+    expect(t.looks.at(-1)).toMatchObject({ phase: "opening", listening: false, caption: "Not listening yet · opening the mic…" });
+    expect(t.sounds).toEqual([]);
+    // Its first audio: now it listens, and says so everywhere at once.
+    t.engines[0]!.events.capturing();
+    expect([t.bar.dataset.state, status(t)]).toEqual(["listening", "Listening"]);
+    expect(t.looks.at(-1)).toMatchObject({ phase: "listening", listening: true, caption: "Listening · go ahead · say “stop” to end" });
+    expect(t.sounds).toEqual(["start"]);
+    t.engines[0]!.events.capturing();
+    expect(t.sounds).toEqual(["start"]);
+  });
+
+  it("Whisper: Opening the mic… from the start (nothing to connect)", async () => {
+    const t = panel(1, { engine: "standard", audio: false });
+    t.hf.toggle("button");
+    expect(status(t)).toBe("Opening the mic…");
+    await settle();
+    expect(status(t)).toBe("Opening the mic…");
+    t.engines[0]!.events.capturing();
+    expect(t.bar.dataset.state).toBe("listening");
+  });
+
+  it("never stays starting: slow, it says it is still at it; then it stops with what went wrong and Try again", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = panel(1, { begin: () => new Promise<void>(() => {}) });
+      t.hf.toggle("button");
+      await vi.advanceTimersByTimeAsync(START_SLOW_MS);
+      expect(status(t)).toBe("Still connecting…");
+      await vi.advanceTimersByTimeAsync(START_TIMEOUT_MS - START_SLOW_MS);
+      expect(t.hf.active).toBe(false);
+      expect(t.bar.hidden).toBe(true);
+      expect(t.looks.at(-1)).toBeNull();
+      expect(t.engines[0]!.stopped).toBe(true);
+      const tip = t.tips.at(-1)!;
+      expect([tip.level, tip.text, tip.actions?.map((a) => a.label)]).toEqual(["error", "Voice couldn't connect, so it isn't listening.", ["Try again", "Use Nova-3 voice"]]);
+      // Never started: no stop sound either.
+      expect(t.sounds).toEqual([]);
+      tip.actions![0]!.run();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.engines).toHaveLength(2);
+      expect(t.hf.active).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a microphone that opens but sends nothing stops it too, saying so", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = panel(1, { engine: "standard", audio: false });
+      t.hf.toggle("button");
+      await vi.advanceTimersByTimeAsync(START_TIMEOUT_MS);
+      expect(t.hf.active).toBe(false);
+      const tip = t.tips.at(-1)!;
+      expect([tip.level, tip.text, tip.actions?.map((a) => a.label)]).toEqual(["error", "The mic didn't start, so voice isn't listening. Check no other app is using it.", ["Try again"]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("started muted (moved here muted): Muted once the engine is open, no audio needed, and no timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = panel(2, { id: "p2", audio: false });
+      t.hf.setSession(inTab1(2, { muted: true }));
+      t.button("vb-use").click();
+      t.hf.setSession(null);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.bar.dataset.state).toBe("muted");
+      expect(t.looks.at(-1)).toMatchObject({ listening: false, muted: true });
+      await vi.advanceTimersByTimeAsync(START_TIMEOUT_MS);
+      expect(t.hf.active).toBe(true);
+      // Unmuted: it listens once its audio comes.
+      t.hf.toggleMute();
+      expect(t.bar.dataset.state).toBe("starting");
+      t.engines[0]!.events.capturing();
+      expect(t.bar.dataset.state).toBe("listening");
+      t.hf.toggle("button");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconnecting after a drop: not listening until the new connection's audio flows; then the listen-on sound again", async () => {
+    const t = panel(1, { audio: false });
+    t.hf.toggle("button");
+    await settle();
+    t.engines[0]!.events.capturing();
+    expect(t.sounds).toEqual(["start"]);
+    t.engines[0]!.events.failed({ kind: "upstream", transient: true, message: "Voice disconnected." });
+    await settle();
+    expect(t.engines).toHaveLength(2);
+    expect([t.bar.dataset.state, status(t)]).toEqual(["reconnecting", "Reconnecting…"]);
+    expect(t.looks.at(-1)).toMatchObject({ listening: false });
+    t.engines[1]!.events.capturing();
+    expect(t.bar.dataset.state).toBe("listening");
+    expect(t.sounds).toEqual(["start", "start"]);
+  });
+});
+
+describe("Whisper keeps the user informed on a long run (the owner's report: silent during long pauses)", () => {
+  beforeAll(installMiniDom);
+
+  it("the trace's turn 3 on Standard: a step line when the agent starts something new, and a 'Still …' line in a long pause", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = panel(1, { engine: "standard" });
+      t.hf.toggle("button");
+      await vi.advanceTimersByTimeAsync(0);
+      const std = t.engines[0]!;
+      const said: [number, string][] = [];
+      const T0 = Date.now();
+      // Each line takes 1.5 s to say.
+      std.speak = (text) => {
+        said.push([Date.now() - T0, text]);
+        setTimeout(() => std.events.said(), 1_500);
+      };
+      const nav = (url: string) => ({ type: "tool_call" as const, id: "n", name: "navigate", args: { url } });
+      const call = (name: string) => ({ type: "tool_call" as const, id: "c", name, args: {} });
+      const timeline: [number, Record<string, unknown>][] = [
+        [0, { type: "user_message", text: "Take a look at my edits.", voice: true }],
+        [1_853, nav("https://x.com/bboym0dE")],
+        [20_824, call("wait_for")],
+        [22_756, call("press_key")],
+        [22_797, call("screenshot")],
+        [25_389, nav("https://x.com/bboym0dE/status/1")],
+        [26_815, call("wait_for")],
+        [27_673, call("read_page")],
+        [29_500, call("list_scheduled_tasks")],
+        [38_045, { type: "task_end", outcome: "done", summary: "Reviewed", spoken: "I don't see your edits yet." }],
+      ];
+      t.hf.setRunning(["s-1"]);
+      (t.deps as { chatOf: (tab: number | null) => string | null }).chatOf = () => "s-1";
+      t.hf.refresh();
+      let at = 0;
+      for (const [ms, ev] of timeline) {
+        await vi.advanceTimersByTimeAsync(ms - at);
+        at = ms;
+        if (ev.type === "task_end") t.hf.setRunning([]);
+        t.hf.onEvent({ ...ev, sessionId: "s-1", ts: new Date().toISOString() } as never);
+      }
+      await vi.advanceTimersByTimeAsync(2_000);
+      const times = said.map(([ms]) => ms);
+      let last = 0;
+      let longest = 0;
+      for (const ms of [...times.filter((x) => x <= 38_045), 38_045]) {
+        longest = Math.max(longest, ms - last);
+        last = ms;
+      }
+      expect({ silenceUnder20s: longest <= 20_000, resultOnce: said.filter(([, s]) => s === "I don't see your edits yet.").length }).toEqual({ silenceUnder20s: true, resultOnce: 1 });
+      expect(said).toEqual([
+        [1_853, "Opening x.com"],
+        [19_900, "Still opening x.com"],
+        [22_797, "Looking at the page"],
+        [38_045, "I don't see your edits yet."],
+      ]);
       t.hf.toggle("button");
     } finally {
       vi.useRealTimers();

@@ -44,6 +44,8 @@ function setup() {
     heard: (t, f) => void log.push(`heard:${t}:${f}`),
     partial: (t) => void log.push(`partial:${t}`),
     level: (l) => void levels.push(l),
+    openingMic: () => void log.push("openingMic"),
+    capturing: () => void log.push("capturing"),
     narrating: () => void log.push("narrating"),
     said: () => void log.push("said"),
     narratorText: (t) => void log.push(`narrator:${t}`),
@@ -93,6 +95,28 @@ describe("RealtimeEngine", () => {
     expect(t.socket.sent[0]!.type).toBe("session.update");
     for (let i = 0; i < 5; i++) t.mic.deliver!(new Float32Array(512).fill(0.1));
     expect(t.socket.sent.filter((e) => e.type === "input_audio_buffer.append")).toHaveLength(1);
+  });
+
+  it("says when it opens the microphone (connected), and when its first audio went to the narrator: once, never while muted", async () => {
+    const t = setup();
+    t.engine.setMuted(true);
+    const start = t.engine.start();
+    await settle();
+    expect(t.log).toEqual([]);
+    t.socket.readyState = 1;
+    t.socket.onopen?.({});
+    t.socket.event({ type: "session.created", session: { type: "realtime" } });
+    await start;
+    expect(t.log).toEqual(["openingMic"]);
+    for (let i = 0; i < 5; i++) t.mic.deliver!(new Float32Array(512).fill(0.1));
+    expect(t.log).toEqual(["openingMic"]);
+    t.engine.setMuted(false);
+    t.mic.deliver!(new Float32Array(1200));
+    expect(t.log).toEqual(["openingMic"]);
+    t.mic.deliver!(new Float32Array(1200));
+    expect(t.log).toEqual(["openingMic", "capturing"]);
+    for (let i = 0; i < 5; i++) t.mic.deliver!(new Float32Array(2400));
+    expect(t.log.filter((l) => l === "capturing")).toHaveLength(1);
   });
 
   it("a refusal before the start rejects it with the failure (the panel says why; it never switches engine)", async () => {

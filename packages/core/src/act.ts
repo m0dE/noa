@@ -11,7 +11,7 @@
  * (once). The batch stops at the first step Jev is not sure about and
  * returns candidates for that step only, so the model can pick one.
  */
-import { errorMessage, isApprovalRefusal, stopwatch, traceStart, traceText, type AgentEvent, type BrowserMethod, type BrowserMethods, type ElementInfo, type ElementPicks, type PageSnapshot, type Sleep, type ToolArgsOf, type ToolResult, type TraceDraft } from "@noa/shared";
+import { errorMessage, isApprovalRefusal, isDialogOpenText, stopwatch, traceStart, traceText, type AgentEvent, type BrowserMethod, type BrowserMethods, type ElementInfo, type ElementPicks, type PageSnapshot, type Sleep, type ToolArgsOf, type ToolResult, type TraceDraft } from "@noa/shared";
 import { OutOfCreditError } from "./api-errors.js";
 import type { JevDecision, JevLike } from "./types.js";
 import { formatCompact, formatElement, formatPageChange, formatSnapshot } from "./page-format.js";
@@ -279,7 +279,8 @@ export async function runAct(steps: Step[], ctx: ActContext): Promise<ToolResult
       const couldNotUse = async (index: number, e: unknown, d?: JevDecision): Promise<ToolResult> => {
         const message = errorMessage(e);
         // The user did not approve the step, or it was refused: that is final. No candidates to pick again, nothing after it runs.
-        if (isApprovalRefusal(message) || e instanceof RefusedActionError) {
+        // So is a dialog the page opened (the step's click did it) or had open: the page answers nothing until it is answered.
+        if (isApprovalRefusal(message) || e instanceof RefusedActionError || isDialogOpenText(message)) {
           const rest = steps.length > n ? ` Steps ${n + 1}-${steps.length} were not run.` : "";
           return { text: `${[...lines, `step ${n}: "${step.goal}": ${message}`].join("\n")}${rest}`, isError: true };
         }

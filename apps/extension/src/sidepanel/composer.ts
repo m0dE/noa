@@ -35,12 +35,14 @@ export type ComposerMode = "new" | "conversation" | "running";
 /** The box under the list starts a new job (an empty send looks at the page: Send's tooltip says so). */
 export const NEW_JOB_PLACEHOLDER = "Start a new job…";
 /** The placeholder while hands-free voice listens for this box's tab. */
-export const LISTENING_PLACEHOLDER = "Listening… just talk";
+export const LISTENING_PLACEHOLDER = "Listening · go ahead";
+/** The placeholder while hands-free voice starts (or reconnects) for this box's tab: it does not listen yet. */
+export const STARTING_PLACEHOLDER = "Not listening yet · wait for the sound";
 /** The placeholder while hands-free is on for this tab with the microphone muted. */
 export const MUTED_PLACEHOLDER = "Microphone muted · type, or unmute to talk";
 
-/** Hands-free voice and the box: off, listening for this tab, or on for it with the microphone muted. */
-export type DictationLook = "off" | "listening" | "muted";
+/** Hands-free voice and the box: off, starting for this tab (not listening yet), listening for it, or on with the microphone muted. */
+export type DictationLook = "off" | "starting" | "listening" | "muted";
 /** The Send button's tooltip where an empty send looks at the page. */
 export const SCREEN_SEND_TITLE = "Describe a task, or press Enter to let Noa look at this page";
 
@@ -256,7 +258,7 @@ export function initComposer(opts: {
     suggestionText.textContent = shown === null ? "" : suggestionDescription(shown);
     if (shown === null) text.removeAttribute("aria-describedby");
     else text.setAttribute("aria-describedby", suggestionText.id);
-    text.placeholder = shown !== null ? "" : dictating === "listening" ? LISTENING_PLACEHOLDER : dictating === "muted" ? MUTED_PLACEHOLDER : placeholder;
+    text.placeholder = shown !== null ? "" : dictating === "listening" ? LISTENING_PLACEHOLDER : dictating === "starting" ? STARTING_PLACEHOLDER : dictating === "muted" ? MUTED_PLACEHOLDER : placeholder;
   };
 
   /** Grow with the text (or the suggestion shown in it) up to MAX_ROWS lines, then scroll inside. */

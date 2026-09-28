@@ -13,11 +13,11 @@ const PLUS: AccountView = { ...base, plan: { id: "plus", status: "active", curre
 const FREE: AccountView = { ...base, plan: { id: "free", status: "none", currentPeriodEnd: null, cancelAtPeriodEnd: false } };
 
 describe("voiceView: the voice engine choice in Settings", () => {
-  it("offers OpenAI Realtime (recommended) and OpenAI Whisper + browser voice, each with its cost a minute from the server", () => {
+  it("offers OpenAI Realtime (recommended) and Deepgram Nova-3 + browser voice, each with its cost a minute from the server", () => {
     const v = voiceView({ engines, selected: "realtime", account: PLUS });
     expect(v.options.map((o) => [o.id, o.label])).toEqual([
       ["realtime", "OpenAI Realtime (recommended)"],
-      ["standard", "OpenAI Whisper + browser voice"],
+      ["standard", "Deepgram Nova-3 + browser voice"],
     ]);
     expect(v.options[0]!.cost).toBe("about 5¢ of usage credit a minute");
     expect(v.options[1]!.cost).toBe("about 0.05¢ of usage credit a minute");
@@ -35,7 +35,7 @@ describe("voiceView: the voice engine choice in Settings", () => {
 
   it("an engine the server cannot run says Standard is used instead", () => {
     const v = voiceView({ engines: [{ ...engines[0]!, available: false }, engines[1]!], selected: "realtime", account: PLUS });
-    expect(v.options[0]!.cost).toBe("Not available on this server right now: Whisper + browser voice is used instead.");
+    expect(v.options[0]!.cost).toBe("Not available on this server right now: Deepgram Nova-3 + browser voice is used instead.");
   });
 
   it("without a plan that includes voice, says which plans do", () => {

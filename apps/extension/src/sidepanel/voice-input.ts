@@ -8,9 +8,11 @@
  *   Settings, or end the one that is on, wherever it listens. The session
  *   shows itself on the button (still "Voice", pressed: filled in the live
  *   colour, a ring following the voice; its tooltip says it ends voice mode),
- *   the orb, and the box (a glow and "Listening… just talk" while it listens
+ *   the orb, and the box (a glow and "Listening · go ahead" while it listens
  *   for this tab; muted, no glow and a placeholder that says so); the status
- *   strip at the top is hands-free.ts's.
+ *   strip at the top is hands-free.ts's. Until it really listens (starting,
+ *   reconnecting) nothing looks live: the button is an outline that pulses,
+ *   the orb is grey, the box says "Not listening yet" without its glow.
  * - While a session runs here: Mute (a mic icon, slashed while muted; a
  *   toggle, Alt+M) left of Voice. A line being said is cut off by Esc or by
  *   talking. The task's own Stop is the composer's (a square), apart from these.
@@ -21,7 +23,7 @@
 import { errorMessage, plansWithText } from "@noa/shared";
 import type { MicPermission } from "../voice/mic-access.js";
 import { VoiceError } from "../voice/transcribe.js";
-import type { ComposerView } from "./composer.js";
+import type { ComposerView, DictationLook } from "./composer.js";
 import { FIXES } from "./error-help.js";
 import type { NoticeLevel } from "./notice-queue.js";
 import type { NoticeAction } from "./notices.js";
@@ -85,6 +87,8 @@ export interface HandsFreeLook {
   phase: string;
   /** It listens for another tab than the one shown (the box here is not its). */
   elsewhere: boolean;
+  /** It really listens now (the microphone's audio reaches the engine, not muted); false while it starts or reconnects. */
+  listening: boolean;
   /** The microphone is muted: the box does not say it listens, the mic stops pulsing. */
   muted: boolean;
   /** The Mute toggle (null: not offered, e.g. while starting). */
@@ -120,6 +124,12 @@ export interface VoiceInput {
   showTip(tip: VoiceTip | null): void;
   /** True when the microphone may be used; otherwise asks for it (the permission page) and says so. */
   ensureMic(): Promise<boolean>;
+}
+
+/** How the box shows a session (see HandsFreeLook): not its tab, listening, muted, or not listening yet. */
+export function boxLook(look: HandsFreeLook | null): DictationLook {
+  if (!look || look.elsewhere) return "off";
+  return look.muted ? "muted" : look.listening ? "listening" : "starting";
 }
 
 const svg = (size: number, body: string) =>
@@ -182,6 +192,9 @@ export function initVoiceInput(deps: VoiceInputDeps): VoiceInput {
     button.setAttribute("aria-pressed", String(!!look));
     if (look?.muted) button.dataset.muted = "true";
     else delete button.dataset.muted;
+    // On, but not listening yet (starting, reconnecting): not filled in the live colour.
+    if (look && !look.listening && !look.muted) button.dataset.waiting = "true";
+    else delete button.dataset.waiting;
     // Mute belongs to a session this panel runs, on its own tab or another.
     const m = look?.mute ?? null;
     mute.hidden = !m;
@@ -201,7 +214,7 @@ export function initVoiceInput(deps: VoiceInputDeps): VoiceInput {
     else delete orb.dataset.muted;
     caption.textContent = look?.caption ?? "";
     // The box shows it listens only on the session's own tab (elsewhere, what is said goes to that tab's chat).
-    const box = !look || look.elsewhere ? "off" : look.muted ? "muted" : "listening";
+    const box = boxLook(look);
     composer.setDictating(box);
     document.body.classList.toggle("voice-live", box === "listening");
     if (!look) setLevel(0);

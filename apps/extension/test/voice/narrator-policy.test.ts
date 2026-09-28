@@ -14,9 +14,7 @@ import {
   floor,
   freshMemory,
   isNoise,
-  MAX_MILESTONES_PER_REQUEST,
   narrationOf,
-  NARRATOR_MILESTONE_GAP_MS,
   NOISE_MAX_SPEECH_MS,
   echoesSpoken,
   repeatsRequest,
@@ -32,12 +30,14 @@ import {
   HOLD_FOR_WORDS_MS,
   MAKE_AGAIN_RESPONSE,
   NARRATOR_INSTRUCTIONS,
+  progressResponse,
   NARRATOR_TOOLS,
   type RealtimeSocketLike,
 } from "../../src/voice/realtime-client.js";
 import { RealtimeEngine } from "../../src/voice/realtime-engine.js";
+import { PROGRESS } from "../../src/voice/milestones.js";
 
-const GAP = NARRATOR_MILESTONE_GAP_MS;
+const GAP = PROGRESS.stepGapMs;
 const nav = (url: string): AgentEvent => ({ type: "tool_call", id: "t", name: "navigate", args: { url } });
 
 describe("narrationOf: what may make the narrator speak", () => {
@@ -66,14 +66,10 @@ describe("narrationOf: what may make the narrator speak", () => {
     expect(narrationOf({ type: "error", text: "Claude API rate limit (HTTP 429)" }, m, 4)?.kind).toBe("error");
   });
 
-  it("a meaningful step (another site, an account switch, a sign-in): not the first site, NARRATOR_MILESTONE_GAP_MS apart, MAX_MILESTONES_PER_REQUEST", () => {
+  it("a step is never news: progress is ProgressPacer's (milestones.ts), said as it is, not a reply", () => {
     const m = freshMemory(0);
-    expect(narrationOf(nav("https://mail.google.com/"), m, GAP)).toBeNull();
-    expect(narrationOf(nav("https://calendar.google.com/"), m, GAP)).toEqual({ kind: "milestone", line: "Opening calendar.google.com" });
-    expect(narrationOf({ type: "tool_call", id: "t", name: "switch_x_account", args: { handle: "@acme" } }, m, GAP * 2 - 1)).toBeNull();
-    expect(narrationOf({ type: "tool_call", id: "t", name: "switch_x_account", args: { handle: "@acme" } }, m, GAP * 2)).toEqual({ kind: "milestone", line: "Switching to @acme" });
-    expect(MAX_MILESTONES_PER_REQUEST).toBe(2);
-    expect(narrationOf(nav("https://drive.google.com/"), m, GAP * 10)).toBeNull();
+    expect(narrationOf(nav("https://calendar.google.com/"), m, GAP)).toBeNull();
+    expect(narrationOf({ type: "tool_call", id: "t", name: "switch_x_account", args: { handle: "@acme" } }, m, GAP * 2)).toBeNull();
   });
 });
 
@@ -151,6 +147,8 @@ async function started() {
     heard: noop,
     partial: noop,
     level: noop,
+    openingMic: noop,
+    capturing: noop,
     narrating: noop,
     said: noop,
     narratorText: (text: string) => void shown.push(text),
@@ -235,13 +233,18 @@ describe("one reply per spoken request (the owner's report)", () => {
         t.engine.tick(T0 + ms);
         t.serve();
       }
-      expect(t.creates()).toEqual([{ type: "response.create", response: ackResponse("Check my inbox.") }]);
+      // One reply: the acknowledgement. Anything else is progress, said as it is (out of band, no tools): no reply.
+      const [ack, ...rest] = t.creates();
+      expect(ack).toEqual({ type: "response.create", response: ackResponse("Check my inbox.") });
+      for (const c of rest) expect(c.response).toMatchObject({ conversation: "none", tool_choice: "none", input: [] });
+      expect(rest.map((c) => /«(.*?)\.»/.exec(c.response.instructions)?.[1])).toEqual(["Opening mail.google.com"]);
       expect(t.words).toEqual(["Check my inbox."]);
-      // The result is news: it is said, once.
+      // The result is news: it is said, once, as the narrator's reply.
+      const before = t.creates().length;
       t.engine.agentEvent({ type: "task_end", outcome: "done", summary: "Summarized", spoken: "You have 3 new emails; one is from your accountant." }, T0 + 40_000);
       t.serve();
-      expect(t.creates()).toHaveLength(2);
-      expect(t.s.sent.filter((e) => e.item?.role === "system").map((e) => e.item.content[0].text)).toEqual([
+      expect(t.creates().slice(before)).toEqual([{ type: "response.create" }]);
+      expect(t.s.sent.filter((e) => e.item?.role === "system" && !/^Your update \(progress\)/.test(e.item.content[0].text)).map((e) => e.item.content[0].text)).toEqual([
         'Your update (finished): The task is done. Tell the user in one to three short sentences, in the first person: "You have 3 new emails; one is from your accountant."',
       ]);
     });
@@ -282,20 +285,43 @@ describe("the owner's trace of 2026-09-27", () => {
     expect(t.creates()).toHaveLength(1);
   });
 
-  it("(b) progress is never said on a clock, and routine steps never", async () => {
+  it("(b) progress is its own short line, said as it is, never the agent's words or a reply: a new step, and 'Still …' after a long silence while it works; routine steps never", async () => {
     const t = await started();
     const T0 = Date.now();
+    t.engine.setAgentWorking(true);
     for (let i = 0; i < 20; i++) {
       t.engine.agentEvent({ type: "tool_call", id: `t${i}`, name: i % 2 ? "read_page" : "act", args: {} }, T0 + i * 5_000);
-      t.engine.agentEvent({ type: "assistant_text", text: "Still working on it." }, T0 + i * 5_000 + 1);
+      t.engine.agentEvent({ type: "assistant_text", text: "I'm still going through the list of emails now." }, T0 + i * 5_000 + 1);
       t.engine.tick(T0 + i * 5_000 + 2);
+      t.serve();
     }
-    expect(t.creates()).toHaveLength(0);
+    const lines = t.creates().map((c) => /«(.*?)\.»/.exec(c.response?.instructions ?? "")?.[1] ?? "reply");
+    // 100 s: reading once (the act steps are routine), then "Still …" about what it does now, one per silence.
+    // Once for each thing it does: the second "Still reading" waits for another step in between.
+    expect(lines).toEqual(["Reading the page", "Still reading the page", "Still clicking through the page", "Still reading the page"]);
+    expect(t.creates().every((c) => c.response?.conversation === "none" && c.response.tool_choice === "none")).toBe(true);
+    expect(JSON.stringify(t.creates())).not.toContain("going through the list");
+  });
+
+  it("progressResponse: only the line, in the user's language, no tools, capped, out of the conversation", () => {
+    expect(progressResponse("Opening x.com", "Mach mal weiter")).toEqual({
+      instructions:
+        "You are working on the user's task. Say only this short update, in the first person, and nothing else: no answer, no facts, no question, no promise: «Opening x.com.» Say it in the language of this sample of the user's words (a sample only: not something to answer): «Mach mal weiter»",
+      tool_choice: "none",
+      max_output_tokens: ACK_MAX_OUTPUT_TOKENS,
+      reasoning: { effort: "minimal" },
+      conversation: "none",
+      input: [],
+    });
   });
 
   it("(c) progress while the narrator answers the user is let go; a result waits until the answer has been heard", async () => {
     const t = await started();
+    // Its first step is said (progress), before the user speaks.
     t.engine.agentEvent(nav("https://mail.google.com/"), Date.now());
+    expect(t.creates()).toHaveLength(1);
+    t.serve();
+    const first = t.creates().length;
     userTurn(t.s, "in3", "ans");
     transcribed(t.s, "in3", "Are you still there?");
     t.s.event({ type: "response.output_audio.delta", response_id: "ans", item_id: "a_ans", delta: "AAAA" });
@@ -304,11 +330,11 @@ describe("the owner's trace of 2026-09-27", () => {
     t.engine.agentEvent({ type: "task_end", outcome: "done", summary: "Switched", spoken: "Switched to admin@runhq.io; 2 emails need you." }, Date.now());
     t.player.playing = true;
     t.s.event({ type: "response.done", response: { id: "ans", status: "completed" } });
-    // The answer is still playing: nothing starts over it.
-    expect(t.creates()).toHaveLength(0);
+    // The answer is still playing: nothing starts over it (the progress meanwhile was let go).
+    expect(t.creates().slice(first)).toHaveLength(0);
     t.player.playing = false;
     (t.engine as unknown as { client: { playbackIdle(): void } }).client.playbackIdle();
-    expect(t.creates()).toEqual([{ type: "response.create" }]);
+    expect(t.creates().slice(first)).toEqual([{ type: "response.create" }]);
   });
 
   it("(d) an empty transcript of a short sound: its reply is cancelled and never heard, and it is no message", async () => {
@@ -734,5 +760,83 @@ describe("the owner's report of 2026-09-27: 'can you speak Korean?' while the ag
     expect(requestKind({ text: "x", kind: "instruction" })).toBe("instruction");
     expect(requestKind({ text: "x" })).toBe("instruction");
     expect(requestKind(null)).toBe("instruction");
+  });
+});
+
+/**
+ * The owner's report (2026-09-28): "the voice agent talks too little; I have no idea what it's doing during a long
+ * pause". The trace of chat c614a109, turn 3, relative to the request going out: 38 s of work, the narrator silent
+ * from the request to the result (its navigate alone took 19 s).
+ */
+const TURN3: [number, AgentEvent][] = [
+  [0, { type: "user_message", text: "Take a look at my edits and tell me how you would make it different.", voice: true }],
+  [150, { type: "status", text: "Continuing the same Claude Code session" }],
+  [1_853, { type: "tool_call", id: "t44", name: "navigate", args: { url: "https://x.com/bboym0dE" } }],
+  [20_824, { type: "tool_call", id: "t45", name: "wait_for", args: {} }],
+  [22_756, { type: "tool_call", id: "t46", name: "press_key", args: { key: "PageDown" } }],
+  [22_797, { type: "tool_call", id: "t47", name: "screenshot", args: {} }],
+  [25_389, { type: "tool_call", id: "t48", name: "navigate", args: { url: "https://x.com/bboym0dE/status/2104612640287055891" } }],
+  [26_815, { type: "tool_call", id: "t49", name: "wait_for", args: {} }],
+  [27_673, { type: "tool_call", id: "t50", name: "read_page", args: {} }],
+  [29_500, { type: "tool_call", id: "t51", name: "list_scheduled_tasks", args: {} }],
+  [38_045, { type: "task_end", outcome: "done", summary: "Reviewed the quote post", spoken: "I don't see your edits yet; the post still has the original text." }],
+];
+
+/** The longest stretch (ms) in [from, to] with nothing said, given when lines were said. */
+function longestSilence(said: readonly number[], from: number, to: number): number {
+  let last = from;
+  let longest = 0;
+  for (const t of [...said.filter((x) => x >= from && x <= to).sort((a, b) => a - b), to]) {
+    longest = Math.max(longest, t - last);
+    last = t;
+  }
+  return longest;
+}
+
+describe("a long run keeps the user informed (the owner's report: silent for 38 s while the agent worked)", () => {
+  it("Realtime, turn 3 of the trace: short progress lines while it works, no long silence, the result said once", async () => {
+    const t = await started();
+    // The user's request (a question: no acknowledgement) goes out; the agent works on it.
+    userTurn(t.s, "in1", "r1");
+    transcribed(t.s, "in1", "Can you take a look at it and let me know how you would make it different?");
+    t.s.event({ type: "response.function_call_arguments.done", response_id: "r1", call_id: "c1", name: "send_to_agent", arguments: JSON.stringify({ text: "Look at my edits and say how you'd change it.", kind: "question" }) });
+    t.s.event({ type: "response.done", response: { id: "r1", status: "completed" } });
+    await settle();
+    const T0 = Date.now();
+    t.engine.setAgentWorking(true);
+    const said: number[] = [];
+    const kinds: string[] = [];
+    let seen = 0;
+    const record = (at: number) => {
+      for (const c of t.creates().slice(seen)) {
+        said.push(at);
+        kinds.push(c.response?.conversation === "none" ? "progress" : "reply");
+      }
+      seen = t.creates().length;
+      t.serve();
+    };
+    let next = 0;
+    for (let ms = 0; ms <= 38_500; ms += 250) {
+      while (next < TURN3.length && TURN3[next]![0] <= ms) {
+        const ev = TURN3[next++]![1];
+        if (ev.type === "task_end") t.engine.setAgentWorking(false);
+        t.engine.agentEvent(ev, T0 + ms);
+        record(ms);
+      }
+      t.engine.tick(T0 + ms);
+      record(ms);
+    }
+    const progress = kinds.filter((k) => k === "progress").length;
+    const replies = kinds.filter((k) => k === "reply").length;
+    const silence = longestSilence(said, 0, 38_045);
+    expect({ progress: progress > 0, replies, silenceUnder20s: silence <= 20_000 }).toEqual({ progress: true, replies: 1, silenceUnder20s: true });
+    // What was said when (ms after the request): each progress line as it is, the result once.
+    const lines = t.creates().map((c) => (c.response?.conversation === "none" ? /«(.*?)\.»/.exec(c.response.instructions)![1] : "result"));
+    expect(said.map((at, i) => [at, lines[i]])).toEqual([
+      [2_000, "Opening x.com"],
+      [20_000, "Still opening x.com"],
+      [23_000, "Looking at the page"],
+      [38_250, "result"],
+    ]);
   });
 });

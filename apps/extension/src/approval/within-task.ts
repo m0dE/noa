@@ -155,7 +155,7 @@ function siteNamed(task: { instructions: string; account?: string | null }, url:
 export function withinInstructions(kind: ConsequenceKind, action: GateAction, task: { instructions: string; account?: string | null }): WithinRules {
   const { asked, forbidden } = mentions(task.instructions, familyOf(kind, action));
   if (!asked || forbidden) return "no";
-  const url = action.method === "navigate" || action.method === "openTabs" ? (action.urls?.[0] ?? "") : action.page.url;
+  const url = action.method === "navigate" || action.method === "openTabs" ? (action.urls?.[0] ?? "") : action.method === "handleDialog" ? (action.dialog?.url ?? action.page.url) : action.page.url;
   const site = siteNamed(task, url);
   return site === "named" ? "yes" : site === "other" ? "no" : "unsure";
 }

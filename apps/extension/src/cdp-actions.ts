@@ -4,7 +4,6 @@
  * instead (errors that isDebuggerBlocked() recognizes pass through).
  */
 import { type Sleep, type PageSnapshot, type Screenshot } from "@noa/shared";
-import type { Cdp } from "./cdp.js";
 import {
   clickElement,
   indexSelector,
@@ -27,6 +26,7 @@ import { loadProbeInPage, waitForUsablePage, type LoadProbe } from "./page-load.
 import { snapshotExpression } from "./page-snapshot.js";
 import { waitInPage, type PageWait, type PageWaitArgs } from "./page-wait.js";
 import { FOUND_KEY, xAccountEntryInPage, xHandleParam, type XEntryMode, type XEntryStep } from "./page-x-account.js";
+import { DialogOpenError, type Cdp } from "./cdp.js";
 import { isDebuggerBlocked } from "./restricted.js";
 import { sameProbe, scrollProbeExpression, scrollReport, type PageResult, type ScrollProbe } from "./scroll-probe.js";
 
@@ -60,12 +60,12 @@ export class CdpActions {
     return this.evaluate<{ url: string; title: string }>(tabId, "({ url: location.href, title: document.title })");
   }
 
-  /** How far the tab's page loaded; null while it cannot be read (navigating). */
+  /** How far the tab's page loaded; null while it cannot be read (navigating). A dialog that froze it is an error. */
   probe(tabId: number): Promise<LoadProbe | null> {
     return this.evaluate<LoadProbe>(tabId, `(${loadProbeInPage.toString()})()`).then(
       (p) => p ?? null,
       (err: unknown) => {
-        if (isDebuggerBlocked(err)) throw err;
+        if (isDebuggerBlocked(err) || err instanceof DialogOpenError) throw err;
         return null;
       },
     );

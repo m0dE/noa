@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { MAX_TABS_PER_CALL } from "./browser.js";
+import { DIALOG_AUTO_DISMISS_MS } from "./dialog.js";
 import {
   CANCEL_SCHEDULED_TASK_DESCRIPTION,
   CancelScheduledTaskArgs,
@@ -134,6 +135,11 @@ export const ToolArgs = {
   switch_tab: z.object({ tab: z.string().describe("Tab id from open_tabs or list_tabs, e.g. t2") }),
   list_tabs: z.object({}),
   close_tabs: z.object({ tabs: z.array(z.string()).min(1).describe("Tab ids to close") }),
+  handle_dialog: z.object({
+    accept: z.boolean().describe(`true: OK (on "Leave site?": Leave, which discards the page's unsaved changes). false: Cancel (stay on the page)`),
+    text: z.string().optional().describe("For a prompt dialog: the answer to type in before OK"),
+    tab: z.string().optional().describe("Tab id whose dialog to answer. Default: the current tab"),
+  }),
   wait_for: WaitForArgs,
   switch_x_account: z.object({ handle: z.string().describe("Account handle, e.g. @myhandle") }),
   get_credential: z.object({ site: z.string().describe("Hostname, e.g. example.com") }),
@@ -196,6 +202,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   switch_tab: "Make another tab the current tab: read_page, act, navigate, scroll, screenshot and the other tools then act on it.",
   list_tabs: "List this task's tabs with id, URL, title, and which one is current.",
   close_tabs: "Close tabs you opened and no longer need. The tab the task started on is never closed.",
+  handle_dialog: `Answer the browser dialog (alert, confirm, prompt, or "Leave site?") open in a tab. While one is open its page is frozen: other tools on that tab say so until it is answered. One nobody answers is cancelled after ${DIALOG_AUTO_DISMISS_MS / 1000} s.`,
   wait_for: WAIT_FOR_DESCRIPTION,
   switch_x_account: "Switch X (Twitter) to another signed-in account using X's account switcher. It checks that the switcher shows the new account before it answers.",
   get_credential: "Get the stored username and password for a site. Never use this for X.",

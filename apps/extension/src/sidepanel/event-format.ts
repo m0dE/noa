@@ -1,5 +1,5 @@
 /** Pure view models for agent events in a job's conversation. */
-import { describeSchedule, localTimeZone, SCREEN_HELP_TEXT, type AgentEvent, type AttachmentRef, type Chip, type SessionInfo, type TaskSource, type TodoChange } from "@noa/shared";
+import { describeSchedule, dialogLine, localTimeZone, SCREEN_HELP_TEXT, type AgentEvent, type AttachmentRef, type Chip, type SessionInfo, type TaskSource, type TodoChange } from "@noa/shared";
 import { repeatsPausedCard } from "../approval/paused.js";
 import { clip, isLongSummary, toolArgsSummary } from "../text.js";
 import { speakable } from "../voice/spoken-line.js";
@@ -44,6 +44,8 @@ export type EventView =
    * changeId its Undo names): its first line, its schedule in words, and whether the user undid it from the card.
    */
   | { kind: "scheduled"; taskId: string; title: string; instructions: string; when: string; change?: TodoChange; changeId?: string; undone?: true }
+  /** A dialog a page of the run opened, and how it was answered: "Dialog: Leave site? … → Cancel". title: by whom, where. */
+  | { kind: "dialog"; text: string; title: string }
   /** An action waiting for the user's OK, or how that ended (approval-view.ts). */
   | ApprovalView
   /** The agent's memory changed from this chat (memory-view.ts): "Remembered: ...", with Undo. */
@@ -221,6 +223,8 @@ export function describeEvent(ev: AgentEvent, turn: TurnContext = {}): EventView
     case "approval_resolved":
       // It changes its approval card (see turn.approval); nothing of its own.
       return { kind: "status", text: "" };
+    case "dialog":
+      return dialogView(ev);
     case "memory":
       return memoryNoteView(ev, !!turn.memoryUndone);
     case "memory_undone":
@@ -230,6 +234,20 @@ export function describeEvent(ev: AgentEvent, turn: TurnContext = {}): EventView
       // Timing goes to the conversation's trace (the Raw view), never into the chat: an empty line if one got here.
       return { kind: "status", text: "" };
   }
+}
+
+const DIALOG_ANSWERED_BY = { agent: "the agent", auto: "Noa, because nobody did in time", user: "someone in the browser" } as const;
+
+/** A dialog's line in the run, with who answered it and where in its title. */
+export function dialogView(ev: Extract<AgentEvent, { type: "dialog" }>): EventView {
+  let site = "";
+  try {
+    site = new URL(ev.dialog.url).host;
+  } catch {
+    /* no page address */
+  }
+  const where = [site && `on ${site}`, ev.tab && `in tab ${ev.tab}`].filter(Boolean).join(" ");
+  return { kind: "dialog", text: dialogLine(ev), title: `A ${ev.dialog.type} dialog the page opened${where ? ` ${where}` : ""}, answered by ${DIALOG_ANSWERED_BY[ev.by]}` };
 }
 
 /** The conversation's first message: what was asked, as the first bubble of the thread. */

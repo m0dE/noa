@@ -3,16 +3,15 @@
  * events may make it say (narrationOf) and when a line may start (floor).
  *
  * It speaks only with news the user does not have: the agent's result, its
- * question, a problem, and now and then a meaningful change (another site, an
- * account switch, a sign-in) on a long task. It never speaks for what merely
- * echoes the user's own request (their message, their transcribed words, the
- * agent restating the request, routine steps such as reading or clicking), and
- * one speaker talks at a time: the user first, then the narrator's reply to
- * them, then any news. Pure.
+ * question, a problem. It never speaks for what merely echoes the user's own
+ * request (their message, their transcribed words, the agent restating the
+ * request), and one speaker talks at a time: the user first, then the
+ * narrator's reply to them, then any news. Progress while the agent works (a
+ * new step, "Still …" after a long silence) is milestones.ts ProgressPacer's,
+ * said as it is (realtime-feed.ts): it is not a reply. Pure.
  */
 import { USER_STOP_REASON, type AgentEvent } from "@noa/shared";
 import { containedWordShare, sharedWordShare } from "../text.js";
-import { milestoneOf, siteName } from "./milestones.js";
 import { answerLine, endLine, errorLine } from "./spoken-line.js";
 
 /** What a narrator reply is: its answer to the user's speech, or one it was asked for (see SpokenKind). */
@@ -20,10 +19,6 @@ export type ReplyKind = "speech" | SpokenKind;
 /** A line the narrator is asked to say: the one acknowledgement of a request, a milestone, the result, the agent's question, a problem. */
 export type SpokenKind = "ack" | "milestone" | "result" | "question" | "error";
 
-/** A milestone is said at most this often, and never this soon after the narrator last spoke (the acknowledgement included). */
-export const NARRATOR_MILESTONE_GAP_MS = 12_000;
-/** Milestones said at most per request. */
-export const MAX_MILESTONES_PER_REQUEST = 2;
 /** A request sharing at least this share of its words with the one just sent is that request again (sent once). */
 export const REPEATED_REQUEST_OVERLAP_MIN = 0.6;
 /** An empty transcript of at most this much speech is noise (a cough, a door): no reply, no message. */
@@ -33,16 +28,13 @@ export const NOISE_MAX_SPEECH_MS = 2_500;
 export interface NarrationMemory {
   /** When it last spoke or was asked to (epoch ms). */
   lastSpokenAt: number;
-  milestones: string[];
-  /** The sites the request's task has been on (the first one is where it was asked to go: not news). */
-  sites: string[];
   /** The last result or question said (never said twice). */
   lastLine: string | null;
   /** The user asked the agent something while it worked: its next words are the answer, said once. */
   awaitingAnswer: boolean;
 }
 
-export const freshMemory = (now = -Infinity): NarrationMemory => ({ lastSpokenAt: now, milestones: [], sites: [], lastLine: null, awaitingAnswer: false });
+export const freshMemory = (now = -Infinity): NarrationMemory => ({ lastSpokenAt: now, lastLine: null, awaitingAnswer: false });
 
 /**
  * What the user's words passed on to the agent are, as the narrator understood them (send_to_agent's `kind`): a
@@ -51,21 +43,6 @@ export const freshMemory = (now = -Infinity): NarrationMemory => ({ lastSpokenAt
  */
 export type RequestKind = "question" | "instruction";
 export const requestKind = (args: Record<string, unknown> | null): RequestKind => (args?.kind === "question" ? "question" : "instruction");
-
-/** A step is news only when it changes where the agent is or who it is: another site, an account, a sign-in. */
-function meaningfulStep(ev: Extract<AgentEvent, { type: "tool_call" }>, memory: NarrationMemory): string | null {
-  const line = milestoneOf(ev);
-  if (!line) return null;
-  if (/^Switching to |^Switching accounts|^Signing in/.test(line)) return memory.milestones.includes(line) ? null : line;
-  if (!line.startsWith("Opening ")) return null; // reading, clicking, typing, scrolling, looking: routine
-  const args = (ev.args ?? {}) as { url?: unknown; urls?: unknown };
-  const site = siteName(args.url) ?? (Array.isArray(args.urls) && args.urls.length === 1 ? siteName(args.urls[0]) : null);
-  if (!site || memory.sites.includes(site)) return null;
-  const first = memory.sites.length === 0;
-  memory.sites.push(site);
-  // The first site is the one the user asked for: obvious.
-  return first ? null : line;
-}
 
 /** Said once: false when the very same line was said last (dedupe by meaning). */
 function news(line: string, memory: NarrationMemory, now: number): boolean {
@@ -79,9 +56,8 @@ function news(line: string, memory: NarrationMemory, now: number): boolean {
 /**
  * What an event of the chat may make the narrator say, or null: nothing to say (it may still be passed on as a note
  * for context). Speaks for: the result (the agent's spoken line), its answer to a question the user asked while it
- * worked, its question, a problem, and a meaningful step now and then (NARRATOR_MILESTONE_GAP_MS apart,
- * MAX_MILESTONES_PER_REQUEST). Never for the user's message or words, the agent's other text (it restates the
- * request), routine steps or status lines. `line`: the words it is about.
+ * worked, its question, a problem. Never for the user's message or words, the agent's other text (it restates the
+ * request) or status lines; steps are progress (ProgressPacer), not news. `line`: the words it is about.
  */
 export function narrationOf(ev: AgentEvent, memory: NarrationMemory, now: number): { kind: SpokenKind; line: string } | null {
   switch (ev.type) {
@@ -102,14 +78,6 @@ export function narrationOf(ev: AgentEvent, memory: NarrationMemory, now: number
     case "error": {
       const line = errorLine(ev.text);
       return news(line, memory, now) ? { kind: "error", line } : null;
-    }
-    case "tool_call": {
-      const line = meaningfulStep(ev, memory);
-      if (!line) return null;
-      if (memory.milestones.length >= MAX_MILESTONES_PER_REQUEST || now - memory.lastSpokenAt < NARRATOR_MILESTONE_GAP_MS) return null;
-      memory.milestones.push(line);
-      memory.lastSpokenAt = now;
-      return { kind: "milestone", line };
     }
     default:
       return null;

@@ -7,7 +7,7 @@
  * with secrets redacted and page content cut short. Pure.
  */
 import { mapStrings, REDACTED } from "@noa/core";
-import { APPROVAL_OUTCOME_TEXT, describeSchedule, localTimeZone, redactSecrets, SECRET_SETTING_KEYS, type AgentEvent, type ApprovalEndedBy, type AttachmentRef, formatBytes, type SessionInfo, type StampedAgentEvent, type TraceEvent, type TraceValue } from "@noa/shared";
+import { APPROVAL_OUTCOME_TEXT, describeSchedule, dialogLine, localTimeZone, redactSecrets, SECRET_SETTING_KEYS, type AgentEvent, type ApprovalEndedBy, type AttachmentRef, formatBytes, type SessionInfo, type StampedAgentEvent, type TraceEvent, type TraceValue } from "@noa/shared";
 import { TRACE_CAPS, type TokenTotals, type TraceBook, type TurnTotals } from "./trace-book.js";
 
 /**
@@ -363,6 +363,8 @@ function eventRow(e: StampedAgentEvent, t: number, span: TraceEvent | undefined,
     }
     case "approval_resolved":
       return { ...base, label: `Approval: ${APPROVAL_OUTCOME_TEXT[e.outcome] ?? e.outcome}${e.by ? ` (${APPROVAL_BY_TEXT[e.by]})` : ""}`, detail: `id ${e.id}` };
+    case "dialog":
+      return { ...base, label: dialogLine(e), detail: join(`${e.dialog.type} by ${e.by}`, e.tab && `tab ${e.tab}`, e.dialog.url) };
     case "task_end": {
       const text = e.summary ?? e.reason ?? "";
       const row: Omit<TraceRow, "rel"> = { ...base, label: `Result: ${e.outcome}`, text: clip(text, TEXT_LIMITS.answer) };

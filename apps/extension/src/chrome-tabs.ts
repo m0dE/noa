@@ -153,15 +153,16 @@ export async function removeTabs(tabIds: number[]): Promise<void> {
 /**
  * Closes the agent's tabs the user has not taken over: a tab the user is
  * looking at (active in its window) or moved out of the Noa group
- * is theirs now and stays. Returns how many were closed.
+ * is theirs now and stays. remove: how they are closed (a remover may keep a
+ * tab whose page asks "Leave site?"). Returns how many it closed.
  */
-export async function removeAgentTabs(tabIds: number[]): Promise<number> {
+export async function removeAgentTabs(tabIds: number[], remove: (tabIds: number[]) => Promise<unknown> = removeTabs): Promise<number> {
   const left: number[] = [];
   for (const id of tabIds) {
     const tab = await chrome.tabs.get(id).catch(() => null);
     if (tab && !tab.active && (await inAgentGroup(tab))) left.push(id);
   }
-  await removeTabs(left);
+  await remove(left);
   return left.length;
 }
 

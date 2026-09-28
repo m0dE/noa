@@ -12,6 +12,12 @@
  * Turn off (that panel has no session controls: its mic moves the session
  * there, it does not end it).
  *
+ * It says "Listening" only once it listens: until the microphone's audio
+ * reaches the engine the session is starting, and the strip (grey, like the
+ * orb) says what it waits on (startingText: "Connecting…", "Opening the
+ * mic…", "Still …" when slow). The panel stops a start that takes too long
+ * and says why (sidepanel/hands-free.ts START_TIMEOUT_MS).
+ *
  * Muted (Mute, or MUTE_KEY): the state word says so while it would listen,
  * no meter, and the strip in grey (voice.css). Mute shows once the session
  * runs. "Hearing you" comes from the microphone's level (VoiceActivity); the
@@ -26,13 +32,37 @@ import { VOICE_ON, voiceOnLabel, type TabPage } from "./hands-free-tab.js";
 
 export { VOICE_ON };
 
+/** The strip's lead words while a session starts (it does not listen yet). */
+export const VOICE_STARTING = "Voice starting";
+
 /** A session's phase as the strip knows it: the state machine's, or still starting (microphone, connection). */
 export type VoiceBarPhase = Exclude<HandsFreePhase, "off"> | "starting";
 
 export type VoiceBarState = "starting" | "listening" | "hearing" | "muted" | "sending" | "working" | "speaking" | "reconnecting" | "elsewhere";
 
+/** What a session still starting waits on: the connection (Realtime), or the microphone's audio. */
+export type StartStep = "connecting" | "microphone";
+
+/** The strip's state word while starting (or reconnecting); slow: it has taken a while. */
+export function startingText(step: StartStep, slow = false): string {
+  const what = step === "connecting" ? "connecting…" : "opening the mic…";
+  return slow ? `Still ${what}` : `${what[0]!.toUpperCase()}${what.slice(1)}`;
+}
+
+/** Under the orb while it does not listen yet: that first, then what it waits on. */
+export function notListeningCaption(step: StartStep | "reconnecting", slow = false): string {
+  if (step === "reconnecting") return "Not listening · reconnecting…";
+  return `Not listening yet · ${startingText(step, slow).toLowerCase()}`;
+}
+
+/** Under the orb once it listens (and has nothing else to say). */
+export const LISTENING_CAPTION = "Listening · go ahead · say “stop” to end";
+
 export interface VoiceBarInput {
   phase: VoiceBarPhase;
+  /** Starting: what it waits on (default: the microphone), and whether that has taken a while. */
+  step?: StartStep;
+  slow?: boolean;
   /** The microphone hears a voice now (VoiceActivity). */
   hearing: boolean;
   /** The user muted the microphone. */
@@ -80,7 +110,7 @@ export function isMuteKey(e: { code: string; altKey: boolean; ctrlKey: boolean; 
 
 const muteButton = (muted: boolean) => ({ pressed: muted, label: `${muted ? "Unmute" : "Mute"} the microphone · ${MUTE_KEY.label}` });
 
-export const ENGINE_NAMES: Record<VoiceEngineId, string> = { realtime: "Realtime", standard: "Whisper" };
+export const ENGINE_NAMES: Record<VoiceEngineId, string> = { realtime: "Realtime", standard: "Nova-3" };
 
 /** A session's time on: "0:07", "12:34", "1:02:03". */
 export function elapsedText(ms: number): string {
@@ -103,14 +133,14 @@ const STATUS: Record<Exclude<VoiceBarState, "elsewhere">, string> = {
 };
 
 const HINTS: Record<Exclude<VoiceBarState, "elsewhere">, string> = {
-  starting: "Turning on the microphone",
+  starting: "Not listening yet: wait for the sound, then talk",
   listening: "Just talk · say “stop” to end",
   hearing: "Just talk · say “stop” to end",
   muted: "Microphone off · Unmute to talk",
   sending: "Say “cancel” or press Esc to take it back",
   working: "Still listening: talk to add to the task",
   speaking: "Esc stops it, or just talk",
-  reconnecting: "The voice connection dropped: connecting again",
+  reconnecting: "Not listening: the voice connection dropped and is being made again",
 };
 
 /** Muted, the hints that do not ask the user to talk. */
@@ -126,7 +156,7 @@ const METER_STATES = new Set<VoiceBarState>(["listening", "hearing", "working", 
 function stateOf(input: VoiceBarInput): VoiceBarState {
   if (input.elsewhere) return "elsewhere";
   const { phase, hearing } = input;
-  if (input.reconnecting && phase !== "starting") return "reconnecting";
+  if (input.reconnecting) return "reconnecting";
   if (input.muted && (phase === "listening" || phase === "working")) return "muted";
   // The voice counts while the microphone is what is live: listening, or listening while the agent works.
   if (hearing && (phase === "listening" || phase === "working")) return "hearing";
@@ -155,18 +185,20 @@ export function voiceBarView(input: VoiceBarInput): VoiceBarView {
       mute,
     };
   }
-  const status = STATUS[state];
+  const status = state === "starting" ? startingText(input.step ?? "microphone", input.slow) : STATUS[state];
   // "Hearing you" comes and goes with the voice: it is announced as listening.
   const announced = state === "hearing" ? (input.phase === "working" ? STATUS.working : STATUS.listening) : status;
   const hint = !muted ? HINTS[state] : state === "muted" && input.phase === "working" ? MUTED_WORKING_HINT : (MUTED_HINTS[state] ?? HINTS[state]);
+  // Starting, it is not on yet: "Voice starting · Inbox".
+  const lead = state === "starting" ? VOICE_STARTING : VOICE_ON;
   return {
     state,
-    label: voiceOnLabel(input.where),
+    label: state === "starting" ? voiceOnLabel(input.where).replace(VOICE_ON, VOICE_STARTING) : voiceOnLabel(input.where),
     status,
     time: state === "starting" ? null : time,
     hint: state === "starting" ? hint : `${engineName(input.engine)} · ${hint}`,
     meter: !muted && METER_STATES.has(state),
-    announce: `${VOICE_ON}: ${announced}`,
+    announce: `${lead}: ${announced}`,
     links: null,
     muted,
     mute,

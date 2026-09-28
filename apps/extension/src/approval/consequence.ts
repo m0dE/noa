@@ -8,10 +8,10 @@
  * "Delete post?") is "unsure": Jev judges it (consequence-jev.ts), and when
  * there is no Jev, or it is unsure too, the gate asks the user. Pure.
  */
-import type { ConsequenceKind, ElementInfo } from "@noa/shared";
+import type { ConsequenceKind, ElementInfo, JsDialog } from "@noa/shared";
 
 /** The browser methods the gate looks at: every one that changes something. */
-export type GateMethod = "click" | "type" | "paste" | "pressKey" | "upload" | "navigate" | "openTabs" | "closeTabs" | "switchXAccount";
+export type GateMethod = "click" | "type" | "paste" | "pressKey" | "upload" | "navigate" | "openTabs" | "closeTabs" | "switchXAccount" | "handleDialog";
 
 /** A field the agent typed into on this page, and what it typed. */
 export interface TypedField {
@@ -38,6 +38,9 @@ export interface GateAction {
   tabs?: string[];
   /** switchXAccount: the X account switched to. */
   handle?: string;
+  /** handleDialog: the dialog it answers (as the tab has it open now; absent when none is), and OK or Cancel. */
+  dialog?: JsDialog;
+  accept?: boolean;
   /** The page it happens on (the last page read); "" when not known. */
   page: { url: string; title: string };
   /** The X account that page is signed in as (its account switcher), when it shows one. */
@@ -221,7 +224,34 @@ export function classifyByRules(a: GateAction): Verdict {
       return classifyKey(a);
     case "click":
       return classifyClick(a);
+    case "handleDialog":
+      return classifyDialogAnswer(a);
   }
+}
+
+/** Why leaving a page is held: "Leave site?" is Chrome's only warning that its changes are not saved. */
+export const LEAVE_PAGE_WHY = "the page's unsaved changes are lost";
+
+/**
+ * Answering a page's dialog. Cancel changes nothing, nor does the OK of an alert. Leave on "Leave site?" throws away
+ * what the page did not save, which the rules cannot see (so it always asks, see LEAVE_PAGE_WHY). OK on a confirm
+ * or prompt does what the page asks, judged by the dialog's words like a button's.
+ */
+function classifyDialogAnswer(a: GateAction): Verdict {
+  const d = a.dialog;
+  if (!a.accept || !d) return { verdict: "benign", reason: "cancels: the page stays as it was" };
+  if (d.type === "alert") return { verdict: "benign", reason: "closes the page's message" };
+  if (d.type === "beforeunload") return { verdict: "unsure", reason: LEAVE_PAGE_WHY };
+  const said = words(d.message);
+  for (const kind of KIND_ORDER) {
+    const hit = hasPhrase(said, STRONG_WORDS[kind]);
+    if (hit) return { verdict: "consequential", kind: publicSend(kind, d.url), reason: `the dialog says "${hit}"` };
+  }
+  for (const kind of KIND_ORDER) {
+    const hit = hasPhrase(said, WEAK_WORDS[kind]);
+    if (hit) return { verdict: "unsure", kind: publicSend(kind, d.url), reason: `the dialog says "${hit}"` };
+  }
+  return { verdict: "unsure", reason: "does what the page asks (the rules cannot tell what)" };
 }
 
 function classifyUrls(urls: readonly string[]): Verdict {

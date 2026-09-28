@@ -66,6 +66,11 @@ export interface AgentTabOptions {
    * run (scheduled) then opens a tab of its own instead of reusing it.
    */
   isChatTab?(tabId: number): boolean | Promise<boolean>;
+  /**
+   * How the run's cleanup closes the tabs it opened (default: chrome.tabs.remove). The slots' never leaves a
+   * page's unsaved changes silently: a tab whose page asks "Leave site?" stays open (dialogs.ts).
+   */
+  removeTabs?(tabIds: number[]): Promise<unknown>;
 }
 
 /**
@@ -114,7 +119,7 @@ export class AgentTab {
     let next = 2;
     if (previous && previous.owner === opts.owner) [kept, next] = [left, previous.next];
     else if (previous?.owner) await parkTabs(previous.owner, left, previous.next);
-    else await closeTabsOf(left);
+    else await closeTabsOf(left, this.opts.removeTabs);
     if (opts.owner) {
       const parked = await takeChatTabs(opts.owner);
       kept = [...kept, ...parked.tabs];
@@ -278,9 +283,11 @@ export class AgentTab {
   /**
    * Closes tabs the agent opened. The main tab is never closed; an unknown id
    * or the main tab fails before anything is closed. If the current tab is
-   * closed, the main tab becomes current. Returns the closed short ids.
+   * closed, the main tab becomes current. remove: closes the tabs and answers
+   * which ones closed (a page may keep its tab open: "Leave site?"); the
+   * others stay the run's. Returns the closed short ids.
    */
-  async close(ids: string[]): Promise<string[]> {
+  async close(ids: string[], remove: (tabIds: number[]) => Promise<number[]> = removeAll): Promise<string[]> {
     const state = await this.state();
     if (!state) throw new Error("there are no agent tabs");
     const targets: RunTab[] = [];
@@ -290,11 +297,12 @@ export class AgentTab {
       if (!tab.opened) throw new Error(`${tab.id} is the tab the task started on; it is never closed`);
       targets.push(tab);
     }
-    await removeTabs(targets.map((t) => t.tabId));
-    const tabs = withoutOpened(state, (t) => targets.includes(t));
+    const gone = new Set(await remove(targets.map((t) => t.tabId)));
+    const closed = targets.filter((t) => gone.has(t.tabId));
+    const tabs = withoutOpened(state, (t) => closed.includes(t));
     const current = tabs.some((t) => t.tabId === state.current) ? state.current : tabs[0].tabId;
     await this.save({ ...state, tabs, current });
-    return targets.map((t) => t.id);
+    return closed.map((t) => t.id);
   }
 
   /**
@@ -308,7 +316,7 @@ export class AgentTab {
     if (!state) return 0;
     const [main, ...opened] = state.tabs;
     if (!opened.length) return 0;
-    const closed = await closeTabsOf(opened);
+    const closed = await closeTabsOf(opened, this.opts.removeTabs);
     await this.save({ ...state, tabs: [main], current: main.tabId, unreported: [] });
     return closed;
   }
@@ -401,18 +409,28 @@ export class AgentTab {
 /**
  * The chat is over (New Chat): closes the tabs its agent opened and forgets
  * them. keep: tabs to leave open (another run or chat uses them now).
+ * remove: how they are closed (see AgentTabOptions.removeTabs).
  * Returns how many were closed.
  */
-export async function closeChatTabs(owner: string, keep: (tabId: number) => Promise<boolean>): Promise<number> {
+export async function closeChatTabs(owner: string, keep: (tabId: number) => Promise<boolean>, remove?: (tabIds: number[]) => Promise<unknown>): Promise<number> {
   const { tabs } = await takeChatTabs(owner);
   const closing: RunTab[] = [];
   for (const t of tabs) if (!(await keep(t.tabId))) closing.push(t);
-  return closeTabsOf(closing);
+  return closeTabsOf(closing, remove);
 }
 
 /** Closes the tabs the agent opened with open_tabs, except ones the user took over (removeAgentTabs). */
-function closeTabsOf(tabs: RunTab[]): Promise<number> {
-  return removeAgentTabs(tabs.filter((t) => t.opened && !t.fromPage).map((t) => t.tabId));
+function closeTabsOf(tabs: RunTab[], remove?: (tabIds: number[]) => Promise<unknown>): Promise<number> {
+  return removeAgentTabs(
+    tabs.filter((t) => t.opened && !t.fromPage).map((t) => t.tabId),
+    remove,
+  );
+}
+
+/** chrome.tabs.remove on every tab: all count as closed. */
+async function removeAll(tabIds: number[]): Promise<number[]> {
+  await removeTabs(tabIds);
+  return tabIds;
 }
 
 const chatTabsKey = (owner: string) => `${CHAT_TABS_KEY}.${owner}`;

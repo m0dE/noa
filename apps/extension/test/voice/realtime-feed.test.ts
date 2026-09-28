@@ -1,38 +1,49 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@noa/shared";
-import { NARRATOR_MILESTONE_GAP_MS } from "../../src/voice/narrator-policy.js";
+import { PROGRESS } from "../../src/voice/milestones.js";
 import { NarratorFeed } from "../../src/voice/realtime-feed.js";
 
 const call = (name: string, args: unknown = {}): AgentEvent => ({ type: "tool_call", id: "1", name, args });
-const GAP = NARRATOR_MILESTONE_GAP_MS;
+const GAP = PROGRESS.stepGapMs;
 
 describe("NarratorFeed: the chat's events as short notes for the realtime narrator", () => {
   it("what only echoes the request is not passed on: the voice message, the user's words, the agent restating it, routine steps", () => {
     const feed = new NarratorFeed();
     feed.request(0);
+    feed.spoke(5);
     expect(feed.push({ type: "user_message", text: "Check my inbox.", voice: true }, 10)).toEqual([]);
     expect(feed.push({ type: "heard", text: "Check my inbox." }, 20)).toEqual([]);
     expect(feed.push({ type: "assistant_text", text: "I'll open your Gmail inbox and summarize the important emails." }, 30)).toEqual([]);
-    expect(feed.push(call("navigate", { url: "https://mail.google.com/" }), 40)).toEqual([]);
-    for (const [i, name] of ["read_page", "screenshot", "click", "act", "scroll", "type"].entries()) expect(feed.push(call(name), GAP * (i + 2))).toEqual([]);
+    for (const [i, name] of ["click", "act", "scroll", "switch_tab", "wait_for"].entries()) expect(feed.push(call(name), GAP * (i + 2))).toEqual([]);
   });
 
-  it("another site on a long task is said, with the agent's latest words as context, at most every NARRATOR_MILESTONE_GAP_MS", () => {
+  it("a new step is progress, said as it is (line), with the agent's latest words as context, PROGRESS.stepGapMs after anything said", () => {
     const feed = new NarratorFeed();
     feed.request(0);
-    feed.push(call("navigate", { url: "https://mail.google.com/" }), 100);
+    // The acknowledgement was said.
+    feed.spoke(100);
     feed.push({ type: "assistant_text", text: "This is the personal inbox; switching to the admin account." }, 200);
-    // Too soon after the acknowledgement.
-    expect(feed.push(call("navigate", { url: "https://accounts.google.com/" }), GAP - 1)).toEqual([]);
-    expect(feed.push(call("navigate", { url: "https://calendar.google.com/" }), GAP)).toEqual([
+    expect(feed.push(call("navigate", { url: "https://accounts.google.com/" }), 100 + GAP - 1)).toEqual([]);
+    expect(feed.push(call("navigate", { url: "https://calendar.google.com/" }), 100 + GAP)).toEqual([
       {
-        text: 'Your update (progress): Opening calendar.google.com. (You last wrote: "This is the personal inbox; switching to the admin account.") Say it in a few words, in the first person, only if it is news to the user.',
+        text: 'Your update (progress): Opening calendar.google.com. (You last wrote: "This is the personal inbox; switching to the admin account.")',
         speak: "milestone",
+        line: "Opening calendar.google.com",
       },
     ]);
-    // A site it was on is not news; the next new one waits for the gap.
-    expect(feed.push(call("navigate", { url: "https://mail.google.com/" }), GAP * 3)).toEqual([]);
-    expect(feed.push(call("navigate", { url: "https://drive.google.com/" }), GAP + 10)).toEqual([]);
+    // The same site again is not new; the next new one waits for the gap.
+    expect(feed.push(call("navigate", { url: "https://calendar.google.com/x" }), 100 + GAP * 3)).toEqual([]);
+    expect(feed.push(call("navigate", { url: "https://drive.google.com/" }), 100 + GAP + 10)).toEqual([]);
+  });
+
+  it("while the agent works, a long silence gets one 'Still …' line about what it does now (tick)", () => {
+    const feed = new NarratorFeed();
+    feed.request(0);
+    feed.spoke(100);
+    feed.push(call("read_page"), 1_000);
+    expect(feed.tick(100 + PROGRESS.stillWorkingMs - 1)).toEqual([]);
+    expect(feed.tick(100 + PROGRESS.stillWorkingMs)).toEqual([{ text: "Your update (progress): Still reading the page.", speak: "milestone", line: "Still reading the page" }]);
+    expect(feed.tick(100 + PROGRESS.stillWorkingMs * 3)).toEqual([]);
   });
 
   it("never passes on what the agent types or what pages say", () => {

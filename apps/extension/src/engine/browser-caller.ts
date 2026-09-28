@@ -37,6 +37,7 @@ const METHODS: { [M in BrowserMethod]: (t: Targets, params: BrowserMethods[M]["p
   "browser.listTabs": ({ driver }, p) => driver.listTabs(p),
   "browser.closeTabs": ({ driver }, p) => driver.closeTabs(p),
   "browser.waitFor": ({ driver }, p) => driver.waitFor(p),
+  "browser.handleDialog": ({ driver }, p) => driver.handleDialog(p),
   "vault.getCredential": ({ driver, vault }, p) => credentialForCurrentTab(driver, vault, p.site),
 };
 

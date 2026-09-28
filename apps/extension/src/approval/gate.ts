@@ -14,7 +14,8 @@
  * read (the element behind an index, the URL and title), and the fields typed
  * into since (the text a Post or Send click sends). It never reads the page
  * on its own: another read would renumber the elements the agent's indices
- * point at. An action that waits becomes an approval request (broker.ts); a
+ * point at. An answer to a page's dialog is judged by the dialog the tab has
+ * open (dialogOf), never by what the agent says it is. An action that waits becomes an approval request (broker.ts); a
  * refusal is an error whose text tells the agent not to retry
  * (approvalRefusalText).
  *
@@ -31,6 +32,7 @@ import {
   approvalPauseReason,
   approvalRefusalText,
   CONSEQUENCE_TEXT,
+  dialogText,
   isApprovalGated,
   isXUrl,
   PERMISSION_TITLE,
@@ -43,6 +45,7 @@ import {
   type ConsequenceKind,
   type EffectiveLevel,
   type ElementInfo,
+  type JsDialog,
   type PageSnapshot,
   type TraceEvent,
   type TraceValue,
@@ -50,7 +53,7 @@ import {
 import type { BrowserCaller } from "@noa/core";
 import { normalizeId } from "../agent-tab.js";
 import type { ApprovalRequestOptions } from "./broker.js";
-import { hostOf, type GateAction, type GateMethod, type TypedField } from "./consequence.js";
+import { classifyByRules, hostOf, type GateAction, type GateMethod, type TypedField } from "./consequence.js";
 import type { SystemOneLike } from "./jev-judge.js";
 import { judgeAction, judgeWithinTask } from "./judge.js";
 
@@ -109,6 +112,7 @@ export const GATED_METHODS: Record<ApprovalGatedMethod, GateMethod> = {
   "browser.openTabs": "openTabs",
   "browser.closeTabs": "closeTabs",
   "browser.clickXAccountEntry": "switchXAccount",
+  "browser.handleDialog": "handleDialog",
 };
 
 /** Typed fields remembered per page (a long form keeps its last ones). */
@@ -139,6 +143,8 @@ export class ApprovalGate {
     private readonly deps: GateDeps,
     /** Called when the gate starts waiting for the user; returns what ends it (the turn's clock leaves the wait out). */
     private readonly waiting?: () => () => void,
+    /** The dialog open in the current tab, or in `tab` (a short id): what an answer to it is judged by. */
+    private readonly dialogOf?: (tab?: string) => Promise<JsDialog | null>,
   ) {}
 
   readonly browser: BrowserCaller = {
@@ -180,6 +186,10 @@ export class ApprovalGate {
   private async check(sessionId: string, method: GateMethod, params: Record<string, unknown>): Promise<GateContext> {
     const ctx = await this.deps.context(sessionId);
     const action = this.actionOf(method, params);
+    if (method === "handleDialog") {
+      const dialog = await this.dialogOf?.(typeof params.tab === "string" ? params.tab : undefined);
+      if (dialog) action.dialog = dialog;
+    }
     if (ctx.stopped?.()) throw new Error(stoppedText(describeAction(action)));
     if (ctx.level === "full" || this.allowAll) return ctx;
     const ask = await this.why(sessionId, ctx, action);
@@ -235,13 +245,16 @@ export class ApprovalGate {
 
   /** Why this action waits at this level; null: it runs. How a consequential action was judged goes to the trace (approval.judge). */
   private async why(sessionId: string, ctx: GateContext, action: GateAction): Promise<{ why: string; kind?: ConsequenceKind } | null> {
+    // Cancel on a dialog, or OK on an alert, changes nothing: it never waits, even when every action asks.
+    if (action.method === "handleDialog" && classifyByRules(action).verdict === "benign") return null;
     if (ctx.level === "ask_all") return { why: ASK_ALL_WHY };
     const jev = (await this.deps.jev?.(sessionId)) ?? null;
     const pageText = this.page?.text ?? "";
     const started = this.deps.now?.() ?? Date.now();
     const j = await judgeAction(action, { jev, pageText });
     if (!j.consequential) return null;
-    const what = j.kind ? CONSEQUENCE_TEXT[j.kind] : "may publish, send, pay or delete (it could not be told apart)";
+    // A dialog's answer says what it does itself ("the page's unsaved changes are lost"), not what a button might.
+    const what = j.kind ? CONSEQUENCE_TEXT[j.kind] : action.method === "handleDialog" ? j.reason : "may publish, send, pay or delete (it could not be told apart)";
     const judged: Record<string, TraceValue> = { action: describeAction(action), level: ctx.level, kind: j.kind ?? null, by: j.by, reason: j.reason };
     if (ctx.agentAuthored) judged.agentAuthored = true;
     // A job the agent wrote waits because of who wrote it, whatever it asks for: the card says so, and how to let it run.
@@ -276,6 +289,7 @@ export class ApprovalGate {
     if (Array.isArray(p.paths)) action.paths = p.paths.filter((u): u is string => typeof u === "string");
     if (Array.isArray(p.tabs)) action.tabs = p.tabs.filter((u): u is string => typeof u === "string");
     if (typeof p.handle === "string") action.handle = p.handle;
+    if (typeof p.accept === "boolean") action.accept = p.accept;
     return action;
   }
 
@@ -304,6 +318,15 @@ export class ApprovalGate {
         this.page = null;
         this.typed = [];
         return;
+      case "browser.handleDialog": {
+        // Leave: the page read is gone, and so is what was typed on it.
+        const r = result as BrowserMethods["browser.handleDialog"]["result"];
+        if (r.accepted && r.dialog.type === "beforeunload") {
+          this.page = null;
+          this.typed = [];
+        }
+        return;
+      }
       case "browser.switchTab":
         this.current = (result as AgentTabInfo).id;
         this.page = null;
@@ -383,6 +406,30 @@ export function describeAction(a: GateAction): string {
       return `Close tab${(a.tabs?.length ?? 0) === 1 ? "" : "s"} ${(a.tabs ?? []).join(", ")}`;
     case "switchXAccount":
       return `Switch X to ${a.handle ?? "another account"}`;
+    case "handleDialog":
+      return describeDialogAnswer(a);
+  }
+}
+
+/** A dialog's text on the card, in the page's own quotes: `Confirm “Delete this item?”`. */
+const dialogQuote = (d: JsDialog) => {
+  const text = dialogText(d);
+  return `“${text.length > 80 ? `${text.slice(0, 79)}…` : text}”`;
+};
+
+/** An answer to a page's dialog in plain words: "Leave the page", `Confirm “Delete this item?”`. */
+function describeDialogAnswer(a: GateAction): string {
+  const d = a.dialog;
+  if (!d) return `${a.accept ? "Accept" : "Cancel"} the page's dialog`;
+  switch (d.type) {
+    case "beforeunload":
+      return a.accept ? "Leave the page" : "Stay on the page";
+    case "alert":
+      return `Close ${dialogQuote(d)}`;
+    case "confirm":
+      return `${a.accept ? "Confirm" : "Cancel"} ${dialogQuote(d)}`;
+    case "prompt":
+      return a.accept ? `Answer ${dialogQuote(d)}` : `Cancel ${dialogQuote(d)}`;
   }
 }
 
@@ -395,8 +442,9 @@ function shortUrl(url: string): string {
   }
 }
 
-/** The text the action posts or sends: what was typed on the page before it (never a password). */
+/** The text the action posts or sends: what was typed on the page before it (never a password), or a prompt's answer. */
 function actionText(a: GateAction): string | undefined {
+  if (a.method === "handleDialog") return a.dialog?.type === "prompt" && a.accept ? a.text : undefined;
   if (a.method === "type" || a.method === "paste") return a.element?.type === "password" ? undefined : a.text;
   if (a.method !== "click" && a.method !== "pressKey") return undefined;
   const fields = a.typed.filter((t) => t.element.type !== "password" && t.text.trim());
@@ -407,7 +455,7 @@ function actionText(a: GateAction): string | undefined {
 
 /** The approval request for an action that waits. */
 export function approvalAsk(a: GateAction, why: string, kind?: ConsequenceKind): Omit<ApprovalRequest, "id" | "expiresAt"> {
-  const where = a.method === "navigate" || a.method === "openTabs" ? (a.urls?.[0] ?? "") : a.page.url;
+  const where = a.method === "navigate" || a.method === "openTabs" ? (a.urls?.[0] ?? "") : a.method === "handleDialog" ? (a.dialog?.url ?? a.page.url) : a.page.url;
   const text = actionText(a);
   return {
     // What publishes on X names the account it publishes as: `Click "Post" as @name`.

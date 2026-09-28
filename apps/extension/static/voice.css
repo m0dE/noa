@@ -31,8 +31,10 @@
 .voice-bar[data-state="elsewhere"] {
   background: repeating-linear-gradient(135deg, transparent 0 9px, rgb(0 0 0 / 0.1) 9px 18px), var(--live);
 }
-/* Muted: the same strip in grey; everything in it follows the live colour, so it all turns with it. */
-.voice-bar[data-muted] { --live: var(--mic-off); --live-deep: var(--mic-off-deep); }
+/* Muted: the same strip in grey; everything in it follows the live colour, so it all turns with it. Not listening yet
+   (starting, reconnecting): grey too, so the live colour always means "it hears you now". */
+.voice-bar[data-muted],
+.voice-bar:is([data-state="starting"], [data-state="reconnecting"]) { --live: var(--mic-off); --live-deep: var(--mic-off-deep); }
 
 /* The recording light: a dot, breathing while the microphone is live. */
 .vb-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--on-live); }
@@ -74,6 +76,17 @@
 /* Muted: the mic and the orb in grey, the mic still (the session is on, the microphone is not). */
 .voice-mic[data-muted], .voice-orb[data-muted] { --live: var(--mic-off); }
 .voice-mic[data-state="handsfree"][data-muted]::before { animation: none; opacity: 0; }
+/* Not listening yet (starting, reconnecting): the Voice button an outline in grey that pulses, the orb grey and
+   pulsing slowly; both turn live the moment it listens (with the listen-on sound). */
+.now-bar .voice-mic[data-state="handsfree"][data-waiting],
+.now-bar .voice-mic[data-state="handsfree"][data-waiting]:hover { color: var(--text); background: var(--surface); border-color: var(--mic-off); }
+.voice-mic[data-waiting] { --live: var(--mic-off); }
+.voice-mic[data-state="handsfree"][data-waiting]::before { animation-duration: 1.2s; }
+.voice-mic[data-state="handsfree"][data-waiting]::after { opacity: 0; }
+.voice-orb[data-state="opening"] { --live: var(--mic-off); }
+.voice-orb[data-state="opening"] .voice-orb-core { opacity: 1; animation: voice-wait 1.4s ease-in-out infinite; }
+.voice-orb[data-state="opening"] .voice-orb-halo { transform: scale(0.85); animation-duration: 1.4s; }
+@keyframes voice-wait { 50% { opacity: 0.45; transform: scale(0.9); } }
 /* The muted orb rests (the core still breathes while a line is said: the narrator is heard). */
 .voice-orb[data-muted] .voice-orb-halo { animation: none; opacity: 0.7; }
 
@@ -106,7 +119,7 @@ body.voice-live .now textarea::placeholder { color: color-mix(in srgb, var(--liv
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .voice-bar .vb-dot, .voice-mic::before, body.voice-live .now { animation: none !important; }
+  .voice-bar .vb-dot, .voice-mic::before, body.voice-live .now, .voice-orb[data-state="opening"] .voice-orb-core { animation: none !important; }
   /* Still indicators: a steady ring on the mic, a fixed meter. */
   .voice-mic[data-state="handsfree"]:not([data-muted])::before { opacity: 0.5; transform: scale(1.18); }
   .vb-meter i { transition: none; height: calc(4px + var(--k, 1) * 5px); }
