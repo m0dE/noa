@@ -1,6 +1,6 @@
 /** DOM for one conversation log entry (a job's conversation and its earlier runs) (see event-format.ts for the pure view models). */
 import { chipHint, plural, TASK_END_TOOLS, type SessionInfo, type TodoChange } from "@noa/shared";
-import { busy, h } from "../ui/dom.js";
+import { busy, copyText, h } from "../ui/dom.js";
 import { renderErrorHelp } from "./error-view.js";
 import type { EventView, OpeningView, ScheduledView } from "./event-format.js";
 import { undoneText, type MemoryNoteView } from "./memory-note.js";
@@ -84,6 +84,7 @@ export function renderEvent(v: EventView, onContinue?: () => void, scheduled?: S
         v.error ? renderErrorHelp(v.error) : null,
         // A long text is an answer: it reads as a message, and the outcome line under it stays short.
         v.long ? renderText(v.text) : null,
+        v.draft ? renderDraft(v.draft) : null,
         h(
           "div.ev-outcome",
           null,
@@ -240,6 +241,23 @@ function renderWordForWord(heard: readonly string[]): HTMLElement {
 /** The mic in a message the user spoke (read out as "Voice"). */
 function voiceMark(): HTMLElement {
   return h("span.ev-voice", { "aria-label": "Voice:" }, svgIcon(12, MIC_ICON));
+}
+
+/** A draft the agent wrote and did not send: its whole text, as it would go out, with Copy. */
+export function renderDraft(text: string): HTMLElement {
+  const copy = h("button.small.ghost", { type: "button", title: "Copy the draft's text" }, "Copy");
+  copy.addEventListener("click", () => {
+    void copyText(text).then((ok) => {
+      copy.textContent = ok ? "Copied" : "Couldn't copy";
+      setTimeout(() => (copy.textContent = "Copy"), 2000);
+    });
+  });
+  return h(
+    "div.ev-draft",
+    null,
+    h("div.ev-draft-head", null, h("span.ev-draft-label", null, "Draft · not sent"), copy),
+    h("div.ev-draft-text", null, text),
+  );
 }
 
 /** Claude's text as Markdown. `id`: the streamed block it is (the chat updates it in place). */

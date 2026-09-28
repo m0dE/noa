@@ -36,6 +36,8 @@ export type EventView =
       retry?: true;
       /** The failure's card has a fix button: that is the main action, not Continue. */
       fixable?: true;
+      /** What the agent wrote for the user to review, not sent: shown whole, with Copy. */
+      draft?: string;
     }
   /** An error, in plain words with the buttons that fix it (error-help.ts). */
   | { kind: "error"; help: ErrorHelp }
@@ -127,6 +129,7 @@ function describeEnd(ev: Extract<AgentEvent, { type: "task_end" }>, turn: TurnCo
     ...(error ? { error } : {}),
     ...((shown ?? error)?.retry ? { retry: true as const } : {}),
     ...((shown ?? error)?.fixes.length ? { fixable: true as const } : {}),
+    ...(ev.draft?.trim() ? { draft: ev.draft.trim() } : {}),
   };
 }
 

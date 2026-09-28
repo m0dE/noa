@@ -91,6 +91,20 @@ const spokenArg = z
     `One or two short sentences, read aloud to a user who talks to Noa hands-free, at most ${MAX_SPOKEN_CHARS} characters: the result, or the question they must answer. Natural speech, as you would say it to them, in the first person as Noa ("I…"), never "the agent": no Markdown, lists, URLs or IDs (e.g. "Done. You have four unread emails, and Jordan needs your signature by Friday.").`,
   );
 
+/** Longest draft (task_complete / task_pause `draft`): an email or post the user reviews before it goes anywhere. */
+export const MAX_DRAFT_CHARS = 8000;
+
+/** task_complete / task_pause: text the agent wrote for the user to review, not sent; the chat shows it with Copy. */
+const draftArg = z
+  .string()
+  .trim()
+  .min(1)
+  .max(MAX_DRAFT_CHARS)
+  .optional()
+  .describe(
+    `When you wrote something for the user that was not sent or published (an email, message, reply or post to review, a draft they asked for): its full text exactly as it would go out, an email's "Subject: ..." line first, at most ${MAX_DRAFT_CHARS} characters. The chat shows it as a draft with a Copy button. Omit when nothing was drafted, or when it was sent.`,
+  );
+
 export const ToolArgs = {
   navigate: z.object({ url: z.string().describe("Absolute URL to open") }),
   read_page: z.object({
@@ -159,6 +173,7 @@ export const ToolArgs = {
     url: z.string().optional().describe("URL of the created post or result, if any"),
     suggestion: suggestionArg,
     spoken: spokenArg,
+    draft: draftArg,
     memory_note: z
       .string()
       .trim()
@@ -178,7 +193,7 @@ export const ToolArgs = {
       ),
   }),
   task_fail: z.object({ reason: z.string(), suggestion: suggestionArg, spoken: spokenArg }),
-  task_pause: z.object({ reason: z.string().describe("Why a human is needed"), suggestion: suggestionArg, spoken: spokenArg }),
+  task_pause: z.object({ reason: z.string().describe("Why a human is needed"), suggestion: suggestionArg, spoken: spokenArg, draft: draftArg }),
 } as const;
 
 export type ToolName = keyof typeof ToolArgs;

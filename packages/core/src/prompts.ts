@@ -151,7 +151,7 @@ export function buildSystemPrompt(opts: { tools: ToolName[]; jev: boolean; follo
       ? "Attach media with upload, using the exact absolute file paths listed in the task and the upload index read_page shows for the file input."
       : "Attach media with upload, using the exact absolute file paths listed in the task, on an input of type=file from read_page.",
     "Do only what the task asks. Do not like, follow, reply or post anything else.",
-    `Finish by calling exactly one of task_complete, task_fail or task_pause, then stop. For questions and information tasks, first write the answer as message text, then call task_complete with a one-line summary. When you create a post, include its URL in task_complete. ${POST_URL_RULE}`,
+    `Finish by calling exactly one of task_complete, task_fail or task_pause, then stop. For questions and information tasks, first write the answer as message text, then call task_complete with a one-line summary. When you write something for the user to review or send themselves and do not send it (an email, message, reply or post; "draft it and let me review"), give its full text in the call's \`draft\` (the chat shows it with a Copy button); never say it is in the chat, in their drafts or anywhere else unless it is there. When you create a post, include its URL in task_complete. ${POST_URL_RULE}`,
     SUGGESTION_RULE,
     SPOKEN_RULE,
   );

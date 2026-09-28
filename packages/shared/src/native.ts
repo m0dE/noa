@@ -93,6 +93,8 @@ export interface TaskRunResult {
   suggestion?: string;
   /** The outcome in one or two spoken sentences (task_* `spoken`), read aloud in hands-free voice. */
   spoken?: string;
+  /** Text the agent wrote for the user to review, not sent (task_complete / task_pause `draft`), shown in the chat with Copy. */
+  draft?: string;
   /** A repeating task's note for its next run (task_complete `memory_note`), kept in memory as task history. */
   memoryNote?: string;
   /** What a repeating task's run published or sent (task_complete `output`), kept in its task history. */

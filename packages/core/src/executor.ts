@@ -81,14 +81,15 @@ export function picksEvent(picks: ElementPicks): AgentEvent | null {
   return { type: "status", text: picksText(picks), picks };
 }
 
-/** A task_* result with the agent's follow-up suggestion and spoken line, when it gave them. */
+/** A task_* result with the agent's follow-up suggestion, spoken line and draft, when it gave them. */
 function withExtras(
   r: TaskRunResult,
-  extras: { suggestion?: string | undefined; spoken?: string | undefined; memory_note?: string | undefined; output?: string | undefined },
+  extras: { suggestion?: string | undefined; spoken?: string | undefined; draft?: string | undefined; memory_note?: string | undefined; output?: string | undefined },
 ): TaskRunResult {
   const out = { ...r };
   if (extras.suggestion) out.suggestion = extras.suggestion;
   if (extras.spoken) out.spoken = extras.spoken;
+  if (extras.draft) out.draft = extras.draft;
   if (extras.memory_note) out.memoryNote = extras.memory_note;
   if (extras.output) out.output = extras.output;
   return out;

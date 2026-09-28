@@ -73,9 +73,10 @@ export type AgentEvent =
   | { type: "user_message"; text: string; voice?: true; heard?: string[]; attachments?: AttachmentRef[] }
   /**
    * suggestion: the agent's proposed next request (TaskRunResult.suggestion);
-   * spoken: the outcome as one or two sentences hands-free voice reads aloud (TaskRunResult.spoken).
+   * spoken: the outcome as one or two sentences hands-free voice reads aloud (TaskRunResult.spoken);
+   * draft: what the agent wrote for the user to review, not sent (TaskRunResult.draft).
    */
-  | { type: "task_end"; outcome: TaskOutcome; summary?: string; url?: string; reason?: string; suggestion?: string; spoken?: string }
+  | { type: "task_end"; outcome: TaskOutcome; summary?: string; url?: string; reason?: string; suggestion?: string; spoken?: string; draft?: string }
   | { type: "error"; text: string }
   /**
    * A line hands-free voice said aloud in this conversation (the plan, a

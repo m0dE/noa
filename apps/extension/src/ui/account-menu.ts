@@ -2,7 +2,8 @@
  * The account avatar and its menu, shared by the side panel's header and the
  * options page's header: the user's picture (or initial; a person icon when
  * signed out), and a menu with the email and the plan and credit, then the
- * page's own items, each shown signed in, signed out or always. Any item
+ * page's own items, each shown signed in, signed out or always. Signed out, the
+ * icon carries a "Login" label. Any item
  * closes the menu. Styles: ui.css (.acct).
  */
 import { formatCents, OUT_OF_CREDIT, PLAN_FEATURE_TEXT, planName } from "@noa/shared";
@@ -42,6 +43,7 @@ export function createAccountMenu(opts: { id: string; items: AccountMenuItem[]; 
   const initial = h("span.acct-initial", { "aria-hidden": "true" });
   const summary = h("summary", { id: `${opts.id}-btn`, "aria-label": "Account and settings" }, img, initial);
   summary.insertAdjacentHTML("beforeend", PERSON_ICON);
+  summary.append(h("span.acct-label", null, "Login"));
   const email = h("div.acct-email");
   const plan = h("div.acct-plan");
   const buttons = new Map<string, HTMLButtonElement>();

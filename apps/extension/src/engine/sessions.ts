@@ -5,7 +5,7 @@
  * trace: `trace` events go there instead of the event stream, every other
  * event is counted there, and each turn's start is marked (create, reopen).
  */
-import { MAX_ASSISTANT_TEXT, MAX_EVENT_TEXT, clipEventText, type AgentEvent, type SessionInfo, type StampedAgentEvent, type TitleBy, type TraceEvent } from "@noa/shared";
+import { MAX_ASSISTANT_TEXT, MAX_DRAFT_CHARS, MAX_EVENT_TEXT, clipEventText, type AgentEvent, type SessionInfo, type StampedAgentEvent, type TitleBy, type TraceEvent } from "@noa/shared";
 import { Listeners } from "../listeners.js";
 import type { KvDb, KvStore } from "./kv.js";
 import type { TraceBook } from "../trace/trace-book.js";
@@ -31,8 +31,10 @@ function clipEvent(e: AgentEvent): AgentEvent {
   switch (e.type) {
     case "assistant_text":
       return { ...e, text: clipEventText(e.text, MAX_ASSISTANT_TEXT) };
-    case "task_end":
-      return e.summary && e.summary.length > MAX_ASSISTANT_TEXT ? { ...e, summary: clipEventText(e.summary, MAX_ASSISTANT_TEXT) } : e;
+    case "task_end": {
+      const end = e.summary && e.summary.length > MAX_ASSISTANT_TEXT ? { ...e, summary: clipEventText(e.summary, MAX_ASSISTANT_TEXT) } : e;
+      return end.draft && end.draft.length > MAX_DRAFT_CHARS ? { ...end, draft: clipEventText(end.draft, MAX_DRAFT_CHARS) } : end;
+    }
     case "user_message":
       return { ...e, text: clipEventText(e.text), ...(e.heard ? { heard: e.heard.map((w) => clipEventText(w)) } : {}) };
     case "status":

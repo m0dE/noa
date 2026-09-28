@@ -56,6 +56,12 @@ describe("describeEvent", () => {
     expect(n).toMatchObject({ label: "Jev unsure (0.40) · Claude decides", executed: false });
     if (n.kind === "jev") expect(n.title).toContain("left to Claude");
   });
+  it("task_end carries the agent's draft, whole", () => {
+    const draft = "Subject: Refund request\n\nHi,\n\nCould you look at my renewal once more?";
+    expect(describeEvent({ type: "task_end", outcome: "done", summary: "Drafted the refund email", draft: `  ${draft}\n` })).toMatchObject({ kind: "end", text: "Drafted the refund email", draft });
+    expect(describeEvent({ type: "task_end", outcome: "done", summary: "Posted" })).not.toHaveProperty("draft");
+  });
+
   it("task_end carries outcome, text and url", () => {
     expect(describeEvent({ type: "task_end", outcome: "done", summary: "Posted", url: "https://x.com/a/status/1" })).toEqual({
       kind: "end",

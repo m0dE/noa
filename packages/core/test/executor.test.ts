@@ -206,6 +206,17 @@ describe("createToolExecutor: plain tools", () => {
     ]);
   });
 
+  it("task_complete and task_pause pass a draft on (the chat shows it with Copy)", async () => {
+    const { exec, ended } = setup(new FakeX());
+    const draft = "Subject: Refund request\n\nHi, could you look at my renewal once more?";
+    await exec.call("task_complete", { summary: "Drafted the refund email", draft });
+    await exec.call("task_pause", { reason: "Send it?", draft });
+    expect(ended).toEqual([
+      { outcome: "done", summary: "Drafted the refund email", draft },
+      { outcome: "paused", reason: "Send it?", draft },
+    ]);
+  });
+
   it("task_* tools without onTaskEnd answer that there is no task to end", async () => {
     const { exec } = setup(new FakeX(), { onTaskEnd: null });
     const r = await exec.call("task_complete", { summary: "x" });
