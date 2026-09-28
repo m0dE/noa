@@ -3,7 +3,7 @@
  * IndexedDB. Works with no cloud at all. The rules (input checks, repeats,
  * how a run changes a task) are in local-task-rules.ts.
  */
-import { isDueNow, isOnHold, MAX_MEDIA_PER_TASK, PAUSED_BY_USER, resumedNotBefore, settleSchedule, type RepeatSchedule, type TaskRunResult } from "@noa/shared";
+import { isDueNow, isFailureHold, isOnHold, MAX_MEDIA_PER_TASK, PAUSED_BY_USER, resumedNotBefore, settleSchedule, type RepeatSchedule, type TaskRunResult } from "@noa/shared";
 import { base64ToBytes } from "../base64.js";
 import { Listeners } from "../listeners.js";
 import type { LocalMediaInfo, TaskPatch, UiMediaUpload } from "../ui-protocol.js";
@@ -230,6 +230,17 @@ export class LocalStore {
       .filter((t) => (t.seriesId ?? t.id) === seriesId && (t.status === "pending" || (t.status === "paused" && !isOnHold(t))))
       .sort((a, b) => byCreated(b, a))[0];
     return waiting ? this.pause(waiting.id, reason) : null;
+  }
+
+  /**
+   * Resumes the series' rows that were paused after its runs kept failing (FAILURE_HOLD_PREFIX), as resume() does:
+   * each waits for its time again, and no row is added. A row the user paused, one paused for a while (a login, an
+   * approval) and `except` stay as they are. Returns the ids resumed.
+   */
+  async releaseHold(seriesId: string, except?: string): Promise<string[]> {
+    const held = (await this.read()).filter((t) => (t.seriesId ?? t.id) === seriesId && t.id !== except && isFailureHold(t));
+    for (const t of held) await this.resume(t.id);
+    return held.map((t) => t.id);
   }
 
   /** Pending tasks whose notBefore and retryAfter have passed (isDueNow), oldest first. */

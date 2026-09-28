@@ -94,6 +94,26 @@ describe("AccountTodo (the signed-in TODO list)", () => {
     ]);
   });
 
+  it("releaseHold resumes the series' rows held after failures only: not ones the user paused, paused for a while, or `except`", async () => {
+    const t = setup();
+    const HOLD = "Paused after 3 failed runs in a row. Last: Task time limit of 10 minutes reached";
+    t.api.on("GET /v1/tasks", {
+      body: {
+        tasks: [
+          task("next", { status: "paused", pauseReason: HOLD, seriesId: "s1" }),
+          task("mine", { status: "paused", pauseReason: HOLD, seriesId: "s1" }),
+          task("user", { status: "paused", pauseReason: "Paused by you", seriesId: "s1" }),
+          task("login", { status: "paused", pauseReason: "Please sign in", retryAfter: "2026-09-28T21:00:00.000Z", seriesId: "s1" }),
+          task("old", { status: "failed", seriesId: "s1" }),
+        ],
+        nextCursor: null,
+      },
+    });
+    t.api.on("POST /v1/tasks/next/resume", { body: task("next", { seriesId: "s1" }) });
+    expect(await t.todo.releaseHold("s1", "mine")).toEqual(["next"]);
+    expect(t.api.calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /v1/tasks?limit=200&series=s1", "POST /v1/tasks/next/resume"]);
+  });
+
   it("seriesPage lists one series a page at a time (the cursor of the page before), rows in the row shape", async () => {
     const t = setup();
     t.api.on("GET /v1/tasks", (c) =>

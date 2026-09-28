@@ -39,6 +39,11 @@ export function isOnHold(task: { status: TaskStatus; retryAfter?: string | null;
   return reason === PAUSED_BY_USER || reason.startsWith(FAILURE_HOLD_PREFIX);
 }
 
+/** The task is on hold because its job's runs kept failing (failureHoldReason), not because the user paused it. */
+export function isFailureHold(task: { status: TaskStatus; retryAfter?: string | null; pauseReason?: string | null }): boolean {
+  return isOnHold(task) && (task.pauseReason ?? "").startsWith(FAILURE_HOLD_PREFIX);
+}
+
 /** When a pending task becomes due (the later of notBefore and retryAfter). */
 export function taskNextTime(task: Timing): string | null {
   if (task.status !== "pending") return null;

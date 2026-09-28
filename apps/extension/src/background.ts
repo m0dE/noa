@@ -380,6 +380,11 @@ const runner = new Runner({
     if (!todo) throw new Error("not signed in to the account these tasks belong to");
     return !!(await todo.holdSeries(seriesId, reason));
   },
+  releaseHold: async (_source, seriesId, except) => {
+    const todo = await accountTodo();
+    if (!todo) throw new Error("not signed in to the account these tasks belong to");
+    return todo.releaseHold(seriesId, except);
+  },
   localStore,
   sessions,
   pageOf,

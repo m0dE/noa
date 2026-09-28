@@ -7,13 +7,13 @@
  * These run the real post check (core verifyXPost) on the page as the extension read it (x-status-page.ts).
  */
 import { describe, expect, it } from "vitest";
-import { verifyXPost, type BrowserCaller } from "@noa/core";
+import { classifyFailure, verifyXPost, type BrowserCaller } from "@noa/core";
 import type { PageSnapshot } from "@noa/shared";
 import { claimFixture, taskFixture } from "../fixtures.js";
 import { accountRow } from "../../src/account/todo-source.js";
 import { buildJobs } from "../../src/sidepanel/jobs.js";
 import { Runner } from "../../src/engine/runner.js";
-import { harness, runAll, setupRunnerTests, type Harness } from "./harness.js";
+import { env, harness, runAll, setupRunnerTests, type Harness } from "./harness.js";
 import { ARRR_POST_TITLE, ARRR_POST_URL, ARRR_TYPED, xStatusShell } from "../../../../packages/core/test/x-status-page.js";
 
 setupRunnerTests();
@@ -39,11 +39,16 @@ function xPostPage(h: Harness, pages: () => PageSnapshot[]): void {
 /** A signed-in harness running the real post check, with the account job two failures in (the third pauses it). */
 async function arrrJob() {
   const h = harness({}, { signedIn: true });
-  h.deps.core = { ...h.deps.core, verifyXPost };
+  h.deps.core = { verifyXPost, classifyFailure };
   const held: string[] = [];
   h.deps.holdSeries = async (_source, _series, reason) => {
     held.push(reason);
     return true;
+  };
+  const released: unknown[][] = [];
+  h.deps.releaseHold = async (...args) => {
+    released.push(args);
+    return [];
   };
   const claimed: (string | undefined)[] = [];
   const claim = h.accountQueue.claim;
@@ -56,7 +61,7 @@ async function arrrJob() {
     return { outcome: "done", summary: "Posted a free-tier/mesh post as @arrrfun", url: ARRR_POST_URL };
   };
   h.claims.push(claimFixture(TASK, { instructions: INSTRUCTIONS, account: "@arrrfun", seriesId: SERIES }));
-  return { h, held, claimed };
+  return { h, held, claimed, released };
 }
 
 describe("the X post check on the run of an account job (the user's trace)", () => {
@@ -181,5 +186,104 @@ describe("the X post check on the run of an account job (the user's trace)", () 
     await h.runner.idle();
     expect((await h.runner.state()).failures).toEqual({ [SERIES]: 3 });
     expect(h.results.map((r) => r.body.outcome)).toEqual(["retry"]);
+  });
+});
+
+/**
+ * The other shape a job's hold takes: a run failed for good (in production, the job's 01:30 occurrence
+ * 01M3JH5MZYDCH567S1H3378ZWC, "Task time limit of 10 minutes reached"), its repeat was spawned, and the third failure
+ * in a row paused that repeat. The user goes on in the failed run's conversation and the post gets verified.
+ */
+describe("a verified follow-up resumes the job's repeat that was paused after its failures", () => {
+  const FAILED = "01M3JH5MZYDCH567S1H3378ZWC";
+  const timeLimit = { outcome: "failed" as const, reason: "Task time limit of 10 minutes reached" };
+
+  it("account job: the failed run is reported done, then the series' failure hold is released (not the run's own row)", async () => {
+    const { h, held, claimed, released } = await arrrJob();
+    h.claims.splice(0, h.claims.length, claimFixture(FAILED, { instructions: INSTRUCTIONS, account: "@arrrfun", seriesId: SERIES }));
+    h.brain.script = (o) => {
+      o.onEvent({ type: "tool_call", id: "t1", name: "act", args: { steps: [{ goal: "type the post", text: ARRR_TYPED }] } });
+      return timeLimit;
+    };
+    xPostPage(h, () => [xStatusShell(ARRR_POST_TITLE)]);
+    await runAll(h);
+    expect(held).toEqual(["Paused after 3 failed runs in a row. Last: Task time limit of 10 minutes reached"]);
+    h.brain.continueScript = () => ({ outcome: "done", summary: "already posted by an earlier attempt", url: ARRR_POST_URL });
+    h.claims.push(claimFixture(FAILED, { instructions: INSTRUCTIONS, account: "@arrrfun", seriesId: SERIES, attempts: 2 }));
+    await h.runner.message((await h.sessions.list())[0]!.sessionId, "try");
+    await h.runner.idle();
+    expect(claimed).toEqual([undefined, undefined, FAILED]);
+    expect(h.results.map((r) => [r.taskId, r.body.outcome])).toEqual([
+      [FAILED, "failed"],
+      [FAILED, "done"],
+    ]);
+    expect(released).toEqual([["cloud", SERIES, FAILED]]);
+  });
+
+  it("account job: an unrelated follow-up that ends done, or a post not verified, releases nothing", async () => {
+    const { h, released } = await arrrJob();
+    h.brain.script = () => timeLimit;
+    xPostPage(h, () => [xStatusShell("X")]);
+    await runAll(h);
+    const sessionId = (await h.sessions.list())[0]!.sessionId;
+    h.brain.continueScript = () => ({ outcome: "done", summary: "It is sunny in Seattle" });
+    await h.runner.message(sessionId, "what's the weather?");
+    await h.runner.idle();
+    h.brain.continueScript = () => ({ outcome: "done", summary: "posted", url: ARRR_POST_URL });
+    await h.runner.message(sessionId, "try");
+    await h.runner.idle();
+    expect(released).toEqual([]);
+  });
+
+  it("this browser's job: the repeat held after 3 failed runs waits for its time again; no row is added", async () => {
+    const h = harness();
+    h.deps.core = { verifyXPost, classifyFailure };
+    h.runner = new Runner(h.deps);
+    xPostPage(h, () => [xStatusShell(ARRR_POST_TITLE)]);
+    const HOURLY = { cron: "0 * * * *", tz: "UTC" };
+    const first = await h.store.add({ instructions: INSTRUCTIONS, account: "@arrrfun", notBefore: new Date(env.clock).toISOString(), repeat: HOURLY });
+    h.brain.script = (o) => {
+      o.onEvent({ type: "tool_call", id: "t1", name: "act", args: { steps: [{ goal: "type the post", text: ARRR_TYPED }] } });
+      return timeLimit;
+    };
+    for (let i = 0; i < 3; i++) {
+      await runAll(h);
+      env.clock += 60 * 60_000;
+    }
+    const series = async () => (await h.store.list()).filter((t) => (t.seriesId ?? t.id) === first.id);
+    const before = await series();
+    expect(before.map((t) => t.status)).toEqual(["failed", "failed", "failed", "paused"]);
+    const heldRow = before[3]!;
+    expect(heldRow.pauseReason).toBe("Paused after 3 failed runs in a row. Last: Task time limit of 10 minutes reached");
+
+    // The user goes on in the last failed run's conversation before the held repeat's time; the post is verified.
+    env.clock -= 30 * 60_000;
+    h.brain.continueScript = () => ({ outcome: "done", summary: "already posted by an earlier attempt", url: ARRR_POST_URL });
+    const last = (await h.sessions.list())[0]!;
+    await h.runner.message(last.sessionId, "try");
+    await h.runner.idle();
+    const after = await series();
+    expect(after.map((t) => [t.id, t.status])).toEqual([...before.slice(0, 2).map((t) => [t.id, "failed"]), [before[2]!.id, "done"], [heldRow.id, "pending"]]);
+    expect(after[3]).toMatchObject({ pauseReason: null, notBefore: heldRow.notBefore });
+    expect((await h.runner.state()).failures).toBeUndefined();
+  });
+
+  it("a series the user paused stays paused", async () => {
+    const h = harness();
+    h.deps.core = { verifyXPost, classifyFailure };
+    h.runner = new Runner(h.deps);
+    xPostPage(h, () => [xStatusShell(ARRR_POST_TITLE)]);
+    const first = await h.store.add({ instructions: INSTRUCTIONS, account: "@arrrfun", notBefore: new Date(env.clock).toISOString(), repeat: { cron: "0 * * * *", tz: "UTC" } });
+    h.brain.script = (o) => {
+      o.onEvent({ type: "tool_call", id: "t1", name: "act", args: { steps: [{ goal: "type the post", text: ARRR_TYPED }] } });
+      return timeLimit;
+    };
+    await runAll(h);
+    const next = (await h.store.list()).find((t) => t.id !== first.id)!;
+    await h.store.pause(next.id);
+    h.brain.continueScript = () => ({ outcome: "done", summary: "already posted", url: ARRR_POST_URL });
+    await h.runner.message((await h.sessions.list())[0]!.sessionId, "try");
+    await h.runner.idle();
+    expect(await h.store.get(next.id)).toMatchObject({ status: "paused", pauseReason: "Paused by you" });
   });
 });

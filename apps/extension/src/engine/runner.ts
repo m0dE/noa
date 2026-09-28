@@ -64,6 +64,8 @@ export interface RunnerDeps {
   outOfCredit?(): boolean;
   /** Pauses a job's waiting run after its runs kept failing (TodoSource.holdSeries of this browser's or the account's list). */
   holdSeries?(source: "local" | "cloud", seriesId: string, reason: string): Promise<boolean>;
+  /** Resumes a job's rows paused after its runs kept failing, except `except` (TodoSource.releaseHold of the account's list). */
+  releaseHold?(source: "local" | "cloud", seriesId: string, except?: string): Promise<string[]>;
   localStore: LocalStore;
   sessions: SessionStore;
   /** A browser tab's id, address and title (no tabId: the tab the user is looking at); see TurnDeps.pageOf. */
@@ -177,6 +179,11 @@ export class Runner {
         if (source === "local") return !!(await deps.localStore.holdSeries(seriesId, reason));
         if (!deps.holdSeries) throw new Error("this queue's jobs cannot be paused from here");
         return deps.holdSeries(source, seriesId, reason);
+      },
+      releaseHold: async (source, seriesId, except) => {
+        if (source === "local") return deps.localStore.releaseHold(seriesId, except);
+        if (!deps.releaseHold) throw new Error("this queue's jobs cannot be resumed from here");
+        return deps.releaseHold(source, seriesId, except);
       },
       log,
     });
@@ -546,7 +553,10 @@ export class Runner {
       job.source === "turn"
         ? this.lifecycle.runTurn(job, run, settings, opts).then(async (e) => {
             // A scheduled run's conversation that got the work done: its job's failures in a row start over.
-            if (job.from.source !== "adhoc") await this.policy.afterTurn(e, job.first.seriesId ?? job.from.seriesId);
+            const { source, taskId } = job.from;
+            if (source === "local" || source === "cloud") {
+              await this.policy.afterTurn(e, { source, seriesId: job.first.seriesId ?? job.from.seriesId, ...(taskId ? { taskId } : {}) });
+            }
             return e;
           })
         : this.lifecycle.runFirst(job, run, settings, sessionId, opts);

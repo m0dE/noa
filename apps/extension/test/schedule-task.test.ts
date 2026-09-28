@@ -76,6 +76,7 @@ function memoryTodo(opts: { failAdd?: Error } = {}) {
       return t;
     },
     holdSeries: async () => null,
+    releaseHold: async () => [],
     seriesPage: async () => ({ tasks: [], nextCursor: null }),
   };
   /** A task the user made in the TODO tab (not in this chat). */

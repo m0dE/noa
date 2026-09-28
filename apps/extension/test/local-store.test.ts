@@ -326,4 +326,24 @@ describe("pausing a job (pause, resume, holdSeries)", () => {
     await store.finish(r.id, { outcome: "retry", reason: "network" }, { retryAfterMinutes: 10 });
     expect(await store.holdSeries(r.id, "held")).toMatchObject({ id: r.id, status: "paused", retryAfter: null, pauseReason: "held" });
   });
+
+  it("releaseHold resumes the series' row held after failures (at its time, no new row); never one the user paused, nor `except`", async () => {
+    const HOLD = "Paused after 3 failed runs in a row. Last: button not found";
+    const t = await store.add({ instructions: "tip", notBefore: now.toISOString(), repeat: daily("09:00") });
+    await store.markStarted(t.id);
+    const { next } = await store.finish(t.id, { outcome: "failed", reason: "button not found" }, { retryAfterMinutes: 10 });
+    await store.holdSeries(t.id, HOLD);
+    const rows = async () => (await store.list()).filter((x) => (x.seriesId ?? x.id) === t.id);
+    expect(await rows()).toHaveLength(2);
+    // The row the conversation finished is left to it.
+    expect(await store.releaseHold(t.id, next!.id)).toEqual([]);
+    expect(await store.releaseHold(t.id)).toEqual([next!.id]);
+    expect(await rows()).toHaveLength(2);
+    expect((await store.get(next!.id))!).toMatchObject({ status: "pending", pauseReason: null, notBefore: next!.notBefore });
+    // Nothing held any more; a row the user paused stays paused.
+    expect(await store.releaseHold(t.id)).toEqual([]);
+    await store.pause(next!.id);
+    expect(await store.releaseHold(t.id)).toEqual([]);
+    expect(await store.get(next!.id)).toMatchObject({ status: "paused", pauseReason: "Paused by you" });
+  });
 });

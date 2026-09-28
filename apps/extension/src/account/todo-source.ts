@@ -6,7 +6,7 @@
  * The account's list is a paid feature: on a plan without it the list comes
  * back `locked` (the kept tasks are read-only; writes answer plan_required).
  */
-import { isOnHold, LegacyRepeatRule, legacyToRepeat, type CreateTaskInput, type LocalTask, type RepeatSchedule, type Task } from "@noa/shared";
+import { isFailureHold, isOnHold, LegacyRepeatRule, legacyToRepeat, type CreateTaskInput, type LocalTask, type RepeatSchedule, type Task } from "@noa/shared";
 import type { LocalMediaInfo, TaskPatch } from "../ui-protocol.js";
 import { uploadToBlob, type LocalStore, type NewLocalTask } from "../engine/local-store.js";
 import type { AccountApi, AccountTaskList } from "./account-api.js";
@@ -64,6 +64,8 @@ export interface TodoSource {
   resume(id: string): Promise<LocalTask>;
   /** Pauses the waiting row of a series (see LocalStore.holdSeries); null: none waits. */
   holdSeries(seriesId: string, reason: string): Promise<LocalTask | null>;
+  /** Resumes the series' rows paused after its runs kept failing, except `except` (see LocalStore.releaseHold); the ids resumed. */
+  releaseHold(seriesId: string, except?: string): Promise<string[]>;
   /** A page of one series' rows (a repeating job's runs), newest first; `cursor`: the page after the one that gave it. */
   seriesPage(seriesId: string, cursor?: string): Promise<SeriesPage>;
 }
@@ -159,6 +161,12 @@ export class AccountTodo implements TodoSource {
     return waiting ? this.pause(waiting.id, reason) : null;
   }
 
+  async releaseHold(seriesId: string, except?: string): Promise<string[]> {
+    const held = (await this.api.listSeries(seriesId)).filter((t) => t.id !== except && isFailureHold(t));
+    for (const t of held) await this.resume(t.id);
+    return held.map((t) => t.id);
+  }
+
   async seriesPage(seriesId: string, cursor?: string): Promise<SeriesPage> {
     const page = await this.api.seriesPage(seriesId, cursor);
     return { tasks: page.tasks.map(asLocal), nextCursor: page.nextCursor };
@@ -212,6 +220,10 @@ export class LocalTodo implements TodoSource {
 
   holdSeries(seriesId: string, reason: string): Promise<LocalTask | null> {
     return this.store.holdSeries(seriesId, reason);
+  }
+
+  releaseHold(seriesId: string, except?: string): Promise<string[]> {
+    return this.store.releaseHold(seriesId, except);
   }
 
   /** This browser keeps every row of a series: one page. */

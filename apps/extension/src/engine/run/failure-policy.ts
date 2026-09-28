@@ -26,6 +26,8 @@ export interface FailurePolicyDeps {
   stopping(): boolean;
   /** Pauses the series' waiting run (TodoSource.holdSeries) with this reason; false: nothing of it waits. Throws when it could not. */
   holdSeries(source: ScheduledJob["source"], seriesId: string, reason: string): Promise<boolean>;
+  /** Resumes the series' rows paused after its failures, except `except` (TodoSource.releaseHold); the ids resumed. Throws when it could not. */
+  releaseHold(source: ScheduledJob["source"], seriesId: string, except?: string): Promise<string[]>;
   log(message: string): void;
 }
 
@@ -54,13 +56,22 @@ export class FailurePolicy {
 
   /**
    * After a next turn of a scheduled run's conversation (the user went on in it): once it got the job's work done,
-   * shown by its X post found with the text typed for it (Ended.verifiedPost), the job's failures in a row start over.
+   * shown by its X post found with the text typed for it (Ended.verifiedPost), the job's failures in a row start over
+   * and a repeat of it paused after them waits for its time again, as the user's Resume does (the run's own task is
+   * left to the recorder: done by then, or left as it was when it could not be). A series the user paused stays so.
    * A turn that ends done about something else does not count, and neither do its failures (the user is there).
    */
-  afterTurn({ result, stop, verifiedPost }: Ended, seriesId: string | undefined): Promise<void> {
+  afterTurn({ result, stop, verifiedPost }: Ended, job: { source: ScheduledJob["source"]; seriesId?: string; taskId?: string }): Promise<void> {
+    const { seriesId } = job;
     if (!seriesId || result.outcome !== "done" || stop || !verifiedPost || verifiedPost !== result.url) return Promise.resolve();
     const next = this.accounting.then(async () => {
       if ((await this.deps.state.get()).failures?.[seriesId]) await this.setFailures(seriesId, 0);
+      try {
+        const resumed = await this.deps.releaseHold(job.source, seriesId, job.taskId);
+        if (resumed.length) this.deps.log(`job ${seriesId} resumed after its post was verified: ${resumed.join(", ")}`);
+      } catch (err) {
+        this.deps.log(`resuming job ${seriesId} after its post was verified failed: ${errorMessage(err)}`);
+      }
     });
     this.accounting = next.catch(() => {});
     return next;
