@@ -6,7 +6,7 @@ import { ApiBrain } from "../../src/engine/api-brain.js";
 import { stopOf } from "../../src/engine/run/active.js";
 import { CLAUDE_CODE_GONE } from "../../src/engine/brain-resolver.js";
 import { CONTINUE_TEXT, FRESH_SESSION_STATUS } from "../../src/engine/run/conversation.js";
-import { env, FakeBrain, harness, setupRunnerTests, status, withoutClock, type Harness } from "./harness.js";
+import { env, FakeBrain, harness, setupRunnerTests, status, withoutClock, WAITS, type Harness } from "./harness.js";
 
 setupRunnerTests();
 
@@ -123,7 +123,7 @@ describe("Runner: conversations", () => {
       "task_end",
     ]);
     // The second post is verified against what the second turn typed.
-    expect(h.verify).toHaveBeenLastCalledWith(h.browser, "https://x.com/alpha/status/2", "second turn", "@alpha");
+    expect(h.verify).toHaveBeenLastCalledWith(h.browser, "https://x.com/alpha/status/2", "second turn", "@alpha", WAITS);
     const s = (await h.sessions.get(sessionId))!;
     expect(s).toMatchObject({ outcome: "done", summary: "posted the second", url: "https://x.com/alpha/status/2", turns: 2, logPath: "C:\\runs\\s1\\log.jsonl", model: "claude-sonnet-5" });
     expect(s.startedAt).toBe(new Date(env.clock).toISOString());
@@ -275,7 +275,7 @@ describe("Runner: conversations", () => {
     expect(start.task.instructions).toContain(`stopped before it finished (reason: ${stopOf("user-stop").reason})`);
     expect(start.task.instructions).toContain(`- type #12 "${POST}" → typed 61 chars`);
     expect(start.config.isRetry).toBe(true);
-    expect(h.verify).toHaveBeenCalledWith(expect.anything(), "https://x.com/me/status/123", POST, "@me");
+    expect(h.verify).toHaveBeenCalledWith(expect.anything(), "https://x.com/me/status/123", POST, "@me", WAITS);
     expect(await h.sessions.get(sessionId)).toMatchObject({ outcome: "done", turns: 2, brain: "claude-code" });
   });
 

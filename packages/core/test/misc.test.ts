@@ -457,7 +457,9 @@ describe("verifyXPost", () => {
 
   it("fails when the text is not there, for non-post URLs, and on browser errors", async () => {
     const x = new FakeX({ posts: [post] });
-    expect((await verifyXPost(x.caller(), post.url, "something else entirely")).ok).toBe(false);
+    // The page is read again while X may still be drawing the post; the test does not wait for it.
+    const sleep = async () => {};
+    expect((await verifyXPost(x.caller(), post.url, "something else entirely", undefined, { sleep })).ok).toBe(false);
     expect((await verifyXPost(x.caller(), "https://x.com/home", "Hello")).ok).toBe(false);
     const broken = { call: async () => Promise.reject(new Error("debugger detached")) };
     const r = await verifyXPost(broken, post.url, "Hello");

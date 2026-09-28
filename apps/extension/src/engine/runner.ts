@@ -129,6 +129,7 @@ export class Runner {
       media: deps.media,
       core: deps.core,
       log,
+      ...(deps.sleep ? { sleep: deps.sleep } : {}),
       ...(deps.tabChats ? { tabChats: deps.tabChats } : {}),
       ...(deps.pageOf ? { pageOf: deps.pageOf } : {}),
       ...(deps.memory ? { memory: deps.memory } : {}),
@@ -139,6 +140,10 @@ export class Runner {
       localStore: deps.localStore,
       sessions: deps.sessions,
       patchState: (p) => this.runnerState.patch(p),
+      cloudQueue: async () => {
+        const api = (await deps.accountApi?.().catch(() => null)) ?? null;
+        return api ? { api, runnerId: await deps.getRunnerId() } : null;
+      },
       now,
       log,
     });
@@ -537,7 +542,14 @@ export class Runner {
     let created!: () => void;
     const sessionReady = new Promise<void>((r) => (created = r));
     const opts = { slotIndex, scheduled: false, onSessionCreated: created };
-    const ended = job.source === "turn" ? this.lifecycle.runTurn(job, run, settings, opts) : this.lifecycle.runFirst(job, run, settings, sessionId, opts);
+    const ended =
+      job.source === "turn"
+        ? this.lifecycle.runTurn(job, run, settings, opts).then(async (e) => {
+            // A scheduled run's conversation that got the work done: its job's failures in a row start over.
+            if (job.from.source !== "adhoc") await this.policy.afterTurn(e, job.first.seriesId ?? job.from.seriesId);
+            return e;
+          })
+        : this.lifecycle.runFirst(job, run, settings, sessionId, opts);
     const source = job.source;
     void this.track(ended.catch((err) => this.log(`${source} run failed: ${errorMessage(err)}`))).finally(created);
     await sessionReady;

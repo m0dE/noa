@@ -4,7 +4,7 @@
  * brain's events into the session, and the checks on the result (X post
  * verification, failure classification). Next turns: conversation.ts.
  */
-import { automationPromptLine, bareToolName, effectiveLevel, errorMessage, isXStatusUrl, localTimeZone, traceStart, TURN_WALL_MINUTES, type AgentEvent, type AgentTask, type AttachmentRef, type ExtensionSettings, type RunConfig, type SessionInfo, type TaskRunResult, type TraceCategory, type TraceValue, type UserTab } from "@noa/shared";
+import { automationPromptLine, bareToolName, effectiveLevel, errorMessage, isXStatusUrl, localTimeZone, traceStart, TURN_WALL_MINUTES, type AgentEvent, type AgentTask, type AttachmentRef, type ExtensionSettings, type RunConfig, type SessionInfo, type Sleep, type TaskRunResult, type TraceCategory, type TraceValue, type UserTab } from "@noa/shared";
 import type { AgentSlot } from "../../agent-slots.js";
 import { bytesToBase64 } from "../../base64.js";
 import type { AttachmentStore } from "../attachment-store.js";
@@ -149,6 +149,8 @@ export interface TurnDeps {
   memory?: Pick<MemoryService, "begin">;
   /** The files sent in chats (absent: none). */
   attachments?: Pick<AttachmentStore, "list">;
+  /** The post check's waits for X to show the post (tests skip real time). */
+  sleep?: Sleep;
   log(message: string): void;
 }
 
@@ -391,7 +393,8 @@ export class TurnRunner {
         // Compare against what the agent actually entered, not the whole instructions.
         const expected = active.typed.reduce((a, b) => (b.trim().length > a.trim().length ? b : a), "");
         // The post must be the task's account's own (a follow-up turn in the same session knows it from the session).
-        const v = await this.deps.core.verifyXPost(active.slot.browser, result.url, expected, active.account ?? active.session.account);
+        const account = active.account ?? active.session.account;
+        const v = await this.deps.core.verifyXPost(active.slot.browser, result.url, expected, account, this.deps.sleep ? { sleep: this.deps.sleep } : {});
         ok = v.ok;
         detail = v.detail;
       } catch (err) {

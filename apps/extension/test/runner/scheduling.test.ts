@@ -7,7 +7,7 @@ import { stopOf } from "../../src/engine/run/active.js";
 import { X_WAIT_STATUS } from "../../src/engine/run/scheduling.js";
 import { KEEP_ALIVE_MS } from "../../src/engine/run/state.js";
 import { Runner } from "../../src/engine/runner.js";
-import { env, harness, parallel, runAll, setupRunnerTests } from "./harness.js";
+import { env, harness, parallel, runAll, setupRunnerTests, WAITS } from "./harness.js";
 
 setupRunnerTests();
 
@@ -317,7 +317,7 @@ describe("Runner: several tasks at once", () => {
     h.brain.script = () => ({ outcome: "done", url: "https://x.com/me/status/9" });
     await h.runner.runAdhoc({ instructions: "three" });
     await h.runner.idle();
-    expect(h.verify).toHaveBeenLastCalledWith(pool.slots.get(0)!.browser, "https://x.com/me/status/9", "", undefined);
+    expect(h.verify).toHaveBeenLastCalledWith(pool.slots.get(0)!.browser, "https://x.com/me/status/9", "", undefined, WAITS);
   });
 
   it("a conversation's next turn uses the tab it used, unless another run has it", async () => {

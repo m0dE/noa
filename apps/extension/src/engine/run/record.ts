@@ -6,7 +6,7 @@ import { errorMessage, MAX_RESULT_REASON, MAX_RESULT_SUMMARY, MAX_RESULT_URL, ty
 import { base64ToBytes } from "../../base64.js";
 import type { LocalStore } from "../local-store.js";
 import type { SessionStore } from "../sessions.js";
-import { localTaskOf, type CloudJob, type Job } from "./jobs.js";
+import { localTaskOf, type CloudJob, type Job, type RunnerApi } from "./jobs.js";
 import type { RunnerState } from "./state.js";
 import type { ActiveSession } from "./turn.js";
 import type { MemoryService } from "../../memory/service.js";
@@ -17,6 +17,8 @@ export interface RecorderDeps {
   localStore: LocalStore;
   sessions: SessionStore;
   patchState(patch: Partial<RunnerState>): Promise<void>;
+  /** The signed-in account's task queue and this runner's id (null: signed out): a turn that finishes a cloud task's work reports it there. */
+  cloudQueue?(): Promise<{ api: RunnerApi; runnerId: string } | null>;
   now(): Date;
   log(message: string): void;
 }
@@ -35,6 +37,27 @@ export class ResultRecorder {
       }
     } else if (job.source === "cloud") {
       await this.reportCloud(active, job, result, settings);
+    } else if (job.source === "turn" && result.outcome === "done" && job.from.source === "cloud" && job.from.taskId) {
+      await this.finishCloudTask(active, job.from.taskId, result, settings);
+    }
+  }
+
+  /**
+   * A turn of an account task's conversation got its work done (e.g. the user said "try" after the run ended retry
+   * or paused, and the agent found the post live): the task is done too. It is claimed by id (the server hands over a
+   * pending, paused or failed one, also one its job was paused on after failing) and reported done, so its repeat is
+   * scheduled and the job no longer waits for the user. A task that is done already, or running elsewhere, is left
+   * as it is (the claim is refused).
+   */
+  private async finishCloudTask(active: ActiveSession, taskId: string, result: TaskRunResult, settings: ExtensionSettings): Promise<void> {
+    try {
+      const queue = await this.deps.cloudQueue?.();
+      if (!queue) return this.deps.log(`task ${taskId} is done, but it could not be reported: not signed in to its account`);
+      const claim = await queue.api.claim(queue.runnerId, taskId);
+      if (!claim) return this.deps.log(`task ${taskId} is done, but its account did not hand it over to report it`);
+      await this.reportCloud(active, { source: "cloud", claim, api: queue.api, runnerId: queue.runnerId }, result, settings);
+    } catch (err) {
+      this.deps.log(`reporting task ${taskId} done after its conversation went on failed: ${errorMessage(err)}`);
     }
   }
 

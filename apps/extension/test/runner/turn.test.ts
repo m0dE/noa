@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEBUGGER_CANCELED } from "../../src/cdp.js";
 import { typedTextsOf } from "../../src/engine/run/turn.js";
-import { AGENT_TAB, env, harness, runAll, setupRunnerTests } from "./harness.js";
+import { AGENT_TAB, env, harness, runAll, setupRunnerTests, WAITS } from "./harness.js";
 
 setupRunnerTests();
 
@@ -69,7 +69,7 @@ describe("Runner: one turn", () => {
       return { outcome: "done", url: "https://x.com/me/status/123" };
     };
     await runAll(h);
-    expect(h.verify).toHaveBeenCalledWith(h.browser, "https://x.com/me/status/123", "hello world, this is the post body", undefined);
+    expect(h.verify).toHaveBeenCalledWith(h.browser, "https://x.com/me/status/123", "hello world, this is the post body", undefined, WAITS);
     expect(await h.store.get(a.id)).toMatchObject({ status: "done" });
 
     h.brain.script = () => ({ outcome: "done", url: "https://x.com/me/status/123" });

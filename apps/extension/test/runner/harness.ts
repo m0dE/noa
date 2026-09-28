@@ -146,6 +146,9 @@ export interface Harness {
   slotWait(): () => void;
 }
 
+/** The post check's options as the runner passes them (its waits use the harness's sleep). */
+export const WAITS = { sleep: expect.any(Function) };
+
 /** The one-slot harness's agent tab. */
 export const AGENT_TAB = 7;
 

@@ -52,6 +52,19 @@ export class FailurePolicy {
     return next;
   }
 
+  /**
+   * After a next turn of a scheduled run's conversation (the user went on in it): once it got the work done, the
+   * job's failures in a row start over. Its failures do not count here (the user is there to see them).
+   */
+  afterTurn({ result, stop }: Ended, seriesId: string | undefined): Promise<void> {
+    if (!seriesId || result.outcome !== "done" || stop) return Promise.resolve();
+    const next = this.accounting.then(async () => {
+      if ((await this.deps.state.get()).failures?.[seriesId]) await this.setFailures(seriesId, 0);
+    });
+    this.accounting = next.catch(() => {});
+    return next;
+  }
+
   /** One more failure in a row for the job; at `max` (0: never) the job is paused with the reason. */
   private async failed(job: ScheduledJob, last: string, max: number): Promise<void> {
     const n = ((await this.deps.state.get()).failures?.[job.seriesId] ?? 0) + 1;
