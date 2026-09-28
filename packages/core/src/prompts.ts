@@ -235,6 +235,58 @@ export function buildFollowUpMessage(m: FollowUpMessage): string {
   return [...clock, ...userTabLines(m.userTab, { screenHelp: !!m.screenHelp }), "", ...memory, ...label, ...message, ...approvals].join("\n");
 }
 
+/** A scheduled job as a chat about it (Talk about this) tells the agent: the job now and how its latest runs went. */
+export interface TaskReview {
+  /** Its waiting row (the id update_scheduled_task takes). */
+  taskId: string;
+  instructions: string;
+  account: string | null;
+  /** Its schedule and next run in words, in the user's zone ("Daily at 9:40 AM and 6:40 PM; next run today at 6:40 PM"). */
+  when: string;
+  /** Why it waits, when it is paused (by the user, or after failed runs). */
+  paused?: string;
+  /** It is not scheduled any more (done, cancelled): there is nothing to update, only to schedule again. */
+  over?: boolean;
+  /** Its latest runs, newest first, one line each ("today at 9:52 AM · failed · X showed a login page"). */
+  runs: string[];
+}
+
+/**
+ * What the agent does in a chat about a scheduled job. The job can be anything a run does (a post, an email, a form, a
+ * check on a site, a call through a web app), so the rules speak of what a run produces, never of posts alone.
+ */
+const TASK_REVIEW_RULES = [
+  'This chat is about one of the user\'s scheduled jobs (they opened it with "Talk about this" on the job\'s page). It is not a run of the job: your part is to make sure the job will do what they want, together with them, and then update it.',
+  "- Your first reply: say in one or two sentences what the job does and when, and how its latest runs went (name a failure and why, if there was one). Then show them what a run produces, right away: do a trial run of the job now, following its instructions as a real run would (open the pages, read what it needs, choose the topic, write the text, fill in the form, find the answer), and stop just before the step that publishes, posts, sends, submits, pays, books, calls, deletes or otherwise cannot be taken back. Show the result exactly as the run would leave it (the full text of the post, email or message; the answer it would report; the form as filled in) and ask for their take warmly and specifically, e.g. \"Here's a post I'd make: ... Does this sound like you?\" or \"This is what I'd tell you after the check: ... Is that the kind of report you want?\" When the job cannot be tried without doing it for real, walk through what it would do instead, step by step, and ask.",
+  "- Be curious and glad of feedback: ask one or two specific questions at a time (the tone, length, topics, sources, what to leave out, what counts as done), never a questionnaire. Try again with what they said and show the new result, as many rounds as they like.",
+  "- Nothing goes out for real in this chat unless the user asks for that now, in so many words (\"post it\", \"send that one\").",
+  "- Once they are happy or ask you to save it, rewrite the job's instructions so that a future run, alone and with no memory of this chat, does it the way you agreed: keep what was right, add their feedback as clear rules (tone, length, topics, what to avoid, an example they liked), and keep every URL, account and value it needs. Show the new instructions in a few lines, then call update_scheduled_task with the job's task_id and `task` (the user is asked to OK the new words). Change its schedule only when they ask. When the id is not found (a run since started its next one), call list_scheduled_tasks and use the id of this job's waiting row.",
+  "- What the user says about themselves or how they like things done in general (their voice, who they are, which account is which) goes in memory with remember as well; what is only about this job goes in its instructions. Do not write memory_note in task_complete here: this chat is not one of its runs.",
+  "- End each reply with task_complete (the chat stays open for their answer), with the reply they most likely send as `suggestion` (e.g. \"Looks good, save it\", \"Make it shorter\").",
+].join("\n");
+
+/** A chat about a scheduled job: the job as it is now, then TASK_REVIEW_RULES (null job: it could not be read now). */
+export function buildTaskReview(job: TaskReview | null): string {
+  if (!job) {
+    return ["The scheduled job this chat is about could not be read just now: call list_scheduled_tasks to find it.", "", TASK_REVIEW_RULES].join("\n");
+  }
+  const lines = [
+    `The scheduled job this chat is about (task_id ${job.taskId}):`,
+    `- When: ${job.when}${job.over ? " (it is not scheduled any more: to run it again, schedule it with schedule_task)" : ""}`,
+    ...(job.paused ? [`- Paused: ${job.paused}`] : []),
+    `- Account: ${job.account ?? "none given"}`,
+    "- Its instructions now:",
+    "<<<",
+    job.instructions,
+    ">>>",
+    job.runs.length ? "- Its latest runs, newest first:" : "- It has not run yet.",
+    ...job.runs.map((r) => `  - ${r}`),
+    "",
+    TASK_REVIEW_RULES,
+  ];
+  return lines.join("\n");
+}
+
 /** What the agent must never do on its own when it works out the next step from the screen. */
 const SCREEN_HELP_ASK_FIRST =
   "Ask instead of acting (write your question as message text, then call task_pause) when it is not clear what the user needs, or when the next step is risky: paying or buying anything, deleting anything, sending a message, email or post to other people, accepting terms or permissions on the user's behalf, or entering a password or code you do not have.";

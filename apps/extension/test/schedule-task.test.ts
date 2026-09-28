@@ -356,3 +356,45 @@ describe("TaskScheduler.cancel", () => {
     expect(approve).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("TaskScheduler in a chat about a task (Talk about this)", () => {
+  /** Chat s2 is about the series of u1 (its waiting row when the chat started). */
+  async function aboutSetup(approve: TaskSchedulerDeps["approve"]) {
+    const t = await setup({ approve });
+    await t.sessions.create({ ...SESSION, sessionId: "s2", about: { taskId: "u1", seriesId: "u0" } });
+    return t;
+  }
+
+  it("saving the agreed instructions shows its card; once the user allows it there, the words are the user's", async () => {
+    const approve = vi.fn(async () => true);
+    const t = await aboutSetup(approve);
+    t.todo.own({ id: "u1", seriesId: "u0", instructions: "Post about AI on X as @m0de", notBefore: "2026-09-28T13:30:00.000Z" });
+    await t.scheduler.update("s2", { task_id: "u1", task: "Post about AI on X as @m0de, casual, under 200 characters, no hashtags" });
+    expect(approve).toHaveBeenCalledWith("s2", {
+      action: 'Save the new instructions of "Post about AI on X as @m0de"',
+      site: "",
+      why: "updates this scheduled job with what you agreed on here",
+      text: "When: Once, Mon, Sep 28 at 9:30 AM\nTask: Post about AI on X as @m0de, casual, under 200 characters, no hashtags",
+    });
+    expect(t.todo.patches.at(-1)).toEqual(["u1", { instructions: "Post about AI on X as @m0de, casual, under 200 characters, no hashtags", agentAuthored: false }]);
+  });
+
+  it("a later row of the same series is the same job; nothing asked (full autonomy) leaves the words the agent's", async () => {
+    const t = await aboutSetup(async () => false);
+    t.todo.own({ id: "u9", seriesId: "u0", instructions: "Post about AI", notBefore: "2026-09-28T13:30:00.000Z" });
+    await t.scheduler.update("s2", { task_id: "u9", task: "Post about AI, shorter" });
+    expect(t.todo.tasks.get("u9")?.agentAuthored).toBe(true);
+  });
+
+  it("another task is changed as from any chat, and the job's own changes in other chats are not the user's", async () => {
+    const approve = vi.fn(async () => true);
+    const t = await aboutSetup(approve);
+    t.todo.own({ id: "x1", instructions: "Standup notes", notBefore: "2026-09-28T13:30:00.000Z" });
+    t.todo.own({ id: "u1", seriesId: "u0", instructions: "Post about AI", notBefore: "2026-09-28T13:30:00.000Z" });
+    await t.scheduler.update("s2", { task_id: "x1", task: "Standup notes, shorter" });
+    expect(approve).toHaveBeenLastCalledWith("s2", expect.objectContaining({ action: 'Change the scheduled job "Standup notes"' }));
+    expect(t.todo.tasks.get("x1")?.agentAuthored).toBe(true);
+    await t.scheduler.update("s1", { task_id: "u1", task: "Post about AI, longer" });
+    expect(t.todo.tasks.get("u1")?.agentAuthored).toBe(true);
+  });
+});

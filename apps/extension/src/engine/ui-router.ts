@@ -2,7 +2,7 @@
  * Background side of ui-protocol.ts: answers every UiRequest. The pushes to
  * the side panel are in ui-hub.ts.
  */
-import { ApprovalAnswer, type ApprovalAnsweredBy, cleanUserTitle, errorMessage, IssuableKeyRole, MAX_TRACE_TEXT, redactSettings, secretProblem, type ExtensionSettings, type HelperInfo, type HelperMethods, type LocalTask, type TraceCategory, type TraceEvent, type TraceValue } from "@noa/shared";
+import { ApprovalAnswer, type ApprovalAnsweredBy, cleanUserTitle, errorMessage, IssuableKeyRole, MAX_TRACE_TEXT, redactSettings, secretProblem, type ExtensionSettings, type HelperInfo, type HelperMethods, type LocalTask, type TaskAbout, type TraceCategory, type TraceEvent, type TraceValue } from "@noa/shared";
 import type { AccountService } from "../account/account.js";
 import { LocalTodo, type TodoSource } from "../account/todo-source.js";
 import { HELPER_CALL_TIMEOUT_MS } from "../helper-link.js";
@@ -89,7 +89,7 @@ export interface UiRouterDeps {
    * The user's OK for a TODO task the agent changes or cancels (engine/schedule-task.ts), at the session's
    * automation level (AgentSlots.confirm); throws the refusal. Absent: nothing waits.
    */
-  approveTodoChange?(sessionId: string, ask: TodoApprovalAsk): Promise<void>;
+  approveTodoChange?(sessionId: string, ask: TodoApprovalAsk): Promise<boolean | void>;
   /** A TODO task the agent changed (update_scheduled_task): its memory follows it. */
   onTodoEdited?(before: LocalTask, after: LocalTask): Promise<void>;
   /** The agent's memory: Settings > Memory, Undo on the chat's notes, memory off for a chat. Absent: refused. */
@@ -235,6 +235,8 @@ export class UiRouter {
         if (tab !== undefined) input.tabId = tab;
         if (msg.screen === true) input.screen = true;
         if (msg.memoryOff === true) input.memoryOff = true;
+        const about = optAbout(msg.about);
+        if (about) input.about = about;
         return d.runner.runAdhoc(input, optCid(msg.cid)) satisfies Promise<UiResults["run.adhoc"]>;
       }
       case "run.continue": {
@@ -538,6 +540,13 @@ function realtimeAccount(a: RouterAccount | undefined): RealtimeAccount | undefi
 /** A browser tab id from a UI message, or undefined. */
 function optTab(v: unknown): number | undefined {
   return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : undefined;
+}
+
+/** The scheduled job a new chat is about, from a UI message, or undefined. */
+function optAbout(v: unknown): TaskAbout | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const { taskId, seriesId } = v as Record<string, unknown>;
+  return typeof taskId === "string" && taskId && typeof seriesId === "string" && seriesId ? { taskId, seriesId } : undefined;
 }
 
 /** A session id from a UI message, or undefined. */

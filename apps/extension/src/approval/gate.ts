@@ -208,14 +208,16 @@ export class ApprovalGate {
    * A change the agent makes outside the page (a TODO task changed or cancelled, engine/schedule-task.ts): it
    * waits for the user's OK at every level but full autonomy, like a consequential action the task does not
    * ask for; "Allow for this task" covers it too. Throws the refusal the agent reads when it is not allowed.
+   * Resolves true when the user allowed this very request on its card (false: nothing asked them).
    */
-  async confirm(sessionId: string, request: Omit<ApprovalRequest, "id" | "expiresAt">): Promise<void> {
+  async confirm(sessionId: string, request: Omit<ApprovalRequest, "id" | "expiresAt">): Promise<boolean> {
     this.follow(sessionId);
     const ctx = await this.deps.context(sessionId);
     if (ctx.stopped?.()) throw new Error(stoppedText(request.action));
-    if (ctx.level === "full" || this.allowAll) return;
+    if (ctx.level === "full" || this.allowAll) return false;
     await this.ask(sessionId, ctx, request);
     if (ctx.stopped?.()) throw new Error(stoppedText(request.action));
+    return true;
   }
 
   /**

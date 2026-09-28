@@ -152,6 +152,21 @@ describe("a repeating task's memory", () => {
   });
 });
 
+describe("a chat about a task (Talk about this)", () => {
+  it("is given the task's history and may remember for the task, but leaves no run note", async () => {
+    await memory.begin("run1", { task: DAILY, title: DAILY.instructions, request: DAILY.instructions });
+    await memory.runNote("run1", "Posted the tip about the new arena map.");
+    const given = await memory.begin("chat", { task: DAILY, review: true, title: "Talk", request: "Let's talk about my scheduled job" });
+    expect(given?.text).toMatch(/Run note: Posted the tip about the new arena map/);
+    const r = await memory.tool("chat", "remember", { kind: "task", subject: "Tone", text: "Casual, no hashtags, under 200 characters" });
+    expect(r.isError).toBeUndefined();
+    await memory.runNote("chat", "Tried a post about agents");
+    const kept = await store.list();
+    expect(kept.map((e) => e.subject).sort()).toEqual(["Run note", "Tone"]);
+    expect(kept.find((e) => e.subject === "Tone")).toMatchObject({ scope: "task", taskKey: memoryTaskKey(DAILY.instructions, DAILY.account), source: { kind: "chat", sessionId: "chat" } });
+  });
+});
+
 describe("a task series' memory (seriesId)", () => {
   const EDITED = { instructions: "Post one grounded tip about Mecha Royale on X. No price talk.", account: "@mecharoyalecom" };
   const run = async (id: string, task: { instructions: string; account: string | null; seriesId?: string }) => {

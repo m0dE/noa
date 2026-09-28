@@ -116,6 +116,7 @@ export class Lifecycle {
           if (job.input.voice) info.voice = true;
           if (job.input.voice && job.input.heard?.length) info.heard = job.input.heard;
           if (job.input.memoryOff) info.memoryOff = true;
+          if (job.input.about) info.about = job.input.about;
           // The agent gets the instructions with their context; the title and first message are the user's words.
           if (job.input.context) opened = { ...opened, task: { ...task, instructions: withContext(task.instructions, job.input.context) } };
         }

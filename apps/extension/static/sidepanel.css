@@ -167,6 +167,7 @@ button.job-tab-view { flex: none; padding: 3px 12px; font-size: var(--text-sm); 
 .job-instr-title { flex: 1; margin: 0; font-size: var(--text-sm); font-weight: 600; color: var(--muted); }
 .job-instr-actions { display: flex; align-items: center; gap: 6px; }
 .job-instr-actions .msg { order: -1; }
+.job-instr-talk { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .job-instr-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-md); line-height: 1.5; color: var(--text); }
 .job-instr-text[data-cut="true"] { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .job-instr-more { align-self: flex-start; font-size: var(--text-sm); }

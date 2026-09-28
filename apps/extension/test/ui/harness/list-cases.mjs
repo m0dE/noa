@@ -100,7 +100,7 @@ export const LIST_CASES = [
     },
   },
   // A repeating task that ran three times is one job: its page says how its runs went (each count opens the list
-  // filtered), its instructions (Edit), "Earlier runs (2)" closed, then the latest run's conversation.
+  // filtered), its instructions (Talk about this, Edit), "Earlier runs (2)" closed, then the latest run's conversation.
   // Open, the list has the runs by day, newest first; one picked shows its conversation in the page's place ("‹ Runs"
   // and Escape go back, on its row). Delete asks first, then deletes the task's rows and runs.
   {
@@ -128,7 +128,7 @@ export const LIST_CASES = [
       // The next run is the next 9:00 (in words inside the line: "next tomorrow 9:00 AM").
       if (!/^Daily at 9:00 AM · next (today|tomorrow) 9:00 AM$/.test(page.sub)) fail(`series: subtitle "${page.sub}"`);
       if (page.stats !== "3 runs · 2 done · 1 failed" || JSON.stringify(page.toggle) !== JSON.stringify(["Earlier runs (2)›", "false"]) || page.rows !== 0) fail(`series: closed runs ${JSON.stringify(page)}`);
-      if (!page.instr?.startsWith("Post a short tip") || page.edit.join() !== "Edit") fail(`series: instructions ${JSON.stringify(page)}`);
+      if (!page.instr?.startsWith("Post a short tip") || page.edit.join() !== "Talk about this,Edit") fail(`series: instructions ${JSON.stringify(page)}`);
       if (!page.latest?.startsWith("Latest run · ") || !page.opening?.startsWith("Post a short tip") || page.end !== "Posted: Ctrl+. opens Noa from any tab") fail(`series: latest run ${JSON.stringify(page)}`);
       await expectMenu(p, ["Run now", "Pause", "Edit schedule", "Raw", "Delete"], "series");
       await p.evaluate(() => (document.getElementById("chat-log").scrollTop = 0));

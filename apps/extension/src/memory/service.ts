@@ -81,6 +81,11 @@ export interface MemoryRun {
   tabTitle?: string;
   /** The next turn in the same agent session: it already has what earlier turns were given, so only new entries come. */
   continued?: boolean;
+  /**
+   * A chat about `task` (Talk about this), not one of its runs: it is given the task's memory and remember may add to
+   * it, but it leaves no run note (the task history is its runs').
+   */
+  review?: boolean;
 }
 
 /** The answer a memory tool gives the model. */
@@ -164,7 +169,7 @@ const OFF_DONE: Record<MemoryTool, string> = { remember: "saved", recall: "recal
 const NO_NOTE = "(no note)";
 
 export class MemoryService {
-  private readonly runs = new Map<string, { taskKey?: string; taskTitle?: string; source: MemorySource }>();
+  private readonly runs = new Map<string, { taskKey?: string; taskTitle?: string; review?: true; source: MemorySource }>();
   /** The entries each agent session was given (a continued turn is not given them again). */
   private readonly given = new Map<string, Set<string>>();
 
@@ -182,7 +187,8 @@ export class MemoryService {
     this.given.set(sessionId, given);
     this.runs.set(sessionId, {
       ...(taskKey ? { taskKey, taskTitle: firstLine(run.task!.instructions) } : {}),
-      source: { kind: run.task ? "task" : "chat", sessionId, title: firstLine(run.title) },
+      ...(run.review ? { review: true as const } : {}),
+      source: { kind: run.task && !run.review ? "task" : "chat", sessionId, title: firstLine(run.title) },
     });
     while (this.runs.size > MAX_RUNS) this.runs.delete(this.runs.keys().next().value!);
     while (this.given.size > MAX_RUNS) this.given.delete(this.given.keys().next().value!);
@@ -227,14 +233,14 @@ export class MemoryService {
   /**
    * What a repeating task's run leaves for its next runs: its note (what it posted, what is pending) and its output
    * (exactly what it published or sent; at most MAX_RUN_OUTPUT_CHARS, a longer one is cut). Nothing when the run is
-   * not a task, memory is off, or task history is turned off; a note that looks like a secret is refused, an output
+   * not a task (a chat about one included), memory is off, or task history is turned off; a note that looks like a secret is refused, an output
    * that does is left out, and the chat says so.
    */
   async runNote(sessionId: string, note: string | undefined, opts: { output?: string | undefined; knownSecret?(text: string): boolean } = {}): Promise<void> {
     const run = this.runs.get(sessionId);
     let output = opts.output?.trim().slice(0, MAX_RUN_OUTPUT_CHARS).trim() || undefined;
     const text = note?.trim().slice(0, MAX_MEMORY_NOTE_CHARS) || (output ? NO_NOTE : "");
-    if (!run?.taskKey || !text) return;
+    if (!run?.taskKey || run.review || !text) return;
     const settings = await this.deps.settings();
     if ((await this.offReason(sessionId, settings)) || settings.memoryKindsOff.includes("task")) return;
     if (opts.knownSecret?.(text)) return void (await this.deps.sessions.note(sessionId, { type: "status", text: "Run note not saved: it held a password the agent was given" }));

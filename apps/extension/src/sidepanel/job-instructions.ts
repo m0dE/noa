@@ -1,6 +1,8 @@
 /**
- * A task's instructions on its job's page, and the way to change them: the first lines (Show all for the rest), Edit
- * (the text becomes a box: Save or Cancel, Ctrl+Enter or Escape); its schedule is changed from the page's "⋯". Saving changes the task's
+ * A task's instructions on its job's page, and the ways to change them: the first lines (Show all for the rest), Talk
+ * about this (the way it is offered first: a new chat with Noa about the job, which tries it out with the user, takes
+ * their feedback and then updates the instructions itself; engine/task-review.ts), and Edit (the text becomes a box:
+ * Save or Cancel, Ctrl+Enter or Escape); its schedule is changed from the page's "⋯". Saving changes the task's
  * waiting row (the next run is given the new words; its series and memory stay), as the user's own words: a task the
  * agent wrote is the user's once they edit it (the patch says so).
  *
@@ -18,7 +20,13 @@ const INSTRUCTIONS_LINES = 3;
 export interface InstructionsDeps {
   /** Saves the task's new instructions (then the page shows them). */
   save(task: JobTask, instructions: string): Promise<void>;
+  /** Starts a chat about the task (Talk about this). Absent: not offered. */
+  talk?(task: JobTask): void;
 }
+
+/** Talk about this: a speech bubble. */
+const TALK_ICON =
+  '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/></svg>';
 
 export interface InstructionsState {
   task: JobTask;
@@ -64,6 +72,13 @@ export function initInstructions(deps: InstructionsDeps): InstructionsView {
     const s = state!;
     const can = editable(s.task);
     const out = h("div.job-instr-actions");
+    if (can !== "no" && deps.talk) {
+      const talk = h("button.small.primary.job-instr-talk", { type: "button", title: "Chat with Noa about this job: try it out, give feedback, and Noa updates the instructions" });
+      talk.innerHTML = TALK_ICON;
+      talk.append("Talk about this");
+      talk.addEventListener("click", () => deps.talk!(s.task));
+      out.append(talk);
+    }
     if (can !== "no") {
       const edit = h(
         "button.small.ghost.job-instr-edit",

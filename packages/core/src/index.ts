@@ -14,7 +14,7 @@ export { OutOfCreditError, plainErrorText, type CreditShortfall } from "./api-er
 /** Keeps passwords the agent was given out of events and logs. */
 export { mapStrings, REDACTED, SecretRedactor } from "./redact.js";
 /** System prompt for either brain, the first user message of a task, and how later messages are framed. */
-export { buildFollowUpMessage, buildSystemPrompt, buildTaskPrompt, FOLLOW_UP_PREFIX, type FollowUpMessage } from "./prompts.js";
+export { buildFollowUpMessage, buildSystemPrompt, buildTaskPrompt, buildTaskReview, FOLLOW_UP_PREFIX, type FollowUpMessage, type TaskReview } from "./prompts.js";
 /** Messages the user sends while a turn runs: delivered at the model's next read, and the turn cannot end before. */
 export { interjectionText, Interjections, type InterjectionRoute } from "./interjections.js";
 export { runWaitFor, WAIT_RETRY_BACKOFF, type WaitEnd } from "./wait.js";

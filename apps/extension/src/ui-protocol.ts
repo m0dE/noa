@@ -17,6 +17,7 @@ import type {
   RepeatSchedule,
   SessionInfo,
   StampedAgentEvent,
+  TaskAbout,
   TraceEvent,
 } from "@noa/shared";
 import type { TraceBook } from "./trace/trace-book.js";
@@ -200,6 +201,8 @@ export type UiRequest =
       cid?: string;
       /** The new chat was started with memory off (its SessionInfo.memoryOff). */
       memoryOff?: true;
+      /** A chat about this scheduled job (Talk about this on its page; SessionInfo.about). */
+      about?: TaskAbout;
     }
   /** Run everything that is due now (local, then cloud if enabled). */
   | { type: "run.due" }

@@ -31,6 +31,7 @@ import { AttachmentStore } from "./engine/attachment-store.js";
 import { LocalStore } from "./engine/local-store.js";
 import { MediaFiles } from "./engine/media-files.js";
 import { Runner, type ResolvedBrain } from "./engine/runner.js";
+import { reviewJob } from "./engine/task-review.js";
 import { MAX_SESSIONS, SessionStore } from "./engine/sessions.js";
 import { TraceStore } from "./engine/trace-store.js";
 import { MEMORY_SEARCH_LIMIT, MemoryService, type MemoryTool } from "./memory/service.js";
@@ -393,6 +394,8 @@ const runner = new Runner({
   titles,
   media: mediaFiles,
   attachments,
+  // A chat about a scheduled job (Talk about this): the job as the TODO list has it now.
+  review: (about) => reviewJob(about, { todo: todoSource, log: logger("review") }),
   resolveBrain: resolveForRun,
   core,
   slots,

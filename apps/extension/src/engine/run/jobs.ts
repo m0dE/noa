@@ -2,7 +2,7 @@
  * Where a run's work comes from: due local tasks, cloud claims, one-off
  * requests ("do this now"), and the next turn of a conversation.
  */
-import { errorMessage, isXTask, SCREEN_HELP_TEXT, type AgentTask, type ClaimResponse, type MediaInfo, type ResultInput, type SessionInfo } from "@noa/shared";
+import { errorMessage, isXTask, SCREEN_HELP_TEXT, type AgentTask, type ClaimResponse, type MediaInfo, type ResultInput, type SessionInfo, type TaskAbout } from "@noa/shared";
 import type { LocalStore } from "../local-store.js";
 import type { StoredLocalTask } from "../local-task-rules.js";
 import type { IncomingAttachment } from "../attachment-store.js";
@@ -42,6 +42,8 @@ export interface AdhocInput {
   context?: string;
   /** The new chat was started with memory off (SessionInfo.memoryOff). */
   memoryOff?: boolean;
+  /** A chat about a scheduled job (SessionInfo.about). */
+  about?: TaskAbout;
 }
 
 export type LocalJob = { source: "local"; task: StoredLocalTask };

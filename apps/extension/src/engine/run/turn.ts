@@ -4,7 +4,7 @@
  * brain's events into the session, and the checks on the result (X post
  * verification, failure classification). Next turns: conversation.ts.
  */
-import { automationPromptLine, bareToolName, effectiveLevel, errorMessage, isXStatusUrl, localTimeZone, traceStart, TURN_WALL_MINUTES, type AgentEvent, type AgentTask, type AttachmentRef, type ExtensionSettings, type RunConfig, type SessionInfo, type Sleep, type TaskRunResult, type TraceCategory, type TraceValue, type UserTab } from "@noa/shared";
+import { automationPromptLine, bareToolName, effectiveLevel, errorMessage, isXStatusUrl, localTimeZone, traceStart, TURN_WALL_MINUTES, type AgentEvent, type AgentTask, type AttachmentRef, type ExtensionSettings, type RunConfig, type SessionInfo, type Sleep, type TaskAbout, type TaskRunResult, type TraceCategory, type TraceValue, type UserTab } from "@noa/shared";
 import type { AgentSlot } from "../../agent-slots.js";
 import { bytesToBase64 } from "../../base64.js";
 import type { AttachmentStore } from "../attachment-store.js";
@@ -19,6 +19,7 @@ import { timeLimitReached, verifySnippet } from "@noa/core";
 import { ABORT_GRACE_MS, ActiveClock, safetyTimeoutMinutes } from "./deadline.js";
 import { mediaSources, type FirstJob } from "./jobs.js";
 import type { MemoryRun, MemoryService } from "../../memory/service.js";
+import type { JobReview } from "../task-review.js";
 
 /** Said in the thread when a conversation's tab could not be used and it moved to a new one. */
 export const MOVED_TAB_STATUS = "That tab cannot be controlled (a browser page) or another run is using it: working in a new tab next to it";
@@ -151,6 +152,8 @@ export interface TurnDeps {
   memory?: Pick<MemoryService, "begin">;
   /** The files sent in chats (absent: none). */
   attachments?: Pick<AttachmentStore, "list">;
+  /** A chat about a scheduled job: the job as it is now, for the agent and for memory (task-review.ts; absent: not told). */
+  review?(about: TaskAbout): Promise<JobReview>;
   /** The post check's waits for X to show the post (tests skip real time). */
   sleep?: Sleep;
   log(message: string): void;
@@ -201,14 +204,21 @@ export class TurnRunner {
     const restricted = !!page && isRestrictedUrl(page.url);
     // Said in the chat only when the request is about that page (the agent is told either way).
     const sayRestricted = restricted && asksAboutThePage(opened.task.instructions, adhoc && !!job.input.screen);
+    // A chat about a scheduled job: the job as it is now (read while the tab is made ready).
+    const reviewReady = adhoc && job.input.about ? this.reviewOf(active, job.input.about) : null;
     // What memory gives the turn is picked while its tab and files are made ready (it may wait on the account's search).
-    // A TODO or cloud task keeps its run notes in memory; a one-off chat has none.
-    const memoryReady = this.memoryFor(active, {
-      ...(adhoc ? {} : { task: { instructions: opened.task.instructions, account: opened.task.account, seriesId: opened.seriesId } }),
+    // A TODO or cloud task keeps its run notes in memory; a one-off chat has none; a chat about a job is given the job's.
+    const memoryRun = (review: JobReview | null): MemoryRun => ({
+      ...(adhoc
+        ? review?.task
+          ? { task: review.task, review: true }
+          : {}
+        : { task: { instructions: opened.task.instructions, account: opened.task.account, seriesId: opened.seriesId } }),
       title: active.session.title,
       request: opened.task.instructions,
       ...(page ? { tabUrl: page.url, tabTitle: page.title } : {}),
     });
+    const memoryReady = reviewReady ? reviewReady.then((r) => this.memoryFor(active, memoryRun(r))) : this.memoryFor(active, memoryRun(null));
     const config = runConfig(settings, opened.isRetry);
     // Meanwhile the agent starts too: its process is ready when the task (with its memory) is.
     brain.prewarm?.(config);
@@ -222,7 +232,10 @@ export class TurnRunner {
       await this.follow(active, origin, picked, restricted, sayRestricted);
     }
     // The agent is told which page the user is looking at (buildTaskPrompt); scheduled and TODO tasks have none.
-    const task: AgentTask = page ? { ...opened.task, userTab: userTabOf(page, picked) } : opened.task;
+    const shown: AgentTask = page ? { ...opened.task, userTab: userTabOf(page, picked) } : opened.task;
+    // A chat about a job: the request comes with the job and how to go over it (the chat shows the user's words alone).
+    const review = reviewReady ? await reviewReady : null;
+    const task: AgentTask = review ? { ...shown, instructions: `${shown.instructions}\n\n${review.text}` } : shown;
     const sources = await mediaSources(job, this.deps.localStore);
     if (sources.length) this.emit(active, { type: "status", text: `Preparing ${sources.length} file(s)` });
     const mediaPaths = await this.materialize(active, sources, cleanups);
@@ -231,6 +244,12 @@ export class TurnRunner {
     const memory = await this.timed(active, "memory.wait", () => memoryReady);
     const run = this.start(active, brain, { task: memory ? { ...task, memory } : task, mediaPaths, attachments, config, settings });
     return this.drive(active, run, settings, cleanups);
+  }
+
+  /** The scheduled job a chat is about, as it is now (timed: review.read); null when nobody can read it here. */
+  reviewOf(active: ActiveSession, about: TaskAbout): Promise<JobReview> | null {
+    const read = this.deps.review;
+    return read ? this.timed(active, "review.read", () => read(about)) : null;
   }
 
   /**

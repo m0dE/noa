@@ -4,7 +4,7 @@
  * not the one the user looks at: that tab, with View to watch the agent there.
  *
  * A task's page puts above its latest run's conversation: how many runs it had and how they went (each count opens
- * the runs list filtered), its instructions with Edit while it is scheduled (job-instructions.ts),
+ * the runs list filtered), its instructions with Talk about this and Edit while it is scheduled (job-instructions.ts),
  * and "Earlier runs (N)", which opens to its runs a page at a time (job-runs-view.ts). A run picked there shows its
  * conversation in the page's place ("‹ Runs" goes back to the list). A task that never ran shows its request and
  * when it will run.
@@ -36,6 +36,8 @@ export interface JobPageDeps {
   /** Resume a stopped conversation (with the note typed in the box, if any). */
   continueNow(sessionId: string): void;
   openSchedule(job: Job, trigger: HTMLElement): void;
+  /** Talk about this: a new chat about the job's task (its title as the page shows it). */
+  talkAbout(task: JobTask, title: string): void;
   /** The details sheet of a task that never ran (its request, its schedule). */
   onTaskDetails(job: Job, trigger: HTMLElement): void;
   onBack(): void;
@@ -114,6 +116,7 @@ export function initJobPage(deps: JobPageDeps): JobPage {
       await uiRequest({ type: "tasks.update", id: task.id, patch: { instructions: text, agentAuthored: false } });
       await data.loadTasks();
     },
+    talk: (task) => deps.talkAbout(task, titleEl.textContent?.trim() || current()?.title || ""),
   });
   const latestHead = h("h2.job-runs-head.latest");
   /** A task's page above its conversation: its counts, its instructions, its earlier runs. */

@@ -21,6 +21,12 @@
  * OK at every automation level but full autonomy (deps.approve, the session's
  * approval gate): it touches something the user set up on purpose.
  *
+ * A chat about a task (Talk about this: SessionInfo.about) ends by saving what
+ * the user and the agent agreed on as the task's instructions: that change
+ * always shows its card (the new words in full), and once the user allows it
+ * there, the words count as the user's (Task.agentAuthored stays off), so the
+ * task's runs do not start waiting for approvals the user never asked for.
+ *
  * Refusals (signed out, a plan without the TODO list) are also written to
  * the conversation as an error, so the chat shows the button that fixes it;
  * the answer's text is what the agent reads and relays.
@@ -70,12 +76,14 @@ export interface TaskSchedulerDeps {
   /** The TODO list's tasks (the account's when signed in). */
   todo(): Promise<TodoSource>;
   access(): Promise<TodoAccess>;
-  sessions: Pick<SessionStore, "note" | "eventsOf">;
+  /** get: which task a chat is about (SessionInfo.about); absent: none is. */
+  sessions: Pick<SessionStore, "note" | "eventsOf"> & Partial<Pick<SessionStore, "get">>;
   /**
    * Waits for the user's OK on a change to a task this chat did not schedule, at the session's automation level
-   * (approval/gate.ts); throws the refusal the agent reads when it is not given. Absent: nothing waits.
+   * (approval/gate.ts); throws the refusal the agent reads when it is not given. Resolves true when the user allowed it
+   * on its card (false or nothing: it did not wait). Absent: nothing waits.
    */
-  approve?(sessionId: string, ask: TodoApprovalAsk): Promise<void>;
+  approve?(sessionId: string, ask: TodoApprovalAsk): Promise<boolean | void>;
   /** The user's IANA time zone, for the schedule in words. Default: this browser's. */
   timeZone?(): string;
   now?(): Date;
@@ -196,9 +204,11 @@ export class TaskScheduler {
     if (args.schedule?.repeat !== undefined) patch.repeat = args.schedule.repeat;
     const { before, after } = await this.withTodo(sessionId, "changed", async (todo) => {
       const before = await this.changeable(todo, args.task_id);
-      // New words from the agent are the agent's, whoever wrote the task (Task.agentAuthored).
-      if (patch.instructions !== undefined && patch.instructions !== before.instructions) patch.agentAuthored = true;
-      await this.approveChange(sessionId, before, "updated", this.previewOf(before, patch, now));
+      const reviewed = await this.isAbout(sessionId, before);
+      const allowed = await this.approveChange(sessionId, before, "updated", this.previewOf(before, patch, now), reviewed);
+      // New words from the agent are the agent's, whoever wrote the task (Task.agentAuthored), unless the user allowed
+      // these very words on the card of a chat about the task (see the top of this file).
+      if (patch.instructions !== undefined && patch.instructions !== before.instructions) patch.agentAuthored = !(reviewed && allowed);
       return { before, after: await todo.update(before.id, patch) };
     });
     const schedule = scheduleOf(after);
@@ -307,20 +317,30 @@ export class TaskScheduler {
     return lines.join("\n");
   }
 
-  /** A change to a task this chat did not schedule waits for the user's OK (see the top of this file). */
-  private async approveChange(sessionId: string, task: LocalTask, change: TodoChange, text?: string): Promise<void> {
-    if (!this.deps.approve) return;
+  /** Whether conversation `sessionId` is a chat about `task` (Talk about this on its job's page). */
+  private async isAbout(sessionId: string, task: LocalTask): Promise<boolean> {
+    const about = (await this.deps.sessions.get?.(sessionId))?.about;
+    return !!about && (task.id === about.taskId || (task.seriesId ?? task.id) === about.seriesId);
+  }
+
+  /**
+   * A change to a task this chat did not schedule waits for the user's OK, and so does saving a chat's review of its
+   * task (`reviewed`; see the top of this file). True: the user allowed it on its card.
+   */
+  private async approveChange(sessionId: string, task: LocalTask, change: TodoChange, text?: string, reviewed = false): Promise<boolean> {
+    if (!this.deps.approve) return false;
     const events = await this.deps.sessions.eventsOf(sessionId);
     const ours = events.some((e) => e.type === "task_scheduled" && e.taskId === task.id) && !events.some((e) => e.type === "task_unscheduled" && e.taskId === task.id);
-    if (ours) return;
+    if (ours && !reviewed) return false;
     const title = quote(titleOf(task.instructions));
+    const update = reviewed ? { action: `Save the new instructions of ${title}`, why: "updates this scheduled job with what you agreed on here" } : { action: `Change the scheduled job ${title}`, why: "changes one of your scheduled jobs" };
     try {
-      await this.deps.approve(sessionId, {
-        action: change === "cancelled" ? `Cancel the scheduled job ${title}` : `Change the scheduled job ${title}`,
+      const allowed = await this.deps.approve(sessionId, {
+        ...(change === "cancelled" ? { action: `Cancel the scheduled job ${title}`, why: "cancels one of your scheduled jobs" } : update),
         site: "",
-        why: change === "cancelled" ? "cancels one of your scheduled jobs" : "changes one of your scheduled jobs",
         ...(text ? { text } : {}),
       });
+      return allowed === true;
     } catch (err) {
       // Not approved: the gate's words (do not retry) are the agent's answer as they are.
       throw new TodoRefusal(errorMessage(err));

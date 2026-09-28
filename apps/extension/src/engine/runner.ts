@@ -36,7 +36,7 @@ import { turnJob, withContext, type AdhocInput, type FirstJob, type RunnerApi, t
 import { Lifecycle, type RunBrain } from "./run/lifecycle.js";
 import { ResultRecorder } from "./run/record.js";
 import { KeepAlive, RunnerStateStore, type RunnerState } from "./run/state.js";
-import { TurnRunner, type ActiveSession, type TabPage } from "./run/turn.js";
+import { TurnRunner, type ActiveSession, type TabPage, type TurnDeps } from "./run/turn.js";
 import type { GateContext } from "../approval/gate.js";
 import type { MemoryService } from "../memory/service.js";
 import type { EpisodeWriter } from "../memory/episodes.js";
@@ -77,6 +77,8 @@ export interface RunnerDeps {
   /** Chat titles: the model names a chat after its turns (chat-titles.ts). */
   titles?: Pick<ChatTitler, "ended">;
   media: { materialize(sessionId: string, sources: MediaSource[]): Promise<MaterializedMedia> };
+  /** A chat about a scheduled job: the job as it is now, for the agent and for memory (TurnDeps.review). */
+  review?: TurnDeps["review"];
   /** Where the files sent in chats are kept (absent: messages with files are refused). */
   attachments?: Pick<AttachmentStore, "add" | "list">;
   /** Resolves the brain for these settings; may (re)connect the helper. */
@@ -136,6 +138,7 @@ export class Runner {
       ...(deps.pageOf ? { pageOf: deps.pageOf } : {}),
       ...(deps.memory ? { memory: deps.memory } : {}),
       ...(deps.attachments ? { attachments: deps.attachments } : {}),
+      ...(deps.review ? { review: deps.review } : {}),
     });
     const recorder = new ResultRecorder({
       ...(deps.memory ? { memory: deps.memory } : {}),

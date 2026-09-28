@@ -12,6 +12,8 @@ import { isContinuable, SessionEndedError, type Brain } from "../brains.js";
 import type { LocalStore } from "../local-store.js";
 import { mediaSources, withContext, type TurnJob } from "./jobs.js";
 import { asksAboutThePage, isRestrictedUrl } from "../../restricted.js";
+import type { MemoryRun } from "../../memory/service.js";
+import type { JobReview } from "../task-review.js";
 import { approvalsLine, runConfig, userTabOf, type ActiveSession, type Cleanup, type TurnRunner } from "./turn.js";
 
 /** The message "Continue" sends when the user adds no note. */
@@ -55,17 +57,22 @@ export async function runNextTurn(
   const tab = await turns.tabOf(sessionId);
   // What the conversation's tab shows now. It may be a page Chrome keeps extensions out of: the turn goes on in a tab next to it.
   const page = tab === null ? null : await turns.pageOf(tab);
+  // A chat about a scheduled job: the job as it is now (a fresh agent session is told it again; memory is the job's).
+  const reviewReady = from.about ? turns.reviewOf(active, from.about) : null;
   // The conversation's own task (a TODO or cloud task) keeps its run notes in memory; a chat has none.
-  const memoryRun = {
-    ...(from.source === "adhoc" ? {} : { task: job.first }),
+  const memoryRunOf = (review: JobReview | null): MemoryRun => ({
+    ...(from.source === "adhoc" ? (review?.task ? { task: review.task, review: true } : {}) : { task: job.first }),
     title: from.title,
     request: job.text,
     ...(page ? { tabUrl: page.url, tabTitle: page.title } : {}),
-  };
+  });
+  const memoryWith = (r: JobReview | null, continued: boolean) => turns.memoryFor(active, continued ? { ...memoryRunOf(r), continued: true } : memoryRunOf(r));
+  // Started at once (with the tab made ready), or once the job is read.
+  const memoryFor = (continued: boolean) => (reviewReady ? reviewReady.then((r) => memoryWith(r, continued)) : memoryWith(null, continued));
   const sameSession = from.brain === brain.kind && isContinuable(brain) && brain.isOpen?.(sessionId) !== false;
   // Picked while the tab is made ready. The same agent session already has what earlier turns were given: only what
   // is new comes with this message.
-  const memoryReady = turns.memoryFor(active, sameSession ? { ...memoryRun, continued: true } : memoryRun);
+  const memoryReady = memoryFor(sameSession);
   // A fresh agent session starts meanwhile: its process is ready when the task (with its memory) is.
   if (!sameSession) brain.prewarm?.(runConfig(settings, from.outcome !== "done"));
   let userTab: UserTab | undefined;
@@ -106,12 +113,14 @@ export async function runNextTurn(
   turns.emit(active, { type: "status", text: FRESH_SESSION_STATUS });
   // Nothing echoes the message in a fresh session.
   active.said = [];
-  // The tab goes with the task (buildTaskPrompt), not inside the summary's quoted message.
-  const instructions = buildFollowUpInstructions({ instructions: job.first.instructions, account: job.first.account, session: from, events, text: buildFollowUpMessage(message) });
+  // The tab goes with the task (buildTaskPrompt), not inside the summary's quoted message; a job's chat tells the job again.
+  const review = reviewReady ? await reviewReady : null;
+  const told = review ? { ...message, text: `${message.text}\n\n${review.text}` } : message;
+  const instructions = buildFollowUpInstructions({ instructions: job.first.instructions, account: job.first.account, session: from, events, text: buildFollowUpMessage(told) });
   const sources = job.task ? await mediaSources({ source: "local", task: job.task }, localStore) : [];
   const mediaPaths = await turns.materialize(active, sources, cleanups);
   // A fresh session is given what applies anew (when the open session turned out gone, picked again as a fresh one).
-  const fresh = sameSession ? await turns.memoryFor(active, memoryRun) : await turns.timed(active, "memory.wait", () => memoryReady);
+  const fresh = sameSession ? await memoryFor(false) : await turns.timed(active, "memory.wait", () => memoryReady);
   const task: AgentTask = { id: job.task?.id ?? sessionId, instructions, account: job.first.account, ...(userTab ? { userTab } : {}), ...(fresh ? { memory: fresh } : {}) };
   // After a stop, the agent first checks whether the work was already done.
   const seen = await turns.forFreshSession(brain, attachments);

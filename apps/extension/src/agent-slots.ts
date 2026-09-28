@@ -211,12 +211,13 @@ export class AgentSlots implements SlotPool {
   /**
    * The user's OK for a change a session's agent makes outside the page (a TODO task changed or cancelled), at
    * its automation level, through its slot's gate ("Allow for this task" and the turn's clock are the slot's).
-   * Without approvals nothing waits. A session without a slot (its turn ended) is refused.
+   * Without approvals nothing waits. A session without a slot (its turn ended) is refused. True: the user allowed it on
+   * its card.
    */
-  async confirm(sessionId: string, request: Omit<ApprovalRequest, "id" | "expiresAt">): Promise<void> {
+  async confirm(sessionId: string, request: Omit<ApprovalRequest, "id" | "expiresAt">): Promise<boolean> {
     const slot = this.slotUsedBy(sessionId);
     if (!slot) throw new Error("This task session has no turn running right now (its turn has ended), so nothing was changed. Stop and wait for the user's next message.");
-    await slot.gate?.confirm(sessionId, request);
+    return (await slot.gate?.confirm(sessionId, request)) ?? false;
   }
 
   /** The slot a session uses right now, if any. */

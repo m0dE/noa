@@ -164,6 +164,15 @@ export type BrainKind = "claude-code" | "claude-api" | "scripted" | "noa";
  * follow-up starts with its user_message). startedAt/endedAt, outcome,
  * summary, url, reason and suggestion describe the latest turn.
  */
+/**
+ * A chat about one scheduled job ("Talk about this" on its page): the job's waiting row when the chat started, and its
+ * series (a repeat's next row has a new id; the series stays).
+ */
+export interface TaskAbout {
+  taskId: string;
+  seriesId: string;
+}
+
 export interface SessionInfo {
   sessionId: string;
   source: TaskSource;
@@ -207,6 +216,11 @@ export interface SessionInfo {
   logPath?: string;
   /** The user turned memory off for this conversation: the agent is given none and saves none in it. */
   memoryOff?: true;
+  /**
+   * A chat about a scheduled job (Talk about this): every turn's agent is told the job as it is now and how to go over
+   * it with the user (dry runs, their feedback, then its instructions updated). Not one of the job's runs.
+   */
+  about?: TaskAbout;
   /** Who wrote `title` (chat-title.ts): the title model, or the user (never replaced). Absent: the first request, cleaned. */
   titleBy?: TitleBy;
   /** The turn after which the title model wrote `title`. */

@@ -28,7 +28,7 @@ import { Dismisser, dismissalOf, undoText } from "./job-dismiss.js";
 import { initJobList } from "./job-list.js";
 import { forgetOldTabs, JobNav, storedView, storeView, viewAnnouncement } from "./job-nav.js";
 import { initJobPage } from "./job-page.js";
-import { chatKey, seriesOf, taskKey, type Job } from "./jobs.js";
+import { chatKey, seriesOf, taskKey, type Job, type JobTask } from "./jobs.js";
 import { initMemoryAsk } from "./memory-ask.js";
 import { initMigrateOffer } from "./migrate-offer.js";
 import { openSettings } from "./open-settings.js";
@@ -124,6 +124,24 @@ function startedHere(sessionId: string): void {
   }
   ownSeen = sessionId;
   showJob(keyOfSession(sessionId));
+}
+
+/**
+ * Talk about this on a job's page: a new chat about the job (SessionInfo.about), started from this tab like one typed
+ * in the box; its page shows at once, and the agent opens with a trial run to go over with the user.
+ */
+async function talkAbout(task: JobTask, title: string): Promise<void> {
+  try {
+    const { sessionId } = await uiRequest({
+      type: "run.adhoc",
+      instructions: title ? `Let's talk about my scheduled job "${title}"` : "Let's talk about this scheduled job",
+      about: { taskId: task.id, seriesId: seriesOf(task) },
+      ...(activeTab === null ? {} : { tabId: activeTab }),
+    });
+    startedHere(sessionId);
+  } catch (err) {
+    composer.showError(err);
+  }
 }
 
 /**
@@ -426,6 +444,7 @@ const page = initJobPage({
         if (created) showJob(taskKey(seriesOf(task)));
       },
     }),
+  talkAbout: (task, title) => void talkAbout(task, title),
   onTaskDetails: (job, trigger) => job.task && void showDetails({ task: job.task, listSource: data.source }, trigger),
   onBack: back,
   onDeleted: back,
