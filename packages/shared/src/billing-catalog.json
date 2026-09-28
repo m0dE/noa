@@ -1,0 +1,33 @@
+{
+  "$comment": "The one plan table and Stripe contract (decided by the owner; docs/BILLING-CONTRACT.md). Plain JSON so the API, dashboard, extension (via billing.ts) and scripts/setup-stripe.mjs all read the same values.",
+  "plans": {
+    "free": { "id": "free", "name": "Free", "priceCents": 0, "creditCents": 0, "apiKeys": false, "voice": false, "todo": false },
+    "starter": { "id": "starter", "name": "Starter", "priceCents": 999, "creditCents": 500, "apiKeys": true, "voice": false, "todo": true },
+    "plus": { "id": "plus", "name": "Plus", "priceCents": 2999, "creditCents": 2000, "apiKeys": true, "voice": true, "todo": true },
+    "pro": { "id": "pro", "name": "Pro", "priceCents": 19999, "creditCents": 19999, "apiKeys": true, "voice": true, "todo": true }
+  },
+  "topupAmountsCents": [1000, 2500, 5000],
+  "features": {
+    "$comment": "How each plan feature reads: name inside a sentence, has as a plan card line. Order = the order plan descriptions list them.",
+    "todo": { "name": "TODO list", "has": "Cloud TODO list with scheduled runs" },
+    "voice": { "name": "voice input", "has": "Voice input in the side panel" },
+    "apiKeys": { "name": "API access", "has": "API access to add TODO tasks" }
+  },
+  "stripe": {
+    "$comment": "apiVersion: the Stripe-Version the server calls with and its webhook endpoint is pinned to. webhookEvents: the events apps/api/src/webhooks.ts handles.",
+    "apiVersion": "2026-08-26.dahlia",
+    "webhookEvents": [
+      "checkout.session.completed",
+      "checkout.session.async_payment_succeeded",
+      "customer.subscription.created",
+      "customer.subscription.updated",
+      "customer.subscription.deleted",
+      "invoice.paid",
+      "invoice.payment_failed",
+      "refund.created",
+      "refund.failed",
+      "charge.dispute.created",
+      "charge.dispute.closed"
+    ]
+  }
+}

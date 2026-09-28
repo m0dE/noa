@@ -1,0 +1,119 @@
+/* Hands-free voice, live: the status strip under the header (voice-bar.ts), the voice controls in the composer row, and
+   the box while it listens for this tab (voice-input.ts), in one "live" colour distinct from the accent, like a
+   recording light. The strip only tells; every control is at the bottom. --level (0..1, on the body) is the
+   microphone's level. Reduced motion: nothing pulses; the meter and the rings stand still. Muted, the strip and the
+   mic turn a quiet grey (--mic-off) and stop pulsing. */
+:root {
+  --live: #c8233f;
+  --live-deep: #a3162f;
+  --on-live: #ffffff;
+  --mic-off: #5f6368;
+  --mic-off-deep: #45484c;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --live: #c42a44;
+    --live-deep: #8f1a2f;
+    --on-live: #ffffff;
+    --mic-off: #55595e;
+    --mic-off-deep: #36393c;
+  }
+}
+
+/* The strip: one line, full width under the header, above the orb's veil; the chat scrolls under it. */
+.voice-bar {
+  position: relative; z-index: var(--z-above-veil); flex: none;
+  display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 2px; min-height: 26px;
+  padding: 4px 12px; background: var(--live); color: var(--on-live);
+  font-size: var(--text-sm); line-height: 18px;
+}
+/* On another tab: the same strip, striped, since it listens for a tab not shown. */
+.voice-bar[data-state="elsewhere"] {
+  background: repeating-linear-gradient(135deg, transparent 0 9px, rgb(0 0 0 / 0.1) 9px 18px), var(--live);
+}
+/* Muted: the same strip in grey; everything in it follows the live colour, so it all turns with it. */
+.voice-bar[data-muted] { --live: var(--mic-off); --live-deep: var(--mic-off-deep); }
+
+/* The recording light: a dot, breathing while the microphone is live. */
+.vb-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--on-live); }
+.voice-bar:is([data-state="listening"], [data-state="hearing"], [data-state="working"], [data-state="sending"]) .vb-dot { animation: vb-breathe 1.8s ease-in-out infinite; }
+.voice-bar:is([data-state="starting"], [data-state="reconnecting"], [data-state="muted"]) .vb-dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--on-live); }
+@keyframes vb-breathe { 50% { opacity: 0.35; } }
+
+/* The words take the room left on the line (the tab's name gives way first, cut short); on another tab they keep their
+   width, so Go to tab and Use voice here wrap to a second line when the panel is narrow. */
+.vb-text { flex: 1 1 0; min-width: 0; display: flex; align-items: baseline; gap: 8px; white-space: nowrap; overflow: hidden; }
+.voice-bar[data-state="elsewhere"] .vb-text { flex-basis: auto; }
+.vb-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 650; }
+.vb-status { flex: none; opacity: 0.92; }
+.vb-links { flex: none; margin-left: auto; display: flex; gap: 12px; }
+.voice-bar button.link { color: var(--on-live); font-size: var(--text-sm); line-height: 18px; text-decoration: underline; text-underline-offset: 2px; }
+.voice-bar button.link:hover { text-decoration-thickness: 2px; }
+.voice-bar button:focus-visible { outline: 2px solid var(--on-live); outline-offset: 2px; }
+.vb-time { flex: none; font-variant-numeric: tabular-nums; opacity: 0.92; }
+
+/* The meter: three small bars that follow the voice. */
+.vb-meter { flex: none; display: flex; align-items: center; gap: 2px; height: 12px; }
+.vb-meter i {
+  width: 2px; border-radius: 1px; background: currentColor; opacity: 0.9;
+  height: calc(3px + var(--level, 0) * var(--k, 1) * 9px);
+  transition: height 80ms linear;
+}
+
+/* The Voice button while a session is on (pressed; it ends voice mode): filled in the live colour, a ring breathing out
+   of it and one following the voice (off, it stays an outline). */
+.now-bar .voice-mic[data-state="handsfree"],
+.now-bar .voice-mic[data-state="handsfree"]:hover { color: var(--on-live); background: var(--live); border-color: var(--live); filter: none; }
+.voice-mic[data-state="handsfree"]::after { border-color: color-mix(in srgb, var(--live) 60%, transparent); }
+.voice-mic::before {
+  content: ""; position: absolute; inset: 0; border-radius: var(--radius); pointer-events: none;
+  border: 2px solid var(--live); opacity: 0;
+}
+.voice-mic[data-state="handsfree"]::before { animation: vb-mic-ring 1.8s ease-out infinite; }
+@keyframes vb-mic-ring { from { transform: scale(1); opacity: 0.6; } to { transform: scale(1.45); opacity: 0; } }
+/* Muted: the mic and the orb in grey, the mic still (the session is on, the microphone is not). */
+.voice-mic[data-muted], .voice-orb[data-muted] { --live: var(--mic-off); }
+.voice-mic[data-state="handsfree"][data-muted]::before { animation: none; opacity: 0; }
+/* The muted orb rests (the core still breathes while a line is said: the narrator is heard). */
+.voice-orb[data-muted] .voice-orb-halo { animation: none; opacity: 0.7; }
+
+/* Mute / Unmute (words, a toggle, pressed while muted) and Interrupt (while a line is said), left of Voice: quiet
+   tools; Mute filled in the muted grey once pressed. */
+.now-bar .voice-interrupt { padding: 0; border: 0; background: none; }
+.now-bar .voice-mute {
+  flex: none; height: 28px; padding: 0 8px; font-size: var(--text-sm); font-weight: 500; white-space: nowrap;
+  color: var(--muted); background: none;
+}
+.now-bar .voice-mute:hover { color: var(--text); background: var(--hover); }
+.now-bar .voice-mute[aria-pressed="true"], .now-bar .voice-mute[aria-pressed="true"]:hover { color: var(--on-live); background: var(--mic-off); border-color: var(--mic-off); }
+.now-bar .voice-interrupt { color: var(--live); }
+.now-bar .voice-interrupt:hover { color: var(--live-deep); background: color-mix(in srgb, var(--live) 12%, transparent); }
+.voice-mute[hidden], .voice-interrupt[hidden] { display: none; }
+
+/* The orb (before anything was sent) in the same live colour, so the page reads as one live session. */
+.voice-orb-halo {
+  background: radial-gradient(circle, color-mix(in srgb, var(--live) 26%, transparent) 0%, color-mix(in srgb, var(--live) 8%, transparent) 55%, transparent 72%);
+}
+.voice-orb-core {
+  background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--live) 45%, #fff) 0%, var(--live) 72%);
+  box-shadow: 0 6px 24px color-mix(in srgb, var(--live) 35%, transparent);
+}
+
+/* The box while it listens for this tab: a soft live glow ("Listening… just talk"). */
+body.voice-live .now {
+  border-color: color-mix(in srgb, var(--live) 65%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 14%, transparent), 0 4px 18px color-mix(in srgb, var(--live) 16%, transparent);
+  animation: vb-glow 2.6s ease-in-out infinite;
+}
+body.voice-live .now:focus-within { border-color: var(--live); }
+body.voice-live .now textarea::placeholder { color: color-mix(in srgb, var(--live) 70%, var(--muted)); }
+@keyframes vb-glow {
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--live) 22%, transparent), 0 4px 22px color-mix(in srgb, var(--live) 24%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-bar .vb-dot, .voice-mic::before, body.voice-live .now { animation: none !important; }
+  /* Still indicators: a steady ring on the mic, a fixed meter. */
+  .voice-mic[data-state="handsfree"]:not([data-muted])::before { opacity: 0.5; transform: scale(1.18); }
+  .vb-meter i { transition: none; height: calc(4px + var(--k, 1) * 5px); }
+}

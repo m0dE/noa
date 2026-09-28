@@ -1,0 +1,68 @@
+{
+  "manifest_version": 3,
+  "name": "Noa",
+  "version": "0.2.0",
+  "description": "Works through your todo list in this Chrome with an AI agent: Claude (API or local Claude Code), optionally sped up by Jev.",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "debugger",
+    "nativeMessaging",
+    "alarms",
+    "storage",
+    "notifications",
+    "tabs",
+    "sidePanel",
+    "downloads",
+    "downloads.ui",
+    "unlimitedStorage",
+    "tabGroups",
+    "scripting",
+    "identity"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_title": "Noa",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqM8xAR5xpYOP6l8j5o1aMFpGfXp1rHXZJbOvQ1bdf2VnGSCI58yvHW0dBrUJxtVe3KUynWqzkYq32WlMNTLi58xYR3uzxLdQamP95BNJAnZLOggBUIFoje3EPHIKu1MnjKBIffE04UJHQEPCRj/4XAX5Bl6VmpUmLcz8yfHEkuuUpsweBQoRY1AKnN6DzzWG4k3BQN2iwH6oCd35K4eLHcQ7tckn+3KiU14p+bHLM1WiNqIDLmpJLiRty1JFBrAKJFh9tJMNZFNbbb2dgMrbCoe5qoMHgBGF+e1AdkE/EiV0fwe5M2qy2L2PrCNh18LMSXeid9kA+nT9OplclE04gwIDAQAB",
+  "commands": {
+    "open-chat": {
+      "suggested_key": {
+        "default": "Ctrl+Period",
+        "mac": "Command+Period"
+      },
+      "description": "Open Noa in the side panel and focus the chat input"
+    },
+    "voice": {
+      "suggested_key": {
+        "default": "Ctrl+Comma",
+        "mac": "MacCtrl+Comma"
+      },
+      "description": "Talk to Noa hands-free in the side panel; press again to stop"
+    }
+  }
+}

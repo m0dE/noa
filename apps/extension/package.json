@@ -1,0 +1,24 @@
+{
+  "name": "@noa/extension",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p .",
+    "smoke": "node test/smoke.e2e.mjs",
+    "gen-key": "node scripts/gen-key.mjs"
+  },
+  "dependencies": {
+    "@noa/core": "workspace:*",
+    "@noa/shared": "workspace:*",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.3.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  }
+}

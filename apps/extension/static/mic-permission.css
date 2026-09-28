@@ -1,0 +1,35 @@
+/* The microphone permission page (mic-permission.html). Colours come from ui.css. */
+body {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+}
+.mic-card {
+  width: 100%;
+  max-width: 420px;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 32px 28px 28px;
+}
+.mic-badge {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 16px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+body[data-state="granted"] .mic-badge { color: var(--ok); background: var(--ok-soft); }
+body[data-state="denied"] .mic-badge,
+body[data-state="no-mic"] .mic-badge,
+body[data-state="failed"] .mic-badge { color: var(--warn); background: var(--warn-soft); }
+h1 { font-size: 18px; }
+.mic-body { margin: 10px 0 0; color: var(--muted); font-size: var(--text-lg); line-height: 1.55; }
+.mic-actions { display: flex; gap: 8px; justify-content: center; margin-top: 20px; }
+.mic-actions:not(:has(button:not([hidden]))) { display: none; }
+.mic-actions button { padding: 7px 16px; font-size: var(--text-md); }

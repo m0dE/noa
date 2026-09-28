@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Noa</title>
+    <link rel="stylesheet" href="ui.css" />
+    <link rel="stylesheet" href="sidepanel.css" />
+    <link rel="stylesheet" href="voice.css" />
+  </head>
+  <body class="panel">
+    <header class="top">
+      <!-- Over the jobs list: the name and the account avatar with its menu (ui/account-menu.ts, built by header.ts). -->
+      <div id="list-head" class="head">
+        <h1 id="brand" class="brand">Noa</h1>
+        <span class="spacer"></span>
+        <span id="acct-slot" class="acct-slot"></span>
+      </div>
+      <!-- Over a job's page (job-page.ts): back to the list, the job's title and where it is, and its actions. -->
+      <div id="job-head" class="head job-head" hidden>
+        <button id="job-back" type="button" class="icon job-back" title="Back to jobs" aria-label="Back to jobs">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>
+        </button>
+        <div class="job-heading">
+          <h1 id="job-title" class="job-title" tabindex="-1"></h1>
+          <p id="job-sub" class="job-sub"></p>
+        </div>
+        <details id="job-menu" class="menu job-menu">
+          <summary title="Job actions" aria-label="Job actions">⋯</summary>
+          <div id="job-menu-pop" class="menu-pop" role="menu" aria-label="Job actions"></div>
+        </details>
+      </div>
+      <!-- Only while something stops jobs for the whole account (no AI, out of credit, a plan without TODO), with the button that fixes it (header.ts). -->
+      <div id="status" class="status" data-tone="muted" role="status" hidden>
+        <span class="dot" aria-hidden="true"></span>
+        <span id="status-text" class="status-text">Connecting…</span>
+        <button id="status-action" type="button" class="link" hidden></button>
+      </div>
+      <!-- Shown while Settings > Permission is "Full autonomy" (autonomy-warning.ts). -->
+      <p id="autonomy-warning" class="autonomy-warning" role="status" hidden>
+        <span><span id="autonomy-warning-text"></span> <button id="autonomy-warning-change" type="button" class="link">(change)</button></span>
+        <button id="autonomy-warning-close" type="button" class="autonomy-close" aria-label="Hide this notice" title="Hide (it comes back when Full autonomy is turned on again)">✕</button>
+      </p>
+    </header>
+    <!-- While hands-free voice is on: a one-line status strip under the header (voice-bar.ts fills it); its controls are in the composer. -->
+    <div id="voice-bar" class="voice-bar" role="region" aria-label="Voice status" hidden></div>
+    <!-- Where the panel went (the list, a job), for screen readers. -->
+    <p id="view-announce" class="sr-only" aria-live="polite"></p>
+
+    <main>
+      <!-- The jobs list (job-list.ts): every chat, task and run, by what it needs. -->
+      <section id="view-list" class="view list-view scroll" aria-labelledby="brand">
+        <!-- The view (Home | Scheduled) and the search of that view, on one line (job-list.ts). -->
+        <div class="list-bar">
+          <div id="job-views" class="seg" role="tablist" aria-label="Jobs view">
+            <button id="view-home" type="button" role="tab" data-view="home" aria-selected="true" aria-controls="job-groups">Home</button>
+            <button id="view-scheduled" type="button" role="tab" data-view="scheduled" aria-selected="false" aria-controls="job-groups" tabindex="-1">Scheduled</button>
+          </div>
+          <div class="list-search">
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg>
+            <input id="job-search" type="search" placeholder="Search jobs" aria-label="Search jobs" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
+        <!-- First sign-in with tasks saved in this browser (migrate-offer.ts). -->
+        <div id="migrate" class="card list-note" hidden>
+          <p id="migrate-text" class="migrate-text"></p>
+          <p id="migrate-msg" class="msg"></p>
+          <div class="row end">
+            <button id="migrate-later" type="button" class="ghost small">Not now</button>
+            <button id="migrate-go" type="button" class="primary small">Move tasks</button>
+          </div>
+        </div>
+        <!-- Signed in to another account than this computer's memory was synced with (memory-ask.ts). -->
+        <div id="memory-ask" class="card list-note" hidden>
+          <p id="memory-ask-text" class="migrate-text"></p>
+          <p id="memory-ask-hint" class="migrate-hint"></p>
+          <p id="memory-ask-msg" class="msg"></p>
+          <div class="row end">
+            <button id="memory-ask-keep" type="button" class="ghost small">Keep separate</button>
+            <button id="memory-ask-add" type="button" class="primary small">Add</button>
+          </div>
+        </div>
+        <div id="job-groups" class="job-groups" role="tabpanel" aria-labelledby="view-home"></div>
+      </section>
+
+      <!-- A job's page (job-page.ts): its conversation, live (chat.ts), and its earlier runs above it. -->
+      <section id="view-job" class="view job-view" aria-labelledby="job-title" hidden>
+        <!-- The agent's tab while the user is not on it (job-page.ts): its title and site, and View to watch it there. -->
+        <div id="job-agent-tab" class="job-agent-tab" role="group" aria-label="The agent's tab" hidden></div>
+        <p id="job-agent-tab-said" class="sr-only" role="status"></p>
+        <div id="chat-log" class="log scroll" aria-live="polite"></div>
+        <!-- Raw: the conversation with its timings (raw-view.ts), in place of the log while open. -->
+        <div id="chat-raw" class="raw" role="region" aria-label="Raw conversation with timings" hidden></div>
+      </section>
+    </main>
+
+    <!-- One input under both views: starts a new job from the list, goes on with the job shown on its page. -->
+    <footer id="composer" class="composer">
+      <!-- Above the box, in the layout (a notice pushes the chat up, never covers the box): one notice at a time
+           (notices.ts). -->
+      <div id="now-notices" class="notices">
+        <div id="now-notice" class="notice" role="status" aria-live="polite" hidden></div>
+      </div>
+      <form id="now-form" class="now">
+        <ul id="now-files-list" class="att-chips" hidden></ul>
+        <!-- The agent's follow-up suggestion shows faded under the (transparent) box, laid out exactly like the typed text (suggestion.ts). -->
+        <div class="now-field">
+          <div id="now-ghost" class="now-ghost" aria-hidden="true" hidden><span class="now-ghost-typed"></span><wbr><span class="now-ghost-rest"></span><kbd class="now-ghost-key">Tab</kbd></div>
+          <textarea id="now-text" rows="1" placeholder="Start a new job…" aria-label="Task to do now"></textarea>
+        </div>
+        <span id="now-suggestion" class="sr-only"></span>
+        <div class="now-bar">
+          <label id="now-attach" class="now-tool" title="Attach files (or paste or drop them here): pictures, PDFs, documents" aria-label="Attach files" role="button" tabindex="0">
+            <input id="now-files" type="file" multiple hidden />
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 7.5 8 13a3.5 3.5 0 0 1-5-5l5.8-5.8a2.3 2.3 0 0 1 3.3 3.3L6.3 11.3a1.2 1.2 0 0 1-1.7-1.7L10 4.2"/></svg>
+          </label>
+          <div class="model-pick">
+            <button id="now-model" type="button" class="now-model" aria-haspopup="menu" aria-expanded="false" aria-controls="model-menu">
+              <span id="now-model-label" class="now-model-label">Model</span>
+              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m4.5 6.5 3.5 3.5 3.5-3.5"/></svg>
+            </button>
+            <div id="model-menu" class="model-menu" role="menu" aria-labelledby="now-model" hidden></div>
+          </div>
+          <!-- Shows while memory is off in this chat (chat-memory.ts); a click turns it back on. -->
+          <button id="now-memory-off" type="button" class="now-tool now-memory-off" title="Memory is off in this chat. Click to turn it on." aria-label="Memory is off in this chat. Turn it on" hidden>
+            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"><path d="M4.5 2.25h7v11.5L8 11.2l-3.5 2.55z"/><path d="M2.5 2.5l11 11"/></svg>
+          </button>
+          <span class="spacer"></span>
+          <!-- Stops the task this chat runs (a square): voice is ended by the mic, not here. -->
+          <button id="now-stop" type="button" class="danger small" title="Stop the task" hidden><svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true" fill="currentColor"><rect x="2.5" y="2.5" width="11" height="11" rx="2"/></svg>Stop</button>
+          <!-- Controls that go with sending (e.g. a voice toggle) mount here, right left of Send: ComposerView.actionSlot. -->
+          <span id="now-actions" class="now-actions"></span>
+          <button id="now-submit" type="submit" class="primary small">Send</button>
+        </div>
+      </form>
+    </footer>
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>

@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Noa settings</title>
+    <link rel="stylesheet" href="ui.css" />
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <div class="page">
+      <!-- The page's title, and the account avatar with its menu (options.ts). -->
+      <header class="head">
+        <img class="brand" src="icons/icon48.png" alt="" width="40" height="40" />
+        <div class="head-text">
+          <h1>Noa extension settings</h1>
+          <p class="head-sub">Choose how Noa runs your tasks. Changes save as you make them.</p>
+        </div>
+        <span id="head-acct"></span>
+      </header>
+
+      <div class="layout">
+      <!-- The sections (sidebar.ts): a column at the left; a sideways-scrolling row on a narrow page. -->
+      <div class="side">
+        <div id="sections" class="side-list" role="tablist" aria-orientation="vertical" aria-label="Settings sections"></div>
+      </div>
+
+      <form id="form" class="content" autocomplete="off" novalidate>
+        <!-- Account -->
+        <section class="panel" id="panel-account" role="tabpanel" aria-labelledby="tab-account" tabindex="-1">
+          <div class="group" id="account-card">
+            <div id="acct-out" class="acct-block">
+              <div class="box pad">
+                <p class="hint">Log in with Google to use Noa AI without setting up Claude or Jev. With a paid plan, your scheduled jobs are kept in your account and run on schedule.</p>
+                <div class="row">
+                  <button id="acct-signin" type="button" class="primary">Log in with Google</button>
+                  <span id="acct-signin-msg" class="msg"></span>
+                </div>
+              </div>
+            </div>
+            <div id="acct-in" class="acct-block" hidden>
+              <div class="box">
+                <div class="srow acct-user-row">
+                  <div class="acct-user">
+                    <img id="acct-pic" alt="" referrerpolicy="no-referrer" hidden />
+                    <span id="acct-letter" class="acct-letter" aria-hidden="true"></span>
+                    <div class="acct-names">
+                      <b id="acct-name"></b>
+                      <span id="acct-mail" class="muted"></span>
+                    </div>
+                  </div>
+                  <button id="acct-signout" type="button" class="small" hidden>Sign out</button>
+                </div>
+              </div>
+
+              <h3 class="group-title" id="h-plan">Plan and credit</h3>
+              <div class="box" id="plan-box">
+                <div class="acct-facts">
+                  <div class="fact"><span>Plan</span><b id="acct-plan"></b><small id="acct-plan-status"></small><small id="acct-plan-includes"></small></div>
+                  <div class="fact" id="credit-fact"><span>Usage credit</span><b id="acct-credit"></b><small id="acct-credit-detail"></small></div>
+                </div>
+                <div class="box-body">
+                  <p id="acct-note" class="note" hidden></p>
+                  <div id="acct-billing" class="acct-billing">
+                    <button id="acct-billing-open" type="button" class="primary billing-open">Choose a plan</button>
+                    <p class="hint">Plans, top-ups and invoices are on your Noa dashboard.</p>
+                  </div>
+                  <div class="row">
+                    <button id="acct-dashboard" type="button" class="small link">Usage on the dashboard</button>
+                    <span class="spacer"></span>
+                    <button id="acct-reload" type="button" class="small ghost" title="Load plan and credit again">Refresh</button>
+                  </div>
+                  <p id="acct-msg" class="msg" role="status"></p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- API keys -->
+        <section class="panel" id="panel-keys" role="tabpanel" aria-labelledby="tab-keys" tabindex="-1" hidden>
+          <div class="group" id="keys-card">
+            <p class="group-hint">For your own scripts (Add tasks) or another browser that works through them (Run tasks). Fair use: <span id="keys-rate"></span> requests a minute per key.</p>
+            <div class="box pad">
+              <div id="keys-out" class="keys-gate" hidden>
+                <p class="hint">Log in with Google to create API keys for your account.</p>
+                <div class="row">
+                  <button id="keys-signin" type="button" class="primary">Log in with Google</button>
+                  <span id="keys-signin-msg" class="msg"></span>
+                </div>
+              </div>
+              <div id="keys-locked" class="keys-gate" hidden>
+                <p id="keys-locked-text" class="hint"></p>
+                <div id="keys-billing" class="keys-gate">
+                  <button id="keys-billing-open" type="button" class="primary billing-open">Choose a plan</button>
+                  <p class="hint">Plans, top-ups and invoices are on your Noa dashboard.</p>
+                </div>
+              </div>
+              <div id="keys-body" class="keys-body" hidden>
+                <ul id="keys-list" class="keys-list"></ul>
+                <div class="key-new-form">
+                  <input id="key-name" type="text" placeholder="Key name, e.g. laptop scheduler" aria-label="Key name" autocomplete="off" spellcheck="false" />
+                  <select id="key-role" aria-label="What the key may do"></select>
+                  <button id="key-create" type="button" class="small">Create key</button>
+                </div>
+                <div id="key-new" class="key-new" hidden>
+                  <p class="hint">Copy this key now. It is not shown again.</p>
+                  <div class="secret-row">
+                    <code id="key-value" class="key-value"></code>
+                    <button id="key-copy" type="button" class="small">Copy</button>
+                  </div>
+                </div>
+              </div>
+              <p id="keys-msg" class="msg"></p>
+            </div>
+          </div>
+        </section>
+
+        <!-- AI -->
+        <section class="panel" id="panel-ai" role="tabpanel" aria-labelledby="tab-ai" tabindex="-1" hidden>
+          <div class="group">
+            <h3 class="group-title" id="h-brain">Brain</h3>
+            <p class="group-hint">Which Claude runs your tasks.</p>
+            <div class="box options" role="radiogroup" aria-labelledby="h-brain">
+              <div class="opt" data-brain="auto">
+                <label class="opt-head">
+                  <input type="radio" name="brain" value="auto" />
+                  <span class="opt-text"><b>Auto</b><small class="opt-detail"></small></span>
+                </label>
+                <div class="reveal"><div class="reveal-inner">
+                  <p id="auto-pick" class="inline-status"><span class="dot"></span><span class="t"></span></p>
+                </div></div>
+              </div>
+
+              <div class="opt" data-brain="noa">
+                <label class="opt-head">
+                  <input type="radio" name="brain" value="noa" aria-describedby="hosted-aside" />
+                  <span class="opt-text"><b>Noa AI</b><small class="opt-detail"></small></span>
+                </label>
+                <div id="hosted-aside" class="opt-aside">
+                  <div id="hosted-out" class="row" hidden>
+                    <button id="hosted-signin" type="button" class="small primary">Log in to use Noa AI</button>
+                    <span id="hosted-signin-msg" class="msg"></span>
+                  </div>
+                  <div id="hosted-in" class="row" hidden>
+                    <span class="chip" id="hosted-plan"></span>
+                    <span class="chip" id="hosted-credit"></span>
+                    <button id="hosted-action" type="button" class="small link" hidden></button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="opt" data-brain="claude-code">
+                <label class="opt-head">
+                  <input type="radio" name="brain" value="claude-code" />
+                  <span class="opt-text"><b>Local Claude Code</b><small class="opt-detail"></small></span>
+                </label>
+                <div class="reveal"><div class="reveal-inner">
+                  <div class="helper">
+                    <div class="helper-head">
+                      <span id="helper-dot" class="dot"></span>
+                      <b id="helper-headline">Helper</b>
+                      <span class="spacer"></span>
+                      <button id="helper-connect" type="button" class="small">Connect</button>
+                    </div>
+                    <ul id="helper-details" class="helper-details"></ul>
+                    <p id="helper-msg" class="msg" role="status"></p>
+                    <ol id="helper-install" class="steps" hidden>
+                      <li>Install Claude Code and sign in to it once.</li>
+                      <li>Install the helper: in the repo, run <code>pnpm build</code>, then <code>node apps/helper/dist/install.js</code></li>
+                      <li>Click <b>Connect</b>.</li>
+                    </ol>
+                  </div>
+                </div></div>
+              </div>
+
+              <div class="opt" data-brain="claude-api">
+                <label class="opt-head">
+                  <input type="radio" name="brain" value="claude-api" />
+                  <span class="opt-text"><b>Claude API</b><small class="opt-detail"></small></span>
+                </label>
+                <div class="reveal"><div class="reveal-inner">
+                  <div class="field secret" data-secret="anthropicApiKey"><span>Anthropic API key</span></div>
+                  <p id="api-key-missing" class="field-hint" hidden>Add a key to run tasks with the Claude API. It stays in this browser.</p>
+                  <div class="row">
+                    <button id="test-claude" type="button" class="small">Test key</button>
+                    <span id="test-claude-msg" class="msg" role="status"></span>
+                  </div>
+                </div></div>
+              </div>
+            </div>
+            <p id="brain-problem" class="note" data-tone="warn" role="status" hidden></p>
+          </div>
+
+          <div class="group" id="model-group">
+            <h3 class="group-title">Model</h3>
+            <div class="box">
+              <div class="srow">
+                <label class="srow-label" for="model-select"><b>Claude model</b><small id="model-hint"></small></label>
+                <div class="srow-control wide">
+                  <select id="model-select" aria-describedby="model-hint"></select>
+                  <input id="f-anthropicModel" type="text" spellcheck="false" aria-label="Custom model id" placeholder="Model id, e.g. claude-sonnet-5" aria-describedby="err-anthropicModel" hidden />
+                  <small id="err-anthropicModel" class="field-error"></small>
+                </div>
+              </div>
+              <div class="srow">
+                <label class="srow-label" for="f-reasoning"><b>Reasoning</b><small id="reasoning-hint"></small></label>
+                <div class="srow-control wide"><select id="f-reasoning" aria-describedby="reasoning-hint"></select></div>
+              </div>
+              <div class="reveal" id="reasoning-raise"><div class="reveal-inner">
+                <div class="srow">
+                  <label class="srow-label" for="f-reasoningAutoRaise"><b>Think harder when stuck</b><small>When a step keeps failing, or before giving up, Claude thinks before its next steps. Back to fast once a step works.</small></label>
+                  <div class="srow-control"><span class="switch"><input id="f-reasoningAutoRaise" type="checkbox" role="switch" /></span></div>
+                </div>
+              </div></div>
+            </div>
+          </div>
+
+          <div class="group" id="jev-group">
+            <h3 class="group-title">Speed (Jev)</h3>
+            <p class="group-hint">Optional. Jev handles simple clicks and typing faster than Claude. Without it, Claude does every step.</p>
+            <div class="box">
+              <div class="srow">
+                <label class="srow-label" for="f-jevEnabled"><b>Use Jev</b><small id="jev-use-hint"></small></label>
+                <div class="srow-control"><span class="switch"><input id="f-jevEnabled" type="checkbox" role="switch" /></span></div>
+              </div>
+              <div class="reveal" id="jev-fields"><div class="reveal-inner">
+                <div class="srow" id="jev-key-row">
+                  <div class="srow-label"><b>Jev API key</b><small id="jev-source"></small></div>
+                  <div class="srow-control wide"><div class="field secret" data-secret="jevApiKey"><span class="sr-only">Jev API key</span></div></div>
+                </div>
+                <div class="srow">
+                  <label class="srow-label" for="f-jevThreshold"><b>Confidence threshold</b><small>0 to 1. Below it, Claude picks the element instead.</small></label>
+                  <div class="srow-control"><div class="num"><input id="f-jevThreshold" type="number" step="0.05" aria-describedby="err-jevThreshold" /></div><small id="err-jevThreshold" class="field-error"></small></div>
+                </div>
+                <div class="srow">
+                  <div class="srow-label"><b>Check Jev</b><small id="jev-test-hint"></small></div>
+                  <div class="srow-control"><div class="row"><button id="test-jev" type="button" class="small">Test Jev</button><span id="test-jev-msg" class="msg" role="status"></span></div></div>
+                </div>
+              </div></div>
+            </div>
+          </div>
+
+          <div class="group" id="voice-group">
+            <h3 class="group-title" id="h-voice">Voice</h3>
+            <p class="group-hint">Hands-free voice (<span id="voice-group-key">the voice shortcut</span>): talk to Noa while it works; it answers with short spoken summaries.</p>
+            <div class="box options" role="radiogroup" aria-labelledby="h-voice">
+              <div class="opt" data-voice="realtime">
+                <label class="opt-head">
+                  <input type="radio" name="voiceEngine" value="realtime" />
+                  <span class="opt-text"><b class="voice-name"></b><small class="opt-detail voice-detail"></small><small class="voice-cost"></small></span>
+                </label>
+              </div>
+              <div class="opt" data-voice="standard">
+                <label class="opt-head">
+                  <input type="radio" name="voiceEngine" value="standard" />
+                  <span class="opt-text"><b class="voice-name"></b><small class="opt-detail voice-detail"></small><small class="voice-cost"></small></span>
+                </label>
+              </div>
+            </div>
+            <p id="voice-note" class="note" data-tone="warn" role="status" hidden></p>
+            <div class="box" id="speech-box">
+              <!-- The voice and speed follow the engine selected above (voice-view.ts voicePicker). -->
+              <div class="srow">
+                <label class="srow-label" for="speech-voice"><b id="speech-voice-title">Voice</b><small id="speech-voice-hint"></small></label>
+                <div class="srow-control wide"><select id="speech-voice"></select></div>
+              </div>
+              <div class="srow">
+                <label class="srow-label" for="speech-rate"><b>Speaking speed</b><small id="speech-rate-hint"></small></label>
+                <div class="srow-control wide"><div class="row speed-row"><input id="speech-rate" type="range" /><output id="speech-rate-value" for="speech-rate"></output></div></div>
+              </div>
+              <div class="srow">
+                <div class="srow-label"><b>Hear it</b><small id="speech-test-hint">Says a sample line with this voice and speed.</small></div>
+                <div class="srow-control"><div class="row"><button id="speech-test" type="button" class="small">Test voice</button><span id="speech-test-msg" class="msg" role="status"></span></div></div>
+              </div>
+            </div>
+            <div class="box">
+              <div class="srow">
+                <label class="srow-label" for="voice-sounds"><b>Sounds</b><small>A short, soft sound when the microphone turns on and when it turns off.</small></label>
+                <div class="srow-control"><span class="switch"><input id="voice-sounds" type="checkbox" role="switch" /></span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Permission: what the agent may do without asking, in chat and on schedule (automation-section.ts), and when scheduled tasks run. -->
+        <section class="panel" id="panel-permission" role="tabpanel" aria-labelledby="tab-permission" tabindex="-1" hidden>
+          <div class="group" id="automation-group">
+            <h3 class="group-title" id="h-automation">Chat</h3>
+            <p class="group-hint">What the chat agent may do without asking you. Actions that wait show a card in the chat with Allow and Deny.</p>
+            <!-- Filled from automation.ts by automation-section.ts. -->
+            <div class="box options" id="automation-levels" role="radiogroup" aria-labelledby="h-automation"></div>
+            <p id="automation-warning" class="note" data-tone="bad" role="status" hidden></p>
+            <p id="automation-msg" class="msg" role="status"></p>
+          </div>
+
+          <!-- Inside the settings form, so no form of its own: automation-section.ts closes it with the answer. -->
+          <dialog id="automation-confirm" class="confirm-dialog" aria-labelledby="automation-confirm-title">
+            <h2 id="automation-confirm-title"></h2>
+            <div id="automation-confirm-body"></div>
+            <div class="row dialog-actions">
+              <button type="button" id="automation-confirm-cancel" class="small primary" autofocus></button>
+              <button type="button" id="automation-confirm-ok" class="small danger"></button>
+            </div>
+          </dialog>
+
+          <div class="group" id="schedule-group">
+            <h3 class="group-title" id="h-scheduled-automation">Scheduled jobs</h3>
+            <p class="group-hint">What a scheduled job may do without asking you when Full autonomy is off, and when scheduled jobs run.</p>
+            <p class="group-hint" id="scheduled-automation-note" hidden></p>
+            <div class="box options" id="scheduled-automation" role="radiogroup" aria-labelledby="h-scheduled-automation"></div>
+            <div class="box">
+              <div class="srow">
+                <label class="srow-label" for="f-intervalMinutes"><b>Check for due tasks every</b></label>
+                <div class="srow-control"><div class="num"><input id="f-intervalMinutes" type="number" step="1" aria-describedby="err-intervalMinutes" /><span class="unit">min</span></div><small id="err-intervalMinutes" class="field-error"></small></div>
+              </div>
+              <div class="srow">
+                <label class="srow-label" for="f-maxParallelTasks"><b>Tasks at once</b><small>1 to 4, each in its own tab. Tasks on X run one at a time.</small></label>
+                <div class="srow-control"><div class="num"><input id="f-maxParallelTasks" type="number" step="1" aria-describedby="err-maxParallelTasks" /><span class="unit">tasks</span></div><small id="err-maxParallelTasks" class="field-error"></small></div>
+              </div>
+              <div class="srow">
+                <label class="srow-label" for="f-delayMinSec"><b>Shortest pause between tasks</b></label>
+                <div class="srow-control"><div class="num"><input id="f-delayMinSec" type="number" step="1" aria-describedby="err-delayMinSec" /><span class="unit">s</span></div><small id="err-delayMinSec" class="field-error"></small></div>
+              </div>
+              <div class="srow">
+                <label class="srow-label" for="f-delayMaxSec"><b>Longest pause between tasks</b><small>Each pause is a random time between the two.</small></label>
+                <div class="srow-control"><div class="num"><input id="f-delayMaxSec" type="number" step="1" aria-describedby="err-delayMaxSec" /><span class="unit">s</span></div><small id="err-delayMaxSec" class="field-error"></small></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Tasks -->
+        <section class="panel" id="panel-tasks" role="tabpanel" aria-labelledby="tab-tasks" tabindex="-1" hidden>
+          <div class="group">
+            <h3 class="group-title">Keyboard shortcuts</h3>
+            <div class="box">
+              <div class="srow">
+                <div class="srow-label"><b>Open Noa</b><small>Opens the side panel with the cursor in the chat, on any page while Chrome is in front.</small></div>
+                <div class="srow-control shortcut"><kbd id="shortcut-key" class="shortcut-key">Not set</kbd><button id="shortcut-change" type="button" class="ghost small">Change</button></div>
+              </div>
+              <div class="srow">
+                <div class="srow-label"><b>Talk</b><small>Opens the side panel and starts voice input. Press it again to send what you said.</small></div>
+                <div class="srow-control shortcut"><kbd id="voice-shortcut-key" class="shortcut-key">Not set</kbd><button id="voice-shortcut-change" type="button" class="ghost small">Change</button></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="group">
+            <h3 class="group-title">While Noa works</h3>
+            <div class="box">
+              <div class="srow">
+                <label class="srow-label" for="f-showControlOverlay"><b>Show when Noa controls a tab</b><small>A glow around the page and a "Noa is working" bar with Stop. The Noa tab group always shows it.</small></label>
+                <div class="srow-control"><span class="switch"><input id="f-showControlOverlay" type="checkbox" role="switch" /></span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="group">
+            <h3 class="group-title">Limits per task</h3>
+            <div class="box">
+              <div class="srow">
+                <label class="srow-label" for="f-maxToolCalls"><b>Most tool calls</b></label>
+                <div class="srow-control"><div class="num"><input id="f-maxToolCalls" type="number" step="1" aria-describedby="err-maxToolCalls" /><span class="unit">calls</span></div><small id="err-maxToolCalls" class="field-error"></small></div>
+              </div>
+              <div class="srow">
+                <label class="srow-label" for="f-maxTaskMinutes"><b>Longest run</b><small id="maxTaskMinutes-hint"></small></label>
+                <div class="srow-control"><div class="num"><input id="f-maxTaskMinutes" type="number" step="1" aria-describedby="err-maxTaskMinutes" /><span class="unit">min</span></div><small id="err-maxTaskMinutes" class="field-error"></small></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="group">
+            <h3 class="group-title">When a task fails</h3>
+            <div class="box">
+              <div class="srow">
+                <label class="srow-label" for="f-retryAfterMinutes"><b>Retry temporary failures after</b></label>
+                <div class="srow-control"><div class="num"><input id="f-retryAfterMinutes" type="number" step="1" aria-describedby="err-retryAfterMinutes" /><span class="unit">min</span></div><small id="err-retryAfterMinutes" class="field-error"></small></div>
+              </div>
+              <div class="srow">
+                <label class="srow-label" for="f-pauseRetryMinutes"><b>Retry tasks that needed you after</b></label>
+                <div class="srow-control"><div class="num"><input id="f-pauseRetryMinutes" type="number" step="1" aria-describedby="err-pauseRetryMinutes" /><span class="unit">min</span></div><small id="err-pauseRetryMinutes" class="field-error"></small></div>
+              </div>
+              <div class="srow">
+                <label class="srow-label" for="f-maxConsecutiveFailures"><b>Pause a job after failures in a row</b><small>Its runs wait until you resume it. 0 never pauses.</small></label>
+                <div class="srow-control"><div class="num"><input id="f-maxConsecutiveFailures" type="number" step="1" aria-describedby="err-maxConsecutiveFailures" /><span class="unit">failures</span></div><small id="err-maxConsecutiveFailures" class="field-error"></small></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Site logins -->
+        <section class="panel" id="panel-logins" role="tabpanel" aria-labelledby="tab-logins" tabindex="-1" hidden>
+          <div class="group" id="vault-card">
+            <p class="group-hint">Usernames and passwords the agent may use to sign in to other sites, encrypted with a passphrase you enter once per browser session. Never used for X: sign in to X yourself.</p>
+            <div class="box pad vault-body">
+              <div id="vault-locked" class="vault-locked">
+                <div class="row">
+                  <input id="vault-pass" type="password" placeholder="Passphrase" aria-label="Vault passphrase" autocomplete="off" />
+                  <button id="vault-unlock" type="button" class="small">Unlock</button>
+                </div>
+                <p id="vault-create-note" class="hint" hidden>If you forget this passphrase, your saved logins can't be recovered; you'd erase them and add them again.</p>
+                <p id="vault-forgot-row" class="vault-forgot" hidden>
+                  <span id="vault-forgot-lead"></span>
+                  <button id="vault-forgot" type="button" class="link" aria-expanded="false" aria-controls="vault-forgot-box">Forgot passphrase?</button>
+                </p>
+                <div id="vault-forgot-box" class="vault-forgot-box" hidden>
+                  <p>Your passphrase can't be recovered: your logins are encrypted on this computer, and Noa never sees them. The only way forward is to erase the saved logins and start over with a new passphrase.</p>
+                  <div class="row">
+                    <button id="vault-erase" type="button" class="small danger">Erase saved logins</button>
+                    <button id="vault-erase-cancel" type="button" class="small ghost">Cancel</button>
+                  </div>
+                  <!-- Below the buttons: asking must not move Erase, which the second click confirms. -->
+                  <p id="vault-erase-question" class="vault-erase-question" role="status"></p>
+                </div>
+              </div>
+              <div id="vault-open" hidden>
+                <ul id="vault-sites" class="vault-sites"></ul>
+                <h3 class="sub-title">Add a login</h3>
+                <div class="fields grid">
+                  <label class="field"><span>Site</span><input id="vault-site" type="text" placeholder="example.com" spellcheck="false" /></label>
+                  <label class="field"><span>Username</span><input id="vault-user" type="text" autocomplete="off" spellcheck="false" /></label>
+                  <label class="field"><span>Password</span><input id="vault-pw" type="password" autocomplete="off" /></label>
+                </div>
+                <div class="row">
+                  <button id="vault-add" type="button" class="small primary">Save login</button>
+                  <span class="spacer"></span>
+                  <button id="vault-lock" type="button" class="small ghost">Lock</button>
+                </div>
+              </div>
+              <span id="vault-msg" class="msg" role="status"></span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Memory (memory-section.ts) -->
+        <section class="panel" id="panel-memory" role="tabpanel" aria-labelledby="tab-memory" tabindex="-1" hidden>
+          <div class="group" id="memory-group">
+            <p class="group-hint">What the agent keeps between chats and runs, so it doesn't have to find things out again. It never keeps passwords, codes or keys. The chat shows “Remembered” with Undo whenever it saves something.</p>
+            <div class="box">
+              <div class="srow">
+                <label class="srow-label" for="memory-on"><b>Use memory</b><small>Off pauses it for every chat and task. You can also turn it off for one chat in the chat's model menu.</small></label>
+                <div class="srow-control"><span class="switch"><input id="memory-on" type="checkbox" role="switch" /></span></div>
+              </div>
+              <p id="memory-paused-note" class="mem-paused" role="status" hidden></p>
+              <p id="memory-sync" class="mem-sync" role="status" hidden></p>
+              <div id="memory-sync-actions" class="mem-sync-actions" hidden></div>
+              <p id="memory-backfill" class="mem-sync" role="status" hidden></p>
+            </div>
+          </div>
+          <div class="group">
+            <h3 class="group-title">What it remembers</h3>
+            <p class="group-hint mem-relevance">Each turn the agent is given only the memory relevant to it, plus the facts you set to “Always give”. It can search the rest when it needs it.</p>
+            <p id="memory-msg" class="msg mem-msg" role="status"></p>
+            <p id="memory-empty" class="group-hint" hidden>Nothing yet. As the agent works it saves lasting facts here: your preferences, which account is which, who people are, how sites work, and what repeating tasks did last time.</p>
+            <div class="mem-search-row">
+              <input id="memory-search" class="mem-search" type="search" placeholder="Search memory" aria-label="Search memory" spellcheck="false" autocomplete="off" hidden />
+              <span id="memory-found" class="mem-found" role="status" hidden></span>
+            </div>
+            <div id="memory-kinds" class="mem-kinds"></div>
+          </div>
+          <div class="group danger-zone">
+            <div class="box">
+              <div class="srow">
+                <div class="srow-label"><b>Delete all memory</b><small>Deletes every memory, on this computer and in your account. The agent starts from nothing.</small></div>
+                <!-- Cancel shows to the left: asking must not move the button the second click confirms. -->
+                <div class="srow-control"><div class="row"><button id="memory-forget" type="button" class="small danger">Forget everything</button><button id="memory-forget-cancel" type="button" class="small ghost" hidden>Cancel</button></div></div>
+              </div>
+              <p id="memory-forget-question" class="mem-question" role="status"></p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Advanced -->
+        <section class="panel" id="panel-advanced" role="tabpanel" aria-labelledby="tab-advanced" tabindex="-1" hidden>
+          <div class="group" id="cloud-card">
+            <h3 class="group-title" id="h-cloud">Self-hosting</h3>
+            <p class="group-hint">Only if you run your own server.</p>
+            <div class="box">
+              <div class="srow">
+                <label class="srow-label" for="f-accountApiBase"><b>Account server</b><small>Sign-in, your account's scheduled jobs, billing and Noa AI. Changing it signs you out of the current server.</small></label>
+                <div class="srow-control wide"><input id="f-accountApiBase" type="url" spellcheck="false" placeholder="https://noa-api.example.com" aria-describedby="err-accountApiBase" /><small id="err-accountApiBase" class="field-error"></small></div>
+              </div>
+              <div class="srow">
+                <label class="srow-label" for="f-cloudEnabled"><b>Cloud sync with a runner key</b><small>Take tasks from your own task server without accounts. When you are logged in, your account's tasks are used instead.</small></label>
+                <div class="srow-control"><span class="switch"><input id="f-cloudEnabled" type="checkbox" role="switch" /></span></div>
+              </div>
+              <div class="reveal" id="cloud-fields"><div class="reveal-inner">
+                <div class="srow">
+                  <label class="srow-label" for="f-apiBase"><b>Task server</b></label>
+                  <div class="srow-control wide"><input id="f-apiBase" type="url" placeholder="https://tasks.example.com" spellcheck="false" aria-describedby="err-apiBase" /><small id="err-apiBase" class="field-error"></small></div>
+                </div>
+                <div class="srow">
+                  <div class="srow-label"><b>Runner key</b></div>
+                  <div class="srow-control wide"><div class="field secret" data-secret="runnerKey"><span class="sr-only">Runner key</span></div></div>
+                </div>
+                <div class="srow">
+                  <div class="srow-label"><b>Check the connection</b></div>
+                  <div class="srow-control"><div class="row"><button id="test-cloud" type="button" class="small">Test connection</button><span id="test-cloud-msg" class="msg" role="status"></span></div></div>
+                </div>
+              </div></div>
+            </div>
+          </div>
+        </section>
+      </form>
+      </div>
+    </div>
+    <!-- Saved / Not saved: a note at the bottom of the window, wherever the page is scrolled (status() in options.ts). -->
+    <p id="save-msg" class="save-msg" role="status" aria-live="polite"></p>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

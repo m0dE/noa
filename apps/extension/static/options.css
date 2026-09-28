@@ -1,0 +1,359 @@
+/* Options page. Shared tokens and controls live in ui.css. */
+:root {
+  /* The sections' icon tiles (sidebar.ts): the ui.css tones plus a few calm hues of the same weight. */
+  --tone-sky: #0284c7;
+  --tone-violet: #7c3aed;
+  --tone-teal: #0d9488;
+  --tone-pink: #db2777;
+  --tone-slate: #64748b;
+  --side-w: 224px;
+  /* How far a group link (#jev) scrolls its group below the top: under the sticky section row on a narrow page. */
+  --anchor-gap: 24px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --tone-sky: #38bdf8;
+    --tone-violet: #a78bfa;
+    --tone-teal: #2dd4bf;
+    --tone-pink: #f472b6;
+    --tone-slate: #94a3b8;
+  }
+}
+
+body { font-size: var(--text-lg); background: var(--surface); }
+.page { max-width: 1080px; margin: 0 auto; padding: 32px 32px 96px; }
+
+/* Header: the product icon, the page's title and what it is for; the account avatar at the right. */
+.head { display: flex; align-items: center; gap: 14px; padding-bottom: 24px; border-bottom: 1px solid var(--border); }
+.brand { flex: none; width: 40px; height: 40px; border-radius: var(--radius-lg); }
+.head-text { flex: 1; min-width: 0; }
+.head h1 { font-size: 22px; line-height: 1.25; letter-spacing: -0.01em; }
+.head-sub { margin: 3px 0 0; color: var(--muted); font-size: var(--text-lg); }
+.head .acct { flex: none; align-self: flex-start; }
+
+/* Saved / Not saved: a note at the bottom of the window. A "Saved" fades (status() in options.ts); a problem stays.
+   Sign-in from the account menu writes here too. */
+.save-msg {
+  position: fixed; left: 50%; bottom: 20px; z-index: var(--z-popup); transform: translateX(-50%);
+  margin: 0; max-width: min(560px, calc(100vw - 32px)); padding: 8px 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.14);
+  font-size: var(--text-md); color: var(--muted);
+  opacity: 0; pointer-events: none; transition: opacity 0.25s ease;
+}
+.save-msg:empty { display: none; }
+.save-msg.show, .save-msg[data-tone="bad"], .save-msg[data-tone=""]:not(:empty) { opacity: 1; pointer-events: auto; }
+.save-msg[data-tone="ok"] { color: var(--ok); }
+.save-msg[data-tone="bad"] { color: var(--bad); background: var(--bad-soft); border-color: color-mix(in srgb, var(--bad) 30%, var(--border)); }
+
+/* The sidebar and the open section. */
+.layout { display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr); gap: 48px; padding-top: 28px; }
+.side { position: sticky; top: 28px; align-self: start; }
+.side-list { position: relative; display: flex; flex-direction: column; gap: 2px; }
+.side-item {
+  width: 100%; justify-content: flex-start; gap: 12px; padding: 6px 10px 6px 6px;
+  border: 0; border-radius: var(--radius); background: none; color: var(--text);
+  font-size: var(--text-lg); font-weight: 500; text-align: left;
+}
+.side-item:hover { background: var(--hover); }
+.side-item[aria-selected="true"] { background: var(--accent); color: var(--on-accent); }
+.side-item:focus-visible { outline-offset: 2px; }
+.side-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.side-icon {
+  --tone: var(--muted);
+  flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius);
+  color: var(--tone); background: color-mix(in srgb, var(--tone) 14%, transparent);
+}
+.side-icon[data-tone="accent"] { --tone: var(--accent); }
+.side-icon[data-tone="ok"] { --tone: var(--ok); }
+.side-icon[data-tone="warn"] { --tone: var(--warn); }
+.side-icon[data-tone="sky"] { --tone: var(--tone-sky); }
+.side-icon[data-tone="violet"] { --tone: var(--tone-violet); }
+.side-icon[data-tone="teal"] { --tone: var(--tone-teal); }
+.side-icon[data-tone="pink"] { --tone: var(--tone-pink); }
+.side-icon[data-tone="slate"] { --tone: var(--tone-slate); }
+.side-item[aria-selected="true"] .side-icon { color: var(--on-accent); background: color-mix(in srgb, var(--on-accent) 18%, transparent); }
+
+/* The content column: its width decides when a row's wide control goes under its label (@container below). */
+.content { max-width: 720px; min-width: 0; container-type: inline-size; }
+.panel { outline: none; }
+.panel-title { font-size: 20px; line-height: 1.3; font-weight: 600; }
+
+/* Groups: a thin divider and a small heading between them; the rows inside, divided the same way. */
+.group { margin-top: 16px; padding-top: 24px; border-top: 1px solid var(--border); scroll-margin-top: var(--anchor-gap); }
+.panel-title + .group { margin-top: 16px; padding-top: 0; border-top: 0; }
+.group-title { font-size: 15px; font-weight: 600; margin: 24px 0 4px; }
+.group > .group-title:first-child { margin-top: 0; }
+.group-hint { margin: 0 0 8px; color: var(--muted); font-size: var(--text-md); }
+.sub-title { font-size: var(--text-sm); font-weight: 600; margin: 4px 0 8px; color: var(--muted); }
+.hint { margin: 0; color: var(--muted); font-size: var(--text-md); }
+
+.box ~ .box { border-top: 1px solid var(--border); }
+.group-title + .box, .group-hint + .box { border-top: 0; }
+.box.pad { padding: 8px 0 4px; display: flex; flex-direction: column; gap: 12px; }
+.box-body { padding: 14px 0 4px; display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--border); }
+
+/* A setting: its label and description at the left, its control at the right. */
+.srow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 32px; align-items: center; padding: 14px 0; }
+.srow + .srow, .reveal .srow:first-child, .srow + .reveal .srow:first-child { border-top: 1px solid var(--border); }
+.srow-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.srow-label b { font-weight: 500; }
+.srow-label small { color: var(--muted); font-size: var(--text-md); }
+.srow-label small:empty { display: none; }
+.srow-control { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 0; max-width: min(100%, 360px); justify-self: end; text-align: right; }
+/* Selects, text fields, keys and the speed slider: one width, so they line up down the page. */
+.srow-control.wide { width: 280px; align-items: stretch; text-align: left; }
+/* A button with its result: the result to the button's left, so the button stays put. */
+.srow-control:not(.wide) > .row { flex-direction: row-reverse; justify-content: flex-start; }
+@container (max-width: 540px) {
+  /* So do buttons with their result (Test…, Forget everything with Cancel): they stay at the right, under the label. */
+  .srow:has(> .srow-control.wide), .srow:has(> .srow-control > .row) { grid-template-columns: minmax(0, 1fr); }
+  .srow-control:not(.wide) { max-width: 100%; }
+  .srow-control.wide { width: 100%; max-width: none; justify-self: stretch; }
+}
+.num { display: flex; align-items: center; gap: 8px; }
+/* !important: ui.css makes every text-like input full width with a more specific selector. */
+.num input { width: 88px !important; flex: none; }
+/* A fixed width for the unit, so the number fields line up. */
+.unit { min-width: 4.4em; text-align: left; color: var(--muted); font-size: var(--text-sm); }
+.field-error { color: var(--bad); font-size: var(--text-sm); }
+.field-error:empty { display: none; }
+input[aria-invalid="true"] { border-color: var(--bad); }
+.field-hint { margin: 0; color: var(--muted); font-size: var(--text-sm); }
+
+/* Choices (brain, voice engine, permission levels): rows; the chosen one is tinted and opens its details. */
+.box.options { display: flex; flex-direction: column; gap: 2px; padding: 4px 0; }
+.opt { margin: 0 -12px; border-radius: var(--radius); }
+.opt-head { display: flex; gap: 12px; align-items: flex-start; padding: 10px 12px; cursor: pointer; }
+.opt-head input { margin-top: 3px; flex: none; }
+.opt-text { display: flex; flex-direction: column; min-width: 0; }
+.opt-text b { font-weight: 500; }
+.opt-text small { color: var(--muted); font-size: var(--text-md); }
+.opt:has(input:checked) { background: color-mix(in srgb, var(--accent-soft) 70%, transparent); }
+.opt:has(input:checked) .opt-text b { color: var(--accent); }
+.opt:has(input:disabled) .opt-head { cursor: default; }
+.opt:has(input:disabled:not(:checked)) .opt-text b { color: var(--muted); }
+/* Full autonomy on: the scheduled choice does not apply (automation-view.ts SCHEDULED_UNDER_FULL_NOTE). */
+#scheduled-automation .opt:has(input:disabled) { opacity: 0.55; }
+.opt-aside { padding: 0 12px 10px 37px; }
+.opt-aside .row { gap: 8px; }
+
+.reveal { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.22s ease; }
+.reveal.open { grid-template-rows: 1fr; }
+.reveal-inner { overflow: hidden; min-height: 0; display: flex; flex-direction: column; }
+.opt .reveal-inner { gap: 10px; }
+.opt .reveal-inner > :first-child { margin-top: 0; }
+.opt .reveal.open .reveal-inner { padding: 0 12px 12px 37px; }
+.opt .reveal .reveal-inner { padding: 0 12px 0 37px; transition: padding 0.22s ease; }
+@media (prefers-reduced-motion: reduce) {
+  .reveal, .reveal-inner, .save-msg, .switch input, .switch input::after { transition: none; }
+}
+
+.inline-status { margin: 0; display: flex; align-items: baseline; gap: 8px; font-size: var(--text-md); }
+.inline-status .dot { transform: translateY(-1px); }
+.inline-status[data-tone="bad"] { color: var(--bad); }
+
+/* Masked key field: either an input, or a "set" line with Replace / Remove. */
+.secret { display: flex; flex-direction: column; gap: 4px; }
+.secret > span:not(.sr-only) { color: var(--muted); font-size: var(--text-sm); }
+.secret-row { display: flex; gap: 6px; align-items: center; }
+.secret-row input { flex: 1; font-family: var(--mono); }
+.secret-state {
+  flex: 1; display: flex; align-items: center; gap: 8px; min-height: 32px; min-width: 0;
+  padding: 5px 10px; border: 1px dashed var(--border); border-radius: var(--radius-sm); color: var(--muted);
+}
+.secret-state b { color: var(--ok); font-weight: 500; }
+
+.switch { display: inline-flex; align-items: center; cursor: pointer; }
+.switch input {
+  width: 36px; height: 20px; appearance: none; border-radius: var(--radius-pill); cursor: pointer; position: relative;
+  background: color-mix(in srgb, var(--text) 22%, transparent); transition: background 0.15s;
+}
+.switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--knob); transition: transform 0.15s; box-shadow: 0 1px 2px rgb(0 0 0 / 0.25); }
+.switch input:checked { background: var(--accent); }
+.switch input:checked::after { transform: translateX(16px); }
+.switch input:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+
+.helper { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.helper-head { display: flex; align-items: center; gap: 8px; }
+.helper-head b { font-weight: 500; }
+.helper-details { margin: 0; padding: 0 0 0 16px; list-style: none; color: var(--muted); font-size: 12.5px; }
+.helper-details li { overflow-wrap: anywhere; }
+.steps { margin: 2px 0 0; padding-left: 34px; color: var(--muted); font-size: 12.5px; display: flex; flex-direction: column; gap: 3px; }
+.steps code { overflow-wrap: anywhere; color: var(--text); }
+.steps b { font-weight: 500; color: var(--text); }
+
+.note { margin: 10px 0; padding: 8px 12px; border-radius: var(--radius); font-size: var(--text-md); background: color-mix(in srgb, var(--muted) 10%, transparent); color: var(--text); }
+.box-body .note { margin: 0; }
+.note[data-tone="warn"] { background: var(--warn-soft); color: var(--warn); }
+.note[data-tone="bad"] { background: var(--bad-soft); color: var(--bad); }
+
+/* The section's destructive action, last in it: a red-edged box. */
+.group.danger-zone { border-top: 0; padding-top: 0; }
+.danger-zone .box { padding: 0 16px; border: 1px solid color-mix(in srgb, var(--bad) 35%, var(--border)); border-radius: var(--radius-lg); }
+.danger-zone .srow-label b { color: var(--bad); }
+.danger-zone .mem-question { padding: 0 0 12px; }
+
+/* Account */
+.acct-block { display: flex; flex-direction: column; }
+/* Plan and credit: a group of its own under the user, divided like the others. */
+.acct-block > .group-title { margin-top: 16px; padding-top: 24px; border-top: 1px solid var(--border); }
+.acct-user { display: flex; align-items: center; gap: 12px; min-width: 0; }
+#acct-pic, .acct-letter { width: 40px; height: 40px; border-radius: 50%; flex: none; object-fit: cover; }
+.acct-letter { display: grid; place-items: center; background: var(--accent); color: var(--on-accent); font-weight: 600; font-size: 16px; }
+.acct-letter:empty { display: none; }
+.acct-names { display: flex; flex-direction: column; min-width: 0; }
+.acct-names b, .acct-names span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-names b { font-weight: 600; }
+.acct-facts { display: grid; grid-template-columns: 1fr 1fr; }
+.fact { display: flex; flex-direction: column; gap: 1px; padding: 12px 0 14px; min-width: 0; }
+.fact + .fact { border-left: 1px solid var(--border); padding-left: 20px; }
+.fact span { color: var(--muted); font-size: var(--text-sm); }
+.fact b { font-size: 18px; font-weight: 600; }
+.fact small { color: var(--muted); font-size: var(--text-sm); }
+.fact small:empty { display: none; }
+.fact[data-tone="warn"] b { color: var(--warn); }
+/* The one billing button: it opens the dashboard's Billing page. */
+.acct-billing, .keys-gate { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.billing-open { min-width: 200px; }
+
+/* API keys */
+.keys-body { display: flex; flex-direction: column; gap: 10px; }
+.keys-list { list-style: none; margin: 0; padding: 0; }
+.keys-list li { display: flex; align-items: center; gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.keys-list li .key-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.keys-list li .muted { font-size: var(--text-sm); white-space: nowrap; }
+.keys-list li.empty { color: var(--muted); border-bottom: 0; }
+.key-new-form { display: flex; gap: 6px; flex-wrap: wrap; }
+.key-new-form input { flex: 1 1 180px; }
+.key-new-form select { width: auto; flex: none; }
+.key-new { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: var(--radius); background: var(--ok-soft); }
+.key-value { flex: 1; min-width: 0; overflow-wrap: anywhere; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--field); border: 1px solid var(--border); }
+
+/* Site logins */
+.fields.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 14px; margin-bottom: 10px; }
+.vault-sites { list-style: none; margin: 0 0 14px; padding: 0; }
+.vault-sites li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.vault-sites li.empty { color: var(--muted); border-bottom: 0; }
+#vault-locked input[type="password"] { flex: 1; min-width: 0; }
+.vault-locked { display: flex; flex-direction: column; gap: 10px; }
+.vault-locked > p { margin: 0; }
+.vault-forgot { font-size: var(--text-sm); }
+.vault-forgot button.link { font-size: inherit; color: var(--muted); font-weight: 400; }
+.vault-forgot[data-prominent] { padding: 8px 12px; border-radius: var(--radius); background: var(--warn-soft); color: var(--warn); font-size: var(--text-md); }
+.vault-forgot[data-prominent] button.link { color: var(--accent); font-weight: 600; }
+.vault-forgot-box { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: var(--radius); border: 1px solid color-mix(in srgb, var(--bad) 35%, var(--border)); background: var(--bad-soft); font-size: var(--text-md); }
+.vault-forgot-box p { margin: 0; }
+.vault-erase-question { font-weight: 600; color: var(--bad); }
+.vault-erase-question:empty { display: none; }
+
+/* Keyboard shortcut: the key as Chrome assigned it, and Change. */
+.srow-control.shortcut { flex-direction: row; align-items: center; gap: 8px; }
+.shortcut-key {
+  font: inherit; font-size: var(--text-sm); padding: 2px 7px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); border-bottom-width: 2px; background: var(--surface); color: var(--text); white-space: nowrap;
+}
+
+/* Voice (voice-section.ts): each engine's cost a minute, from the server, under its description. */
+.opt-text .voice-cost { color: var(--text); font-variant-numeric: tabular-nums; }
+/* Settings > AI > Voice: the speed slider with its value. */
+.speed-row { flex-wrap: nowrap; }
+.speed-row input[type="range"] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.speed-row output { flex: none; min-width: 3.2em; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: var(--text-sm); }
+
+/* Settings > Permission (automation-section.ts). Full autonomy is shown as a warning for as long as it is on. */
+.opt[data-dangerous] .opt-text b { color: var(--bad); }
+.opt[data-dangerous]:has(input:checked) { background: var(--bad-soft); box-shadow: inset 3px 0 0 var(--bad); }
+.opt[data-dangerous]:has(input:checked) .opt-text b { color: var(--bad); }
+#automation-msg:empty { display: none; }
+.confirm-dialog { max-width: min(440px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); box-shadow: 0 12px 40px rgb(0 0 0 / 0.25); }
+.confirm-dialog::backdrop { background: rgb(0 0 0 / 0.4); }
+.confirm-dialog h2 { margin: 0 0 10px; font-size: var(--text-lg); color: var(--bad); }
+.confirm-dialog p { margin: 0 0 8px; font-size: var(--text-md); }
+.confirm-dialog .dialog-actions { justify-content: flex-end; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+
+/* Memory (memory-section.ts): one block per kind, its switch on top and its entries under it. */
+.mem-kinds { display: flex; flex-direction: column; }
+.mem-msg { margin: -2px 0 8px; }
+.mem-paused { margin: 0; padding: 0 0 12px; color: var(--warn); font-size: var(--text-sm); }
+.mem-sync { margin: 0; padding: 10px 0 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: var(--text-sm); }
+.mem-sync[data-tone="ok"] { color: var(--ok); }
+.mem-sync[data-tone="bad"] { color: var(--bad); }
+.mem-kind-head .srow-label b { display: flex; align-items: baseline; gap: 6px; }
+.mem-count { color: var(--muted); font-weight: 400; font-size: var(--text-sm); }
+.mem-none { margin: 0; padding: 10px 0 12px 16px; border-top: 1px solid var(--border); color: var(--muted); font-size: var(--text-sm); }
+.mem-list { list-style: none; margin: 0; padding: 0; }
+.mem-entry { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0 10px 16px; border-top: 1px solid var(--border); }
+.mem-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.mem-head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; min-width: 0; }
+.mem-subject { font-weight: 500; overflow-wrap: anywhere; }
+.mem-where { color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.mem-where.site { font-family: var(--mono); }
+.mem-text { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.mem-meta { color: var(--faint); font-size: var(--text-xs); }
+.mem-actions { flex: none; display: flex; gap: 4px; align-items: center; }
+.mem-actions .mem-delete:hover { color: var(--bad); }
+.mem-edit { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.mem-edit textarea { resize: vertical; }
+.mem-problem { margin: 0; }
+.mem-problem:empty { display: none; }
+.mem-question { margin: 0; color: var(--muted); font-size: var(--text-sm); }
+.mem-question:empty { display: none; }
+/* A kind that is off, or memory paused: its entries stay listed, quieter. */
+.mem-kind[data-on="false"] .mem-list, .mem-kinds[data-paused] .mem-list { opacity: 0.6; }
+/* Signed in to another account: add this computer's memory to it, or keep it separate. */
+.mem-sync-actions { display: flex; flex-direction: column; gap: 8px; padding: 0 0 12px; }
+.mem-sync-actions[hidden] { display: none; }
+.mem-sync-hint { margin: 0; color: var(--muted); font-size: var(--text-sm); }
+/* The search, above the kinds (hidden while memory is empty). */
+.mem-search-row { display: flex; align-items: center; gap: 10px; margin: 4px 0 8px; }
+.mem-search-row:has(#memory-search[hidden]) { display: none; }
+.mem-search-row .mem-search { flex: 1; }
+.mem-found { flex: none; color: var(--muted); font-size: var(--text-sm); }
+/* A repeating task's memory: collapsed to its title and count; open, its run notes and records by key. */
+.mem-task { border-top: 1px solid var(--border); }
+.mem-task-head { display: flex; align-items: baseline; gap: 8px; padding: 10px 8px 10px 16px; cursor: pointer; list-style: none; border-radius: var(--radius-sm); }
+.mem-task-head::-webkit-details-marker { display: none; }
+.mem-task-head::before { content: "▸"; flex: none; color: var(--muted); font-size: var(--text-xs); transition: transform 0.12s; }
+.mem-task[open] > .mem-task-head::before { transform: rotate(90deg); }
+.mem-task-head:hover { background: var(--hover); }
+.mem-task-title { flex: 1; min-width: 0; font-weight: 500; overflow-wrap: anywhere; }
+.mem-task-head .mem-count { flex: none; }
+.mem-sub { margin: 0; padding: 8px 0 6px 32px; border-top: 1px solid var(--border); color: var(--muted); font-size: var(--text-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.mem-task .mem-entry { padding-left: 32px; }
+.mem-notes { list-style: none; margin: 2px 0 0; padding: 0 0 0 10px; border-left: 2px solid var(--border); display: flex; flex-direction: column; gap: 2px; font-size: var(--text-sm); overflow-wrap: anywhere; }
+.mem-note-when { color: var(--muted); }
+.mem-history { color: var(--muted); }
+.mem-when { color: var(--muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.mem-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.mem-chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; font-weight: 400; }
+.mem-pin { width: auto !important; padding: 2px 6px !important; font-size: var(--text-sm); }
+.mem-entry[data-pinned="true"] .mem-pin { border-color: var(--accent); color: var(--accent); }
+.mem-more-row { padding: 6px 0 8px 32px; border-top: 1px solid var(--border); }
+.mem-task-foot { display: flex; flex-direction: column; gap: 6px; padding: 10px 0 12px 32px; border-top: 1px solid var(--border); }
+
+/* Narrow: the sections become a sideways-scrolling row that stays at the top. */
+@media (max-width: 720px) {
+  :root { --anchor-gap: 72px; }
+  .page { padding: 20px 16px 88px; }
+  .head { gap: 12px; padding-bottom: 16px; border-bottom: 0; }
+  .brand { width: 32px; height: 32px; border-radius: var(--radius); }
+  .head h1 { font-size: 18px; }
+  .head-sub { font-size: var(--text-md); }
+  .layout { grid-template-columns: minmax(0, 1fr); gap: 0; padding-top: 0; }
+  .side {
+    top: 0; z-index: var(--z-sticky); margin: 0 -16px; padding: 8px 16px;
+    background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  }
+  .side-list { flex-direction: row; gap: 4px; overflow-x: auto; scrollbar-width: none; margin: -3px; padding: 3px; }
+  .side-list::-webkit-scrollbar { display: none; }
+  .side-item { width: auto; flex: none; gap: 8px; padding: 4px 12px 4px 4px; border-radius: var(--radius-pill); font-size: var(--text-md); }
+  .side-icon { width: 24px; height: 24px; border-radius: 50%; }
+  .side-icon svg { width: 14px; height: 14px; }
+  .content { padding-top: 24px; }
+}
+@media (max-width: 480px) {
+  .mem-entry { flex-direction: column; gap: 6px; }
+  .mem-actions { align-self: flex-end; }
+  .mem-task .mem-entry, .mem-sub, .mem-more-row, .mem-task-foot { padding-left: 16px; }
+}

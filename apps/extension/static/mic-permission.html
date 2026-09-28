@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Microphone for Noa</title>
+    <link rel="stylesheet" href="ui.css" />
+    <link rel="stylesheet" href="mic-permission.css" />
+  </head>
+  <body data-state="asking">
+    <main class="mic-card">
+      <div class="mic-badge" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="3" width="6" height="11" rx="3" />
+          <path d="M5.5 11a6.5 6.5 0 0 0 13 0" />
+          <path d="M12 17.5V21" />
+        </svg>
+      </div>
+      <h1 id="mic-title">Allow the microphone</h1>
+      <p id="mic-body" class="mic-body" role="status" aria-live="polite"></p>
+      <div class="mic-actions">
+        <button id="mic-retry" type="button" class="primary" hidden></button>
+        <button id="mic-close" type="button" hidden>Close this tab</button>
+      </div>
+    </main>
+    <script type="module" src="mic-permission.js"></script>
+  </body>
+</html>

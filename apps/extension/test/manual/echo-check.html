@@ -1,0 +1,342 @@
+<!doctype html>
+<!--
+  Echo check: how much of the narrator's audio, played from this computer's speakers, comes back through the
+  microphone after Chrome's echo cancellation, for each way of playing it and each echoCancellation setting.
+
+  Why: the Realtime narrator plays its PCM through Web Audio (src/voice/pcm-player.ts, AudioContext.destination)
+  while the microphone runs with echoCancellation/noiseSuppression/autoGainControl on (src/voice/capture-config.ts).
+  An old claim (2020) says Chrome's AEC ignores Web Audio output. In Chrome 153 on Windows/macOS/Linux the AEC for
+  echoCancellation: true is "Chrome-wide" (it runs in the audio service and its reference is every low-latency output
+  stream Chrome plays to the device, Web Audio included); echoCancellation: "all" uses the system loopback instead.
+  This page measures it with your real speakers and microphone.
+
+  How to run (real speakers, no headphones, a quiet room):
+    1. Open this file in Chrome (drag it into a tab, or file:///D:/www/noa-mono/apps/extension/test/manual/echo-check.html).
+    2. Set the system volume to where you use voice; keep the microphone where it usually is.
+    3. Click "Run all" and allow the microphone. Stay quiet for about a minute while it plays test speech.
+    4. Read the table: "echo" is the microphone's level while the speech played, "above floor" how far that is above
+       the room's own noise, "cancelled" how much quieter it is than the same playback with echoCancellation off.
+       "first 1 s" is the start of each line, before the canceller has adapted (where a short narrator line leaks).
+       "round trip" is the delay from playing to hearing (lag of the best match); the difference between rows of
+       different playback paths is what that path adds to output latency.
+    5. Copy the table ("Copy results") into the issue or chat.
+
+  Headless smoke run (Playwright, fake devices, muted): ?auto=1 runs all rows and sets window.__echoResults.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Echo check</title>
+<style>
+  :root { --bg: #fbfbfa; --fg: #1d1d1b; --muted: #6b6a66; --line: #e3e2de; --accent: #2f5bd3; --good: #1d7a3a; --bad: #b3261e; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ecebe7; --muted: #9c9a94; --line: #2e2d2a; --accent: #8aa8ff; --good: #6fd08c; --bad: #ff8a80; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { margin: 4px 0 12px; color: var(--muted); max-width: 75ch; }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 12px 0; padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+  legend { color: var(--muted); padding: 0 4px; }
+  button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+  th { color: var(--muted); font-weight: 500; }
+  .good { color: var(--good); } .bad { color: var(--bad); }
+  #status { min-height: 1.5em; color: var(--accent); }
+  #meter { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; max-width: 320px; }
+  #meter > div { height: 100%; width: 0; background: var(--accent); transition: width 60ms linear; }
+  pre { white-space: pre-wrap; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Echo check</h1>
+  <p>Plays test speech from your speakers and measures how much returns through the microphone, for each playback path and echo-cancellation mode. Use real speakers, not headphones, and stay quiet while it runs.</p>
+
+  <fieldset>
+    <legend>Playback paths</legend>
+    <label><input type="checkbox" name="path" value="webaudio" checked /> Web Audio destination (what the narrator uses)</label>
+    <label><input type="checkbox" name="path" value="element" checked /> MediaStreamDestination → &lt;audio&gt;</label>
+    <label><input type="checkbox" name="path" value="pc" checked /> RTCPeerConnection loopback → &lt;audio&gt;</label>
+  </fieldset>
+  <fieldset>
+    <legend>Microphone</legend>
+    <label><input type="checkbox" name="ec" value="false" checked /> echoCancellation: false</label>
+    <label><input type="checkbox" name="ec" value="true" checked /> true (production)</label>
+    <label><input type="checkbox" name="ec" value="all" checked /> "all"</label>
+    <label><input type="checkbox" id="nsagc" checked /> noiseSuppression + autoGainControl (production)</label>
+  </fieldset>
+  <fieldset>
+    <legend>Signal</legend>
+    <label>Level <input type="range" id="gain" min="-30" max="0" step="1" value="-6" /> <span id="gainLabel">-6 dB</span></label>
+    <label>Narrator audio (optional) <input type="file" id="file" accept="audio/*" /></label>
+    <div id="meter" title="microphone level"><div></div></div>
+  </fieldset>
+  <p>
+    <button class="primary" id="run">Run all</button>
+    <button id="copy" disabled>Copy results</button>
+  </p>
+  <div id="status"></div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>path</th><th>echoCancellation</th><th>got</th><th>played dBFS</th><th>floor dBFS</th><th>echo dBFS</th><th>above floor</th><th>first 1 s</th><th>cancelled</th><th>round trip</th><th>match</th></tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <pre id="env"></pre>
+</main>
+<script>
+"use strict";
+const SIGNAL_SEC = 4;
+const FLOOR_SEC = 1;
+const SETTLE_SEC = 1.2;
+const MAX_LAG_SEC = 0.8;
+const CORR_RATE = 8000;
+const auto = new URLSearchParams(location.search).has("auto");
+
+const $ = (id) => document.getElementById(id);
+const db = (rms) => (rms > 0 ? 20 * Math.log10(rms) : -120);
+const fmt = (v, unit = "") => (v === null || v === undefined || Number.isNaN(v) ? "–" : `${v.toFixed(1)}${unit}`);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const status = (t) => ($("status").textContent = t);
+let loaded = null;
+const results = [];
+
+$("gain").oninput = () => ($("gainLabel").textContent = `${$("gain").value} dB`);
+$("file").onchange = async () => {
+  const f = $("file").files[0];
+  if (!f) return (loaded = null);
+  const ctx = new OfflineAudioContext(1, 1, 48000);
+  loaded = await ctx.decodeAudioData(await f.arrayBuffer());
+  status(`Loaded ${f.name} (${loaded.duration.toFixed(1)} s); the first ${SIGNAL_SEC} s play.`);
+};
+
+/** Speech-like test signal: a gliding voiced tone with noise, in syllables with pauses (broadband, so it correlates). */
+function speechLike(rate) {
+  const n = Math.round(SIGNAL_SEC * rate);
+  const out = new Float32Array(n);
+  let phase = 0;
+  let seed = 7;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1;
+  for (let i = 0; i < n; i++) {
+    const t = i / rate;
+    const f0 = 140 + 40 * Math.sin(2 * Math.PI * 0.7 * t) + 20 * Math.sin(2 * Math.PI * 3.1 * t);
+    phase += (2 * Math.PI * f0) / rate;
+    let v = 0;
+    for (let h = 1; h <= 12; h++) v += Math.sin(h * phase) * (h === 3 || h === 5 ? 0.5 : 0.25 / h);
+    v = 0.6 * v + 0.25 * rand();
+    const syllable = Math.max(0, Math.sin(2 * Math.PI * 4.2 * t)) ** 0.6;
+    const phrase = t % 1.6 < 1.25 ? 1 : 0;
+    out[i] = v * syllable * phrase * 0.5;
+  }
+  return out;
+}
+
+function signalFor(ctx) {
+  const rate = ctx.sampleRate;
+  if (!loaded) return speechLike(rate);
+  const src = loaded.getChannelData(0);
+  const n = Math.round(SIGNAL_SEC * rate);
+  const out = new Float32Array(n);
+  const step = loaded.sampleRate / rate;
+  for (let i = 0; i < n; i++) out[i] = src[Math.floor(i * step)] ?? 0;
+  return out;
+}
+
+function rmsOf(a, from = 0, to = a.length) {
+  let s = 0;
+  const lo = Math.max(0, from), hi = Math.min(a.length, to);
+  for (let i = lo; i < hi; i++) s += a[i] * a[i];
+  return hi > lo ? Math.sqrt(s / (hi - lo)) : 0;
+}
+
+/** Box-filtered decimation to CORR_RATE. */
+function decimate(a, rate) {
+  const k = Math.max(1, Math.round(rate / CORR_RATE));
+  const out = new Float32Array(Math.floor(a.length / k));
+  for (let i = 0; i < out.length; i++) {
+    let s = 0;
+    for (let j = 0; j < k; j++) s += a[i * k + j];
+    out[i] = s / k;
+  }
+  return { data: out, rate: rate / k };
+}
+
+/** Lag (s) of `ref` inside `rec` with the best normalized correlation, from `startLag`. */
+function bestLag(ref, rec, rate, startSample) {
+  const maxLag = Math.round(MAX_LAG_SEC * rate);
+  let best = { lag: 0, score: 0 };
+  let refEnergy = 0;
+  for (const v of ref) refEnergy += v * v;
+  for (let lag = 0; lag <= maxLag; lag++) {
+    const off = startSample + lag;
+    let dot = 0, e = 0;
+    for (let i = 0; i < ref.length; i++) {
+      const r = rec[off + i] ?? 0;
+      dot += ref[i] * r;
+      e += r * r;
+    }
+    const score = e > 0 ? dot / Math.sqrt(refEnergy * e) : 0;
+    if (Math.abs(score) > Math.abs(best.score)) best = { lag, score };
+  }
+  return { lagSec: best.lag / rate, score: best.score };
+}
+
+/** Connects `node` to the speakers through `path`; returns a stop function. */
+async function playThrough(ctx, node, path) {
+  if (path === "webaudio") {
+    node.connect(ctx.destination);
+    return () => node.disconnect();
+  }
+  const dest = ctx.createMediaStreamDestination();
+  node.connect(dest);
+  const el = new Audio();
+  if (path === "element") {
+    el.srcObject = dest.stream;
+    await el.play();
+    return () => { node.disconnect(); el.pause(); el.srcObject = null; };
+  }
+  const a = new RTCPeerConnection(), b = new RTCPeerConnection();
+  a.onicecandidate = (e) => e.candidate && b.addIceCandidate(e.candidate);
+  b.onicecandidate = (e) => e.candidate && a.addIceCandidate(e.candidate);
+  const remote = new Promise((r) => (b.ontrack = (e) => r(e.streams[0] ?? new MediaStream([e.track]))));
+  for (const t of dest.stream.getAudioTracks()) a.addTrack(t, dest.stream);
+  await a.setLocalDescription(await a.createOffer());
+  await b.setRemoteDescription(a.localDescription);
+  await b.setLocalDescription(await b.createAnswer());
+  await a.setRemoteDescription(b.localDescription);
+  el.srcObject = await remote;
+  await el.play();
+  return () => { node.disconnect(); el.pause(); el.srcObject = null; a.close(); b.close(); };
+}
+
+async function measure(path, ecValue) {
+  const ec = ecValue === "true" ? true : ecValue === "false" ? false : ecValue;
+  const processing = $("nsagc").checked;
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: { exact: ec }, noiseSuppression: processing, autoGainControl: processing, channelCount: 1 } });
+  const track = stream.getAudioTracks()[0];
+  const got = track.getSettings().echoCancellation;
+  const ctx = new AudioContext();
+  await ctx.resume();
+  const rate = ctx.sampleRate;
+  const recorded = [];
+  let recordedStart = null;
+  const mic = ctx.createMediaStreamSource(stream);
+  const proc = ctx.createScriptProcessor(2048, 1, 1);
+  const sink = ctx.createGain();
+  sink.gain.value = 0;
+  proc.onaudioprocess = (e) => {
+    const data = new Float32Array(e.inputBuffer.getChannelData(0));
+    if (recordedStart === null) recordedStart = e.playbackTime - data.length / rate;
+    recorded.push(data);
+    const bar = $("meter").firstElementChild;
+    bar.style.width = `${Math.min(100, Math.max(0, (db(rmsOf(data)) + 60) * (100 / 48)))}%`;
+  };
+  mic.connect(proc); proc.connect(sink); sink.connect(ctx.destination);
+
+  await sleep(SETTLE_SEC * 1000);
+  const signal = signalFor(ctx);
+  const buffer = ctx.createBuffer(1, signal.length, rate);
+  buffer.copyToChannel(signal, 0);
+  const gain = ctx.createGain();
+  gain.gain.value = 10 ** (Number($("gain").value) / 20);
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(gain);
+  const stop = await playThrough(ctx, gain, path);
+  const startAt = ctx.currentTime + FLOOR_SEC;
+  src.start(startAt);
+  await sleep((FLOOR_SEC + SIGNAL_SEC + MAX_LAG_SEC + 0.3) * 1000);
+  stop();
+  track.stop();
+  await ctx.close();
+
+  const all = new Float32Array(recorded.reduce((n, c) => n + c.length, 0));
+  let at = 0;
+  for (const c of recorded) { all.set(c, at); at += c.length; }
+  const startSample = Math.round((startAt - recordedStart) * rate);
+  const floor = rmsOf(all, startSample - Math.round(0.9 * rate), startSample - Math.round(0.1 * rate));
+  const decRef = decimate(signal, rate), decRec = decimate(all, rate);
+  const match = bestLag(decRef.data, decRec.data, decRef.rate, Math.round(startSample / (rate / decRef.rate)));
+  // Echo window: the signal's span, shifted by the measured lag when the match is clear, else by 150 ms.
+  const lag = Math.abs(match.score) > 0.1 ? match.lagSec : 0.15;
+  const from = startSample + Math.round(lag * rate);
+  const echo = rmsOf(all, from, from + signal.length);
+  const firstSec = rmsOf(all, from, from + rate);
+  return {
+    path, ec: ecValue, got: String(got), playedDb: db(rmsOf(signal) * gain.gain.value), floorDb: db(floor), echoDb: db(echo),
+    aboveFloor: db(echo) - db(floor), firstAboveFloor: db(firstSec) - db(floor),
+    roundTripMs: Math.abs(match.score) > 0.1 ? match.lagSec * 1000 : null, match: match.score,
+    baseLatency: ctx.baseLatency, outputLatency: ctx.outputLatency,
+  };
+}
+
+function render() {
+  const off = new Map(results.filter((r) => r.ec === "false").map((r) => [r.path, r.echoDb]));
+  $("rows").innerHTML = results.map((r) => {
+    const cancelled = r.ec !== "false" && off.has(r.path) ? off.get(r.path) - r.echoDb : null;
+    const cls = (v) => (v === null ? "" : v > 20 ? "good" : v < 6 ? "bad" : "");
+    return `<tr><td>${r.path}</td><td>${r.ec}</td><td>${r.got}</td><td>${fmt(r.playedDb)}</td><td>${fmt(r.floorDb)}</td><td>${fmt(r.echoDb)}</td>` +
+      `<td class="${r.aboveFloor < 3 ? "good" : r.aboveFloor > 10 ? "bad" : ""}">${fmt(r.aboveFloor, " dB")}</td><td>${fmt(r.firstAboveFloor, " dB")}</td>` +
+      `<td class="${cls(cancelled)}">${fmt(cancelled, " dB")}</td><td>${fmt(r.roundTripMs, " ms")}</td><td>${r.match.toFixed(2)}</td></tr>`;
+  }).join("");
+}
+
+function tableText() {
+  const head = [...document.querySelectorAll("thead th")].map((th) => th.textContent).join("\t");
+  const rows = [...document.querySelectorAll("#rows tr")].map((tr) => [...tr.children].map((td) => td.textContent).join("\t"));
+  return [navigator.userAgent, $("env").textContent, head, ...rows].join("\n");
+}
+
+async function runAll() {
+  $("run").disabled = true;
+  results.length = 0;
+  render();
+  const paths = [...document.querySelectorAll('input[name="path"]:checked')].map((i) => i.value);
+  const ecs = [...document.querySelectorAll('input[name="ec"]:checked')].map((i) => i.value);
+  // echoCancellation off first, so every other row has its reference.
+  ecs.sort((a, b) => (a === "false" ? -1 : b === "false" ? 1 : 0));
+  try {
+    const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const caps = probe.getAudioTracks()[0].getCapabilities?.().echoCancellation;
+    probe.getTracks().forEach((t) => t.stop());
+    const ctx = new AudioContext();
+    $("env").textContent = `echoCancellation capabilities: ${JSON.stringify(caps)}; AudioContext ${ctx.sampleRate} Hz, baseLatency ${(ctx.baseLatency * 1000).toFixed(1)} ms, outputLatency ${(ctx.outputLatency * 1000).toFixed(1)} ms; NS+AGC ${$("nsagc").checked}; level ${$("gain").value} dB; signal ${loaded ? "file" : "synthesized"}`;
+    await ctx.close();
+    for (const ec of ecs) {
+      if (ec === "all" && Array.isArray(caps) && !caps.includes("all")) { status('This Chrome does not offer echoCancellation "all"; skipped.'); continue; }
+      for (const path of paths) {
+        status(`Playing: ${path}, echoCancellation ${ec}… stay quiet`);
+        try {
+          results.push(await measure(path, ec));
+        } catch (err) {
+          results.push({ path, ec, got: `error: ${err.name ?? err}`, playedDb: NaN, floorDb: NaN, echoDb: NaN, aboveFloor: NaN, firstAboveFloor: NaN, roundTripMs: null, match: 0 });
+        }
+        render();
+      }
+    }
+    status("Done.");
+    $("copy").disabled = false;
+  } catch (err) {
+    status(`Failed: ${err.name ?? ""} ${err.message ?? err}`);
+  } finally {
+    $("run").disabled = false;
+    window.__echoResults = results.slice();
+  }
+}
+
+$("run").onclick = runAll;
+$("copy").onclick = async () => {
+  await navigator.clipboard.writeText(tableText());
+  status("Results copied.");
+};
+if (auto) runAll();
+</script>
+</body>
+</html>
