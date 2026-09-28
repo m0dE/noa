@@ -37,14 +37,16 @@ export class ResultRecorder {
       }
     } else if (job.source === "cloud") {
       await this.reportCloud(active, job, result, settings);
-    } else if (job.source === "turn" && result.outcome === "done" && job.from.source === "cloud" && job.from.taskId) {
+    } else if (job.source === "turn" && result.outcome === "done" && result.url && active.verifiedPost === result.url && job.from.source === "cloud" && job.from.taskId) {
       await this.finishCloudTask(active, job.from.taskId, result, settings);
     }
   }
 
   /**
-   * A turn of an account task's conversation got its work done (e.g. the user said "try" after the run ended retry
-   * or paused, and the agent found the post live): the task is done too. It is claimed by id (the server hands over a
+   * A turn of an account task's conversation got its work done, with evidence: its X post was found with the text
+   * the agent typed for the task (ActiveSession.verifiedPost; e.g. the user said "try" after the run ended retry or
+   * paused, and the agent found the post live). The task is done too. A turn that ends done without that (the user
+   * asked about something else, or nothing was checked) leaves the task as it is. It is claimed by id (the server hands over a
    * pending, paused or failed one, also one its job was paused on after failing) and reported done, so its repeat is
    * scheduled and the job no longer waits for the user. A task that is done already, or running elsewhere, is left
    * as it is (the claim is refused).

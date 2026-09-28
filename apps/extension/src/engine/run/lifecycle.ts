@@ -38,6 +38,8 @@ export interface LaunchOptions {
 export interface Ended {
   result: TaskRunResult;
   stop: ForcedStop | null;
+  /** The X post the turn's check found with the text the agent typed (ActiveSession.verifiedPost). */
+  verifiedPost?: string;
 }
 
 export interface LifecycleDeps {
@@ -239,7 +241,7 @@ export class Lifecycle {
     this.deps.titles?.ended(sessionId);
     if (!keepTabs && active.session.taskId) await this.endEarlierRuns(active.session.taskId, sessionId);
     this.deps.log(`session ${sessionId} ${result.outcome}${result.reason ? `: ${result.reason}` : ""}`);
-    return { result, stop };
+    return { result, stop, ...(active.verifiedPost ? { verifiedPost: active.verifiedPost } : {}) };
   }
 
   /**

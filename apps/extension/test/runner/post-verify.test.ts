@@ -9,14 +9,18 @@
 import { describe, expect, it } from "vitest";
 import { verifyXPost, type BrowserCaller } from "@noa/core";
 import type { PageSnapshot } from "@noa/shared";
-import { claimFixture } from "../fixtures.js";
+import { claimFixture, taskFixture } from "../fixtures.js";
+import { accountRow } from "../../src/account/todo-source.js";
+import { buildJobs } from "../../src/sidepanel/jobs.js";
 import { Runner } from "../../src/engine/runner.js";
 import { harness, runAll, setupRunnerTests, type Harness } from "./harness.js";
 import { ARRR_POST_TITLE, ARRR_POST_URL, ARRR_TYPED, xStatusShell } from "../../../../packages/core/test/x-status-page.js";
 
 setupRunnerTests();
 
-const SERIES = "s01M3J59D36A3ZMCW3RZAN7VY36";
+/** The job's series and its 16:30 occurrence (the rows in production, Sep 28). */
+const SERIES = "01M3J59D36A3ZMCW3RZAN7VY36";
+const TASK = "01M3M730QDMD33C87WM1S8Y2CE";
 const INSTRUCTIONS = "Post one new original post on X as @arrrfun (ARRR). This repeats 3 times a day.";
 
 /** X's post page in the slot's tab: each open of it reads `pages()` in turn (the last one from then on). */
@@ -51,7 +55,7 @@ async function arrrJob() {
     o.onEvent({ type: "tool_call", id: "t1", name: "act", args: { steps: [{ goal: "click the Post text box" }, { goal: "type the post", text: ARRR_TYPED }] } });
     return { outcome: "done", summary: "Posted a free-tier/mesh post as @arrrfun", url: ARRR_POST_URL };
   };
-  h.claims.push(claimFixture("c1", { instructions: INSTRUCTIONS, account: "@arrrfun", seriesId: SERIES }));
+  h.claims.push(claimFixture(TASK, { instructions: INSTRUCTIONS, account: "@arrrfun", seriesId: SERIES }));
   return { h, held, claimed };
 }
 
@@ -60,7 +64,7 @@ describe("the X post check on the run of an account job (the user's trace)", () 
     const { h, held } = await arrrJob();
     xPostPage(h, () => [xStatusShell("X"), xStatusShell(ARRR_POST_TITLE)]);
     await runAll(h);
-    expect(h.results.map((r) => [r.taskId, r.body.outcome, r.body.url])).toEqual([["c1", "done", ARRR_POST_URL]]);
+    expect(h.results.map((r) => [r.taskId, r.body.outcome, r.body.url])).toEqual([[TASK, "done", ARRR_POST_URL]]);
     expect(held).toEqual([]);
     expect((await h.runner.state()).failures).toBeUndefined();
     const s = (await h.sessions.list())[0]!;
@@ -75,7 +79,7 @@ describe("the X post check on the run of an account job (the user's trace)", () 
     let shown = false;
     xPostPage(h, () => [xStatusShell(shown ? ARRR_POST_TITLE : "X")]);
     await runAll(h);
-    expect(h.results.map((r) => [r.taskId, r.body.outcome])).toEqual([["c1", "retry"]]);
+    expect(h.results.map((r) => [r.taskId, r.body.outcome])).toEqual([[TASK, "retry"]]);
     expect(held).toEqual([`Paused after 3 failed runs in a row. Last: could not verify the post: "100gb month free zero servers to babysit" not found on ${ARRR_POST_URL}`]);
     const sessionId = (await h.sessions.list())[0]!.sessionId;
 
@@ -86,20 +90,71 @@ describe("the X post check on the run of an account job (the user's trace)", () 
       return { outcome: "done", summary: "already posted by an earlier attempt", url: ARRR_POST_URL };
     };
     // The account's queue hands the run's task (paused with the job) to this runner, which reports it done.
-    h.claims.push(claimFixture("c1", { instructions: INSTRUCTIONS, account: "@arrrfun", seriesId: SERIES, attempts: 2 }));
+    h.claims.push(claimFixture(TASK, { instructions: INSTRUCTIONS, account: "@arrrfun", seriesId: SERIES, attempts: 2 }));
     await h.runner.message(sessionId, "try");
     await h.runner.idle();
     await h.sessions.flush();
 
     const s = await h.sessions.get(sessionId);
     expect(s).toMatchObject({ outcome: "done", url: ARRR_POST_URL });
-    expect(claimed).toEqual([undefined, undefined, "c1"]);
+    expect(claimed).toEqual([undefined, undefined, TASK]);
     expect(h.results.map((r) => [r.taskId, r.body.outcome, r.body.url])).toEqual([
-      ["c1", "retry", ARRR_POST_URL],
-      ["c1", "done", ARRR_POST_URL],
+      [TASK, "retry", ARRR_POST_URL],
+      [TASK, "done", ARRR_POST_URL],
     ]);
     expect(h.brain.starts).toHaveLength(1);
     expect((await h.runner.state()).failures).toBeUndefined();
+  });
+
+  it("the job's page: Needs you on the production rows, Scheduled once the follow-up reported the occurrence done", async () => {
+    const repeat = { cron: "30 1,16,20 * * *", tz: "UTC" };
+    const held = taskFixture(TASK, {
+      instructions: INSTRUCTIONS,
+      account: "@arrrfun",
+      seriesId: SERIES,
+      status: "paused",
+      attempts: 1,
+      notBefore: "2026-09-28T16:30:00.000Z",
+      retryAfter: null,
+      pauseReason: `Paused after 3 failed runs in a row. Last: could not verify the post: "100gb/month free. zero servers to babysi" not found on ${ARRR_POST_URL}`,
+      createdAt: "2026-09-28T14:35:48.333Z",
+      updatedAt: "2026-09-28T16:30:47.914Z",
+      schedule: { at: "2026-09-28T16:30:00.000Z", repeat },
+    });
+    const session = { sessionId: "bad6812f", source: "cloud" as const, title: "@arrrfun: three daily X posts", brain: "claude-code" as const, jev: true, startedAt: "2026-09-28T20:17:17.183Z", endedAt: "2026-09-28T20:17:33.364Z", taskId: TASK, seriesId: SERIES };
+    const now = Date.parse("2026-09-28T20:18:00.000Z");
+    const stateOf = (tasks: ReturnType<typeof taskFixture>[], outcome: "retry" | "done") =>
+      buildJobs({ sessions: [{ ...session, outcome }], running: [], tasks: tasks.map(accountRow) }, now).find((j) => j.key === `task:${SERIES}`)!.state;
+    expect(stateOf([held], "retry")).toBe("needs");
+    // What the API has after the follow-up's claim and done (finish-held.test.ts in apps/api): the occurrence done, its repeat waiting.
+    const done = { ...held, status: "done" as const, pauseReason: null, resultUrl: ARRR_POST_URL, updatedAt: "2026-09-28T20:17:33.500Z" };
+    const next = taskFixture("next", { instructions: INSTRUCTIONS, account: "@arrrfun", seriesId: SERIES, notBefore: "2026-09-28T20:30:00.000Z", createdAt: "2026-09-28T20:17:33.500Z", schedule: { at: "2026-09-28T20:30:00.000Z", repeat } });
+    expect(stateOf([next, done], "done")).toBe("scheduled");
+  });
+
+  it("an unrelated follow-up that ends done leaves the scheduled occurrence as it is (no verified post, no completion)", async () => {
+    const { h, claimed } = await arrrJob();
+    h.settings.maxConsecutiveFailures = 5;
+    xPostPage(h, () => [xStatusShell("X")]);
+    await runAll(h);
+    h.brain.continueScript = () => ({ outcome: "done", summary: "It is sunny in Seattle" });
+    await h.runner.message((await h.sessions.list())[0]!.sessionId, "what's the weather?");
+    await h.runner.idle();
+    expect(claimed).toEqual([undefined, undefined]);
+    expect(h.results.map((r) => r.body.outcome)).toEqual(["retry"]);
+    // Nor does it start the job's failures in a row over.
+    expect((await h.runner.state()).failures).toEqual({ [SERIES]: 3 });
+  });
+
+  it("a follow-up reporting a post it did not verify leaves the occurrence as it is", async () => {
+    const { h, claimed } = await arrrJob();
+    xPostPage(h, () => [xStatusShell("X")]);
+    await runAll(h);
+    // X still does not show the post: the turn's check turns its done into retry.
+    h.brain.continueScript = () => ({ outcome: "done", summary: "posted", url: ARRR_POST_URL });
+    await h.runner.message((await h.sessions.list())[0]!.sessionId, "try");
+    await h.runner.idle();
+    expect(claimed).toEqual([undefined, undefined]);
   });
 
   it("a follow-up that gets the work done starts the job's failures in a row over (before it is paused)", async () => {

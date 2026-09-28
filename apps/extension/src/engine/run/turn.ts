@@ -15,7 +15,7 @@ import type { SessionStore } from "../sessions.js";
 import type { TabChatsLike } from "../../tab-chats.js";
 import { asksAboutThePage, isRestrictedUrl, RESTRICTED_STATUS } from "../../restricted.js";
 import type { ForcedStop } from "./active.js";
-import { timeLimitReached } from "@noa/core";
+import { timeLimitReached, verifySnippet } from "@noa/core";
 import { ABORT_GRACE_MS, ActiveClock, safetyTimeoutMinutes } from "./deadline.js";
 import { mediaSources, type FirstJob } from "./jobs.js";
 import type { MemoryRun, MemoryService } from "../../memory/service.js";
@@ -41,6 +41,8 @@ export interface ActiveSession {
   nextTurn: QueuedMessage[];
   /** Texts the agent typed or pasted into the page; the longest is the post body to verify. */
   typed: string[];
+  /** The X post this turn's check found with the text the agent typed (its URL): the evidence that the task's post is out. */
+  verifiedPost?: string;
   /** It acts as an X account: it holds the X turn while it runs. */
   x: boolean;
   /** A due task run by the loop (counts toward maxParallelTasks). */
@@ -389,9 +391,9 @@ export class TurnRunner {
       this.emit(active, { type: "status", text: "Verifying the post" });
       let ok = false;
       let detail = "";
+      // Compare against what the agent actually entered, not the whole instructions.
+      const expected = active.typed.reduce((a, b) => (b.trim().length > a.trim().length ? b : a), "");
       try {
-        // Compare against what the agent actually entered, not the whole instructions.
-        const expected = active.typed.reduce((a, b) => (b.trim().length > a.trim().length ? b : a), "");
         // The post must be the task's account's own (a follow-up turn in the same session knows it from the session).
         const account = active.account ?? active.session.account;
         const v = await this.deps.core.verifyXPost(active.slot.browser, result.url, expected, account, this.deps.sleep ? { sleep: this.deps.sleep } : {});
@@ -407,6 +409,8 @@ export class TurnRunner {
         return { ...unverified, outcome: "retry", reason: `could not verify the post${detail ? `: ${detail}` : ""}` };
       }
       this.emit(active, { type: "status", text: "Post verified" });
+      // Found with its text (not only opened: a check with nothing typed to compare proves no post of this task).
+      if (verifySnippet(expected)) active.verifiedPost = result.url;
     }
     if (result.outcome === "failed" && result.reason && !active.forced) {
       let kind: string = "permanent";

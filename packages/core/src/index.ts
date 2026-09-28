@@ -27,7 +27,7 @@ export { isTaskEndTool, timeLimitReached, toolBudget, toolCallLimitExceeded, too
 /** Marker in act results when Jev was not sure about a step (the result then lists candidates for it). */
 export { NOT_CONFIDENT } from "./act.js";
 /** Checks independently that an X post exists and shows the expected text. */
-export { verifyXPost } from "./verify.js";
+export { verifySnippet, verifyXPost } from "./verify.js";
 /** One Messages request (Anthropic or the hosted AI), for one-shot calls outside the agent loop (the memory writer). */
 export { postMessages, type MessagesRequest, type MessagesTransport, type PostResult } from "./anthropic.js";
 /** How much the model thinks: the stuck detector that raises a Fast run's reasoning, and each model's request settings. */

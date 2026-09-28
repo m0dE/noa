@@ -53,11 +53,12 @@ export class FailurePolicy {
   }
 
   /**
-   * After a next turn of a scheduled run's conversation (the user went on in it): once it got the work done, the
-   * job's failures in a row start over. Its failures do not count here (the user is there to see them).
+   * After a next turn of a scheduled run's conversation (the user went on in it): once it got the job's work done,
+   * shown by its X post found with the text typed for it (Ended.verifiedPost), the job's failures in a row start over.
+   * A turn that ends done about something else does not count, and neither do its failures (the user is there).
    */
-  afterTurn({ result, stop }: Ended, seriesId: string | undefined): Promise<void> {
-    if (!seriesId || result.outcome !== "done" || stop) return Promise.resolve();
+  afterTurn({ result, stop, verifiedPost }: Ended, seriesId: string | undefined): Promise<void> {
+    if (!seriesId || result.outcome !== "done" || stop || !verifiedPost || verifiedPost !== result.url) return Promise.resolve();
     const next = this.accounting.then(async () => {
       if ((await this.deps.state.get()).failures?.[seriesId]) await this.setFailures(seriesId, 0);
     });
