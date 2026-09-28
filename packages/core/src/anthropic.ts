@@ -4,7 +4,7 @@
  */
 import { z } from "zod";
 import { ANTHROPIC_API_VERSION, ANTHROPIC_MESSAGES_URL, errorMessage, HOSTED_AI_UNAVAILABLE, toolArgsSchema, toolDescription, type ToolName, type ToolResult } from "@noa/shared";
-import { errorDetail, isHostedAiUnavailable, outOfCreditError } from "./api-errors.js";
+import { errorDetail, isHostedAiUnavailable, outOfCreditError, type CreditShortfall } from "./api-errors.js";
 import { MessageAccumulator, StreamError, readSse } from "./sse.js";
 import type { ReasoningParams, ThinkingParam } from "./reasoning.js";
 
@@ -92,6 +92,26 @@ export function toolDefinitions(names: ToolName[], jev = false): AnthropicTool[]
   });
 }
 
+/** Blocks a cache breakpoint may sit on (thinking blocks may not). */
+const CACHEABLE_BLOCKS: ReadonlySet<string> = new Set(["text", "image", "document", "tool_use", "tool_result"]);
+
+/**
+ * The conversation with a cache breakpoint on its last cacheable block, so each request reads the one before it
+ * from the cache and writes only what was added since (prompt caching's multi-turn pattern). Only that block is
+ * copied: the history itself stays unmarked, so a single breakpoint moves forward turn by turn. With the tools'
+ * and the system prompt's, a request has 3 of the 4 allowed.
+ */
+export function withConversationCache(messages: MessageParam[]): MessageParam[] {
+  const last = messages.at(-1);
+  if (!last) return messages;
+  let at = last.content.length - 1;
+  while (at >= 0 && !CACHEABLE_BLOCKS.has(last.content[at]!.type)) at--;
+  if (at < 0) return messages;
+  const content = last.content.slice();
+  content[at] = { ...content[at]!, cache_control: { type: "ephemeral" } };
+  return [...messages.slice(0, -1), { ...last, content }];
+}
+
 export function buildRequest(opts: { model: string; system: string; tools: ToolName[]; messages: MessageParam[]; jev?: boolean; reasoning?: ReasoningParams }): MessagesRequest {
   const { max_tokens = MAX_TOKENS, ...thinking } = opts.reasoning ?? {};
   return {
@@ -99,7 +119,7 @@ export function buildRequest(opts: { model: string; system: string; tools: ToolN
     max_tokens,
     system: [{ type: "text", text: opts.system, cache_control: { type: "ephemeral" } }],
     tools: toolDefinitions(opts.tools, opts.jev === true),
-    messages: opts.messages,
+    messages: withConversationCache(opts.messages),
     ...thinking,
   };
 }
@@ -116,8 +136,8 @@ export function toolResultBlock(toolUseId: string, r: ToolResult): ToolResultBlo
 
 export type PostResult =
   | { kind: "ok"; message: MessagesResponse }
-  /** 402 from the Noa API: the account has no usage credit left. */
-  | { kind: "credit"; reason: string; topupUrl?: string }
+  /** 402 from the Noa API: the account has no usage credit left, or too little for this request (`shortfall`); pauseReason says which. */
+  | { kind: "credit"; reason: string; pauseReason: string; topupUrl?: string; shortfall?: CreditShortfall }
   /** 429, 529, 5xx, network: worth retrying; retryAfterMs when the server said when (retry-after-ms / retry-after). */
   | { kind: "transient"; reason: string; retryAfterMs?: number }
   /** 401/403. */
@@ -199,8 +219,9 @@ export async function postMessages(
   }
   if (s === 402) {
     const credit = outOfCreditError(text);
-    const r: PostResult = { kind: "credit", reason: credit.message };
+    const r: PostResult = { kind: "credit", reason: credit.message, pauseReason: credit.pauseReason };
     if (credit.topupUrl) r.topupUrl = credit.topupUrl;
+    if (credit.shortfall) r.shortfall = credit.shortfall;
     return r;
   }
   // The hosted AI's own credentials were refused: retrying will not help, and there is nothing technical to show.

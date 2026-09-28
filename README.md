@@ -7,7 +7,7 @@ then reports back. It was built to catch up on social posting, like three
 posts a day on each of three X accounts, and it works for anything else you
 do in Chrome.
 
-It runs entirely on your machine. A cloud task queue is optional.
+It runs entirely on your machine. An account server is optional.
 
 ## What you get
 
@@ -37,8 +37,8 @@ It runs entirely on your machine. A cloud task queue is optional.
     new one. Other tabs keep theirs.
   - The **model chip** shows the model and whether Jev is on, and changes
     either.
-- **A settings page** for the brain, the model, keys, cloud sync, site
-  logins and limits.
+- **A settings page** for the brain, the model, keys, site logins and
+  limits.
 - **Careful defaults:**
   - It pauses at login pages, 2FA, CAPTCHAs and account warnings.
   - It never types your X password.
@@ -142,12 +142,12 @@ Then ask Claude Code something like "post this on X from @me". It gets the
 same tools as tasks, except the ones that end a task. While a Noa
 task is running, its calls are turned away until the task finishes.
 
-## Cloud task queue (optional)
+## Account server (optional)
 
-Turn on Cloud sync in settings and enter a task server URL and runner key.
-The extension then also takes tasks from that server, so another app can
-queue work while your computer is off. Any server that implements
-[the protocol](docs/PROTOCOL.md) works.
+Signed in to an account server (Settings > Advanced > Account server), the
+extension also runs the account's scheduled tasks, so another app can queue
+work while your computer is off. It claims them with the runner endpoints in
+[the protocol](docs/PROTOCOL.md).
 
 ## Settings
 

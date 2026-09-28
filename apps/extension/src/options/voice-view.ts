@@ -51,9 +51,9 @@ export function voiceView(input: { engines: readonly VoiceEngine[] | null | "loa
     let cost: string;
     if (engines === "loading") cost = "Loading the price…";
     else if (!e) cost = "The price couldn't be loaded right now.";
-    else if (!e.available) cost = "Not available on this server right now: Standard is used instead.";
+    else if (!e.available) cost = "Not available on this server right now: Whisper + browser voice is used instead.";
     else cost = costPerMinuteText(e.approxCentsPerMinute);
-    // The tooltip names the server's model (it may change; the words above do not name a vendor).
+    // The tooltip names the server's model (its exact version may change).
     const title = e ? `${e.assumption} Model: ${e.model}.` : "";
     return { id, label: ENGINE_NAMES[id], detail: DETAILS[id], cost, title };
   });
@@ -103,8 +103,8 @@ export function voicePicker(input: {
   const current = s.speechVoice;
   const known = !current || input.browserVoices.some((v) => v.name === current);
   return {
-    title: "Standard voice",
-    hint: "Your browser's voices (also used when Realtime falls back to Standard).",
+    title: "Browser voice",
+    hint: "Your browser's voices (also used when Realtime falls back to Whisper).",
     options: [
       { value: "", label: "Browser default" },
       ...input.browserVoices.map((v) => ({ value: v.name, label: `${v.name} (${v.lang})` })),

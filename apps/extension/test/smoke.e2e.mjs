@@ -66,12 +66,6 @@ try {
     return "key set then cleared, interval 30";
   });
 
-  await step("settings.testCloud reports missing configuration", async () => {
-    const r = await ui({ type: "settings.testCloud" });
-    assert.equal(r.ok, false);
-    return r.detail;
-  });
-
   await step("tasks.add / tasks.list with a file stored in IndexedDB", async () => {
     const { task } = await ui({
       type: "tasks.add",

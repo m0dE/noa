@@ -12,6 +12,7 @@
 import {
   HOSTED_AI_UNAVAILABLE,
   HOSTED_AI_UNAVAILABLE_CODE,
+  LOW_CREDIT,
   NOT_SET_UP,
   OUT_OF_CREDIT,
   PLAN_REQUIRED,
@@ -84,6 +85,16 @@ const RULES: Rule[] = [
     help: () => ({ message: `${HOSTED_LABEL} is unavailable right now.`, hint: "Try again later, or use your own Claude.", fixes: [FIXES.ownClaude], retry: true }),
   },
   {
+    // Credit left, but too little for the request: "Not enough usage credit for this request ($0.67 left; about $0.80 needed)".
+    test: startsWith(LOW_CREDIT),
+    help: (t) => ({
+      message: t === LOW_CREDIT ? `${LOW_CREDIT} for this request.` : `${t.split("\n")[0]!.replace(/\.$/, "")}.`,
+      hint: "Top up, or use your own Claude.",
+      fixes: [FIXES.topup, FIXES.ownClaude],
+      retry: true,
+    }),
+  },
+  {
     test: (t) => t.startsWith(OUT_OF_CREDIT) || t === HOSTED_NO_CREDIT || /^out of credit\b/i.test(t),
     help: () => ({ message: "You're out of usage credit.", hint: "Top up, or use your own Claude.", fixes: [FIXES.topup, FIXES.ownClaude], retry: true }),
   },
@@ -145,7 +156,7 @@ const RULES: Rule[] = [
     help: (t) => {
       const reason = /^:\s*(.+)$/.exec(t.slice(NO_AI.length))?.[1];
       const inner = reason ? RULES.find((r) => r.test(reason)) : undefined;
-      return inner ? inner.help(reason!) : { message: "No AI is set up yet.", fixes: [FIXES.setUpAi], retry: false };
+      return inner ? inner.help(reason!) : { message: "AI model not detected.", fixes: [FIXES.setUpAi], retry: false };
     },
   },
   {

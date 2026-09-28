@@ -37,7 +37,7 @@ describe("statusLine", () => {
   });
   it("says what is wrong in plain words, with the fix of the chat's error cards", () => {
     const note = "No AI set up. Install the helper, add a Claude API key, or log in.";
-    expect(statusLine(state({}, { effective: null, note }))).toEqual({ tone: "bad", text: "No AI is set up yet", title: note, action: FIXES.setUpAi });
+    expect(statusLine(state({}, { effective: null, note }))).toEqual({ tone: "bad", text: "AI model not detected", title: note, action: FIXES.setUpAi });
     expect(statusLine(state({}, { effective: null, note: "Helper not installed" }))).toMatchObject({ text: "The Claude Code helper isn't installed", action: FIXES.claudeCode });
     expect(statusLine(state({}, { effective: null, note: "No Claude API key set" }))).toMatchObject({ text: "No Claude API key is set", action: FIXES.apiKey });
     expect(statusLine(state({}, { effective: null, note: "Sign in to use Noa AI" }))).toMatchObject({ text: "You're not logged in", action: FIXES.login });

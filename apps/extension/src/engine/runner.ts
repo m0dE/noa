@@ -50,11 +50,9 @@ export interface ResolvedBrain {
 export interface RunnerDeps {
   loadSettings(): Promise<ExtensionSettings>;
   getRunnerId(): Promise<string>;
-  createApi(settings: ExtensionSettings): RunnerApi;
   /**
    * The signed-in account's task queue (claim/heartbeat/result with the
-   * session token), or null when signed out. When there is one it replaces
-   * the runner-key cloud sync.
+   * session token), or null when signed out.
    */
   accountApi?(): Promise<RunnerApi | null>;
   /**
@@ -185,7 +183,6 @@ export class Runner {
       localStore: deps.localStore,
       loadSettings: deps.loadSettings,
       getRunnerId: deps.getRunnerId,
-      createApi: deps.createApi,
       ...(deps.accountApi ? { accountApi: deps.accountApi } : {}),
       ...(deps.accountQueueHold ? { accountQueueHold: deps.accountQueueHold } : {}),
       ...(deps.outOfCredit ? { outOfCredit: deps.outOfCredit } : {}),

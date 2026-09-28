@@ -8,31 +8,31 @@ describe("ApiClient", () => {
   it("claims a task with auth header and runnerId body", async () => {
     const claim = claimFixture("t1");
     const f = fakeFetch(() => json(claim));
-    const api = new ApiClient({ apiBase: "https://api.test", runnerKey: "bt_key", fetch: f.fn });
+    const api = new ApiClient({ apiBase: "https://api.test", token: "session-token", fetch: f.fn });
     expect(await api.claim("runner-1")).toEqual(claim);
     const call = f.calls[0]!;
     expect(call.url).toBe("https://api.test/v1/runner/claim");
     expect(call.init.method).toBe("POST");
-    expect(new Headers(call.init.headers).get("authorization")).toBe("Bearer bt_key");
+    expect(new Headers(call.init.headers).get("authorization")).toBe("Bearer session-token");
     expect(new Headers(call.init.headers).get("content-type")).toBe("application/json");
     expect(JSON.parse(String(call.init.body))).toEqual({ runnerId: "runner-1" });
   });
 
   it("returns null on 204", async () => {
     const f = fakeFetch(() => new Response(null, { status: 204 }));
-    const api = new ApiClient({ apiBase: "https://api.test", runnerKey: "k", fetch: f.fn });
+    const api = new ApiClient({ apiBase: "https://api.test", token: "k", fetch: f.fn });
     expect(await api.claim("r")).toBeNull();
   });
 
   it("rejects a malformed claim body", async () => {
     const f = fakeFetch(() => json({ nope: true }));
-    const api = new ApiClient({ apiBase: "https://api.test", runnerKey: "k", fetch: f.fn });
+    const api = new ApiClient({ apiBase: "https://api.test", token: "k", fetch: f.fn });
     await expect(api.claim("r")).rejects.toThrow(/claim response/i);
   });
 
   it("posts heartbeat and result with the right shapes", async () => {
     const f = fakeFetch((url) => (url.endsWith("/heartbeat") ? json({ leaseExpiresAt: "2026-09-23T00:15:00.000Z" }) : json({ ok: true })));
-    const api = new ApiClient({ apiBase: "https://api.test", runnerKey: "k", fetch: f.fn });
+    const api = new ApiClient({ apiBase: "https://api.test", token: "k", fetch: f.fn });
     expect(await api.heartbeat("t 1", "r")).toEqual({ leaseExpiresAt: "2026-09-23T00:15:00.000Z" });
     await api.result("t1", { runnerId: "r", outcome: "done", summary: "posted", url: "https://x.com/a/status/1", screenshotId: "m1", retryAfterMinutes: 15 });
     expect(f.calls[0]!.url).toBe("https://api.test/v1/runner/tasks/t%201/heartbeat");
@@ -50,7 +50,7 @@ describe("ApiClient", () => {
 
   it("maps error bodies to ApiRequestError with status", async () => {
     const f = fakeFetch(() => json({ error: "lease not owned" }, 409));
-    const api = new ApiClient({ apiBase: "https://api.test", runnerKey: "k", fetch: f.fn });
+    const api = new ApiClient({ apiBase: "https://api.test", token: "k", fetch: f.fn });
     const err = await api.result("t1", { runnerId: "r", outcome: "failed", reason: "x" }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiRequestError);
     expect((err as ApiRequestError).status).toBe(409);
@@ -58,11 +58,11 @@ describe("ApiClient", () => {
   });
 
   it("maps non-JSON errors and network failures", async () => {
-    const api1 = new ApiClient({ apiBase: "https://api.test", runnerKey: "k", fetch: fakeFetch(() => new Response("Bad Gateway", { status: 502 })).fn });
+    const api1 = new ApiClient({ apiBase: "https://api.test", token: "k", fetch: fakeFetch(() => new Response("Bad Gateway", { status: 502 })).fn });
     await expect(api1.claim("r")).rejects.toThrow("API 502: Bad Gateway");
     const api2 = new ApiClient({
       apiBase: "https://api.test",
-      runnerKey: "k",
+      token: "k",
       fetch: fakeFetch(() => {
         throw new TypeError("Failed to fetch");
       }).fn,
@@ -73,7 +73,7 @@ describe("ApiClient", () => {
   it("uploads media as multipart field 'file'", async () => {
     const info = { id: "m1", filename: "result.jpg", contentType: "image/jpeg", size: 3 };
     const f = fakeFetch(() => json(info, 201));
-    const api = new ApiClient({ apiBase: "https://api.test", runnerKey: "k", fetch: f.fn });
+    const api = new ApiClient({ apiBase: "https://api.test", token: "k", fetch: f.fn });
     const got = await api.uploadMedia(new Blob([new Uint8Array([1, 2, 3])], { type: "image/jpeg" }), "result.jpg");
     expect(got).toEqual(info);
     const call = f.calls[0]!;
@@ -87,17 +87,5 @@ describe("ApiClient", () => {
     expect(file.size).toBe(3);
     // fetch must set the multipart boundary itself.
     expect(new Headers(call.init.headers).get("content-type")).toBeNull();
-  });
-
-  it("check() verifies reachability and the key", async () => {
-    const ok = fakeFetch((url) => (url.endsWith("/") ? json({ name: "noa-api" }) : json({ error: "not found" }, 404)));
-    expect(await new ApiClient({ apiBase: "https://api.test", runnerKey: "k", fetch: ok.fn }).check()).toEqual({ ok: true });
-    expect(ok.calls[1]!.url).toMatch(/^https:\/\/api\.test\/v1\/media\//);
-
-    const badKey = fakeFetch((url) => (url.endsWith("/") ? json({}) : json({ error: "invalid key" }, 401)));
-    expect(await new ApiClient({ apiBase: "https://api.test", runnerKey: "k", fetch: badKey.fn }).check()).toEqual({
-      ok: false,
-      error: "API 401: invalid key",
-    });
   });
 });

@@ -3,11 +3,12 @@
  * brain, sent to the account server instead of Anthropic. Messages go to
  * `${apiBase}/v1/ai/messages` and Jev to `${apiBase}/v1/ai/jev`, with the
  * session token as a bearer and X-Noa-Session naming the run, so the
- * server can tie usage to it. A 402 (out of credit) pauses the run with
- * "Out of usage credit" and flags the account (its Top up opens the
- * dashboard's Billing page).
+ * server can tie usage to it. A 402 pauses the run: "Out of usage credit"
+ * when none is left (the account is flagged; its Top up opens the
+ * dashboard's Billing page), "Not enough usage credit" when some is left but
+ * too little for the request.
  */
-import { OutOfCreditError, type JevLike } from "@noa/core";
+import { OutOfCreditError, type CreditShortfall, type JevLike } from "@noa/core";
 import { hostedModel, SESSION_HEADER } from "@noa/shared";
 import type { ApiBackend } from "./api-brain.js";
 import { HOSTED_LABEL } from "./brain-resolver.js";
@@ -17,8 +18,8 @@ export interface HostedDeps {
   core: Pick<CoreApi, "createJev">;
   /** The signed-in session (null when signed out). */
   session(): { token: string; apiBase: string } | null;
-  /** A request was refused for lack of credit. */
-  onOutOfCredit(): void;
+  /** A request was refused for lack of credit: none left, or (`shortfall`) too little for it. */
+  onOutOfCredit(shortfall?: CreditShortfall): void;
   /** A turn ended: the credit changed. */
   afterTurn?(): void;
   fetch?: typeof fetch;
@@ -44,7 +45,7 @@ export function hostedBackend(deps: HostedDeps): ApiBackend {
             try {
               return await inner.decide(input);
             } catch (err) {
-              if (err instanceof OutOfCreditError) deps.onOutOfCredit();
+              if (err instanceof OutOfCreditError) deps.onOutOfCredit(err.shortfall);
               throw err;
             }
           },
@@ -58,7 +59,7 @@ export function hostedBackend(deps: HostedDeps): ApiBackend {
           auth: "bearer",
           headers,
           label: HOSTED_LABEL,
-          onOutOfCredit: () => deps.onOutOfCredit(),
+          onOutOfCredit: (info) => deps.onOutOfCredit(info.shortfall),
         },
         jev,
       };

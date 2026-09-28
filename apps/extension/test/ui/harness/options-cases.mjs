@@ -222,7 +222,7 @@ export const OPTION_CASES = [
   ["options-voice", "opt-paid", "#voice", () => {}, (p) => [
     ["on the AI section", async () => (await p.getAttribute("#tab-ai", "aria-selected")) === "true"],
     ["Realtime checked by default", () => p.isChecked("input[name=voiceEngine][value=realtime]")],
-    ["names", async () => (await p.locator(".opt[data-voice] .voice-name").allTextContents()).join(" | ") === "Realtime (OpenAI) | Standard"],
+    ["names", async () => (await p.locator(".opt[data-voice] .voice-name").allTextContents()).join(" | ") === "OpenAI Realtime (recommended) | OpenAI Whisper + browser voice"],
     ["costs from the server", () =>
       eventually(async () => (await p.locator(".opt[data-voice] .voice-cost").allTextContents()).join(" | ") === "about 6¢ of usage credit a minute | about 0.067¢ of usage credit a minute")],
     ["cost assumption and model as tooltip", async () => /speaks for 18 seconds.*Model: gpt-realtime-2\.1\.$/.test(await p.getAttribute(".opt[data-voice=realtime] .voice-cost", "title"))],
@@ -239,14 +239,14 @@ export const OPTION_CASES = [
   // Voice with Standard selected: the browser's voices and speed range.
   ["options-voice-standard", "opt-paid", "#voice", (d) => (d.state.settings = { ...d.state.settings, voiceEngine: "standard", speechRate: 1.4 }), (p) => [
     ["Standard checked", () => p.isChecked("input[name=voiceEngine][value=standard]")],
-    ["Standard voice title", async () => (await p.textContent("#speech-voice-title")) === "Standard voice"],
+    ["Standard voice title", async () => (await p.textContent("#speech-voice-title")) === "Browser voice"],
     ["browser voices", async () => (await p.locator("#speech-voice option").first().textContent()) === "Browser default" && !(await p.locator("#speech-voice option", { hasText: "Marin" }).count())],
     ["Standard speed range", async () => JSON.stringify(await p.evaluate(() => { const r = document.getElementById("speech-rate"); return [r.min, r.max, r.step, r.value]; })) === JSON.stringify(["0.5", "2", "0.1", "1.4"])],
     ["speed shown", async () => (await p.textContent("#speech-rate-value")) === "1.4×" && (await p.textContent("#speech-rate-hint")) === "0.5× to 2.0×; 1.0× is normal."],
     ["local test", async () => (await p.textContent("#speech-test-hint")) === "Says a sample line with this voice and speed, on this computer."],
   ]],
   // Settings > Permission: the three chat levels (the middle one by default), then scheduled tasks: their choice and
-  // when they run. The old #automation link (it was on AI) lands here; full autonomy on shows its warning and the level
+  // when they run, and last the no-warranty note. The old #automation link (it was on AI) lands here; full autonomy on shows its warning and the level
   // in the warning colour.
   ["options-permission", "ok", "#automation", () => {}, (p) => [
     ["on the Permission section", async () => (await p.getAttribute("#tab-permission", "aria-selected")) === "true" && (await p.textContent("#tab-permission")) === "Permission"],
@@ -260,6 +260,7 @@ export const OPTION_CASES = [
     ["scheduled tasks do what they say", () => p.isChecked("input[name=scheduledAutomation][value=full_within_task]")],
     ["schedule under it", async () => (await shown(p, "#schedule-group #f-intervalMinutes")) && (await p.inputValue("#f-intervalMinutes")) === "15" && (await p.inputValue("#f-maxParallelTasks")) === "2"],
     ["no warning", async () => !(await shown(p, "#automation-warning"))],
+    ["no-warranty note last, linking to the terms", async () => (await shown(p, "#panel-permission > .disclaimer")) && /without warranty/.test(await p.textContent("#panel-permission > .disclaimer")) && (await p.getAttribute("#panel-permission > .disclaimer a", "href")) === "https://noa.bot/terms"],
     ["scheduled choices in effect (no note)", async () => !(await shown(p, "#scheduled-automation-note")) && (await p.locator("input[name=scheduledAutomation]:disabled").count()) === 0],
     ["the section is in view", () => p.evaluate(() => { const r = document.getElementById("automation-group").getBoundingClientRect(); return r.top >= 0 && r.top < innerHeight; })],
   ]],
@@ -346,12 +347,9 @@ export const OPTION_CASES = [
     ["the forgot steps are gone", async () => !(await shown(p, "#vault-forgot-row")) && !(await shown(p, "#vault-forgot-box"))],
     ["says what went and what next", async () => (await p.textContent("#vault-msg")) === "Erased 3 saved logins. Choose a new passphrase to start over."],
   ]],
-  ["options-advanced", "ok", "#advanced", (d) => {
-    d.state.settings.cloudEnabled = true;
-    d.state.settings.apiBase = "https://tasks.example.com";
-  }, (p) => [
+  ["options-advanced", "ok", "#advanced", () => {}, (p) => [
     ["account server", async () => (await p.inputValue("#f-accountApiBase")) === scenario("ok").state.settings.accountApiBase],
-    ["cloud fields shown", () => shown(p, "[data-secret=runnerKey]")],
+    ["no runner-key cloud sync", async () => (await p.locator("#panel-advanced").textContent()).match(/Cloud sync|Runner key|Task server/) === null],
   ]],
   // Account: plan and credit, and one billing button to the dashboard's Billing page (no Stripe buttons here).
   ["options-account-free", "opt-free", "#account", () => {}, (p) => [
@@ -404,6 +402,51 @@ export const OPTION_CASES = [
 ];
 
 export const OPTION_FLOWS = [
+  // Regression (Settings showed "$11.14 usage credit left" while runs were refused and the dashboard said $0.67):
+  // Settings is open on Auto -> Noa AI with $11.14; runs in the side panel spend credit, and the background's
+  // account now says $0.67 (its state push, as hub.pushState sends it). Coming back to the Settings tab must show
+  // the current balance, not the one from when the page was opened. Only a settings save (clicking another Brain
+  // option) used to bring the new balance in.
+  {
+    name: "options-credit-fresh",
+    size: { w: 1280 },
+    scheme: "light",
+    async run({ openOptions, optChecks }) {
+      const p = await openOptions({ w: 1280, h: 1000 }, "light", "ok", "#ai", (d) => {
+        onPlus(d);
+        d.state.account.credit = { ...d.state.account.credit, subscriptionCents: 1114, totalCents: 1114 };
+        d.state.settings.brain = "auto";
+        d.state.settings.anthropicApiKey = "";
+        d.state.brain = { effective: "noa", helper: null, helperError: "Helper not installed", hasApiKey: false, jevActive: true };
+      });
+      const credit = () => p.textContent("#hosted-credit");
+      const checks = [];
+      const check = (what, ok) => checks.push([what, async () => ok]);
+      check("opened: $11.14 shown", await eventually(async () => /\$11\.14 usage credit left/.test(await credit())));
+      // The background's account after the runs (refresh after each turn): $0.67 left.
+      await p.evaluate(() => {
+        return window.chrome.runtime.sendMessage({ type: "state.get" }).then((r) => {
+          const state = r.data;
+          const next = { ...state, rev: (state.rev ?? 0) + 1, account: { ...state.account, credit: { ...state.account.credit, subscriptionCents: 67, totalCents: 67 } } };
+          window.__push({ type: "state", state: next });
+        });
+      });
+      // The user comes back to the Settings tab.
+      await p.evaluate(() => {
+        window.dispatchEvent(new Event("blur"));
+        window.dispatchEvent(new Event("focus"));
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      const shownNow = await eventually(async () => /\$0\.67 usage credit left/.test(await credit()), 3000);
+      check(`after the runs spent credit: $0.67 shown (shows "${await credit()}")`, shownNow);
+      console.log(`options-credit-fresh: #hosted-credit after the background's balance changed = "${await credit()}"`);
+      await p.click(radio("claude-code"));
+      const afterClick = await eventually(async () => /\$0\.67 usage credit left/.test(await credit()), 3000);
+      console.log(`options-credit-fresh: #hosted-credit after clicking another Brain option = "${await credit()}" (updated: ${afterClick})`);
+      await optChecks(p, "credit fresh", checks);
+      await p.ctx.close();
+    },
+  },
   // Automation: turning on full autonomy asks first (Keep asking saves nothing); confirmed, it saves and warns; the
   // other choices save at once.
   {
@@ -463,7 +506,7 @@ export const OPTION_FLOWS = [
       await p.click("input[name=voiceEngine][value=standard]");
       check("Standard saved", await eventually(async () => (await saved()).some((s) => s.voiceEngine === "standard")));
       check("Standard checked after the save", await p.isChecked("input[name=voiceEngine][value=standard]"));
-      check("the picker follows the engine", await eventually(async () => (await p.textContent("#speech-voice-title")) === "Standard voice" && (await p.getAttribute("#speech-rate", "max")) === "2"));
+      check("the picker follows the engine", await eventually(async () => (await p.textContent("#speech-voice-title")) === "Browser voice" && (await p.getAttribute("#speech-rate", "max")) === "2"));
       await setSpeed("1.4");
       check("speed saved", await eventually(async () => (await saved()).some((s) => s.speechRate === 1.4)));
       await p.selectOption("#speech-voice", { index: 0 });

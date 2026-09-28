@@ -77,18 +77,12 @@
 /* The muted orb rests (the core still breathes while a line is said: the narrator is heard). */
 .voice-orb[data-muted] .voice-orb-halo { animation: none; opacity: 0.7; }
 
-/* Mute / Unmute (words, a toggle, pressed while muted) and Interrupt (while a line is said), left of Voice: quiet
-   tools; Mute filled in the muted grey once pressed. */
-.now-bar .voice-interrupt { padding: 0; border: 0; background: none; }
-.now-bar .voice-mute {
-  flex: none; height: 28px; padding: 0 8px; font-size: var(--text-sm); font-weight: 500; white-space: nowrap;
-  color: var(--muted); background: none;
-}
+/* Mute (a toggle, left of Voice): a quiet mic icon while live; pressed (muted), the mic slashed and filled in the
+   muted grey. */
+.now-bar .voice-mute { padding: 0; border: 0; background: none; }
 .now-bar .voice-mute:hover { color: var(--text); background: var(--hover); }
-.now-bar .voice-mute[aria-pressed="true"], .now-bar .voice-mute[aria-pressed="true"]:hover { color: var(--on-live); background: var(--mic-off); border-color: var(--mic-off); }
-.now-bar .voice-interrupt { color: var(--live); }
-.now-bar .voice-interrupt:hover { color: var(--live-deep); background: color-mix(in srgb, var(--live) 12%, transparent); }
-.voice-mute[hidden], .voice-interrupt[hidden] { display: none; }
+.now-bar .voice-mute[aria-pressed="true"], .now-bar .voice-mute[aria-pressed="true"]:hover { color: var(--on-live); background: var(--mic-off); }
+.voice-mute[hidden] { display: none; }
 
 /* The orb (before anything was sent) in the same live colour, so the page reads as one live session. */
 .voice-orb-halo {

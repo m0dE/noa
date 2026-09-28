@@ -6,7 +6,7 @@
  * Local blobs go through a data: URL (URL.createObjectURL does not exist in
  * an MV3 service worker; data: URL downloads were checked to work up to at
  * least 60 MB). Cloud media is downloaded straight from the API with the
- * runner key as a header, falling back to fetch + data: URL.
+ * session token as a header, falling back to fetch + data: URL.
  */
 import { bytesToBase64 } from "../base64.js";
 import { errorMessage, safeFileName, uniqueNames } from "@noa/shared";

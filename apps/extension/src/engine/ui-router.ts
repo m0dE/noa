@@ -62,7 +62,6 @@ export interface UiRouterDeps {
   testClaude(settings: ExtensionSettings): Promise<TestResult>;
   /** Tests the Jev that `brain` (the settings resolved) would use. */
   testJev(settings: ExtensionSettings, brain: BrainStatus): Promise<TestResult>;
-  testCloud(settings: ExtensionSettings): Promise<TestResult>;
   vault: RouterVault;
   /** The Noa account. Absent: no account features (always signed out). */
   account?: RouterAccount;
@@ -220,8 +219,6 @@ export class UiRouter {
         const settings = await d.loadSettings();
         return d.testJev(settings, d.brainStatus(settings));
       }
-      case "settings.testCloud":
-        return d.testCloud(await d.loadSettings());
       case "helper.connect":
         // Connects (or reconnects) and re-runs the Claude Code self-test.
         // Failure is not an error: the state carries brain.helperError.

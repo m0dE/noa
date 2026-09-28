@@ -1,11 +1,11 @@
-/** Runner-side client of the task API: claim, heartbeat, result, media (runner key or the account's session token). */
-import { ClaimResponse, errorMessage, type MediaInfo, type ResultInput } from "@noa/shared";
-import { ApiRequestError, HttpClient } from "./http-client.js";
+/** Runner-side client of the task API: claim, heartbeat, result, media (with the signed-in account's session token). */
+import { ClaimResponse, type MediaInfo, type ResultInput } from "@noa/shared";
+import { HttpClient } from "./http-client.js";
 
 export interface ApiClientOptions {
   apiBase: string;
-  /** The bearer: a runner key, or the signed-in account's session token. */
-  runnerKey: string;
+  /** The bearer: the signed-in account's session token. */
+  token: string;
   fetch?: typeof fetch;
   /** Called on 401 (the token expired or was revoked). */
   onUnauthorized?: () => void;
@@ -17,7 +17,7 @@ export class ApiClient {
   constructor(opts: ApiClientOptions) {
     this.http = new HttpClient({
       apiBase: opts.apiBase,
-      token: opts.runnerKey,
+      token: opts.token,
       missingBase: "API base URL is not set",
       label: "API",
       ...(opts.fetch ? { fetch: opts.fetch } : {}),
@@ -55,20 +55,5 @@ export class ApiClient {
 
   authHeaders(): { name: string; value: string }[] {
     return this.http.authHeaders();
-  }
-
-  /** Checks that the API is reachable and accepts the runner key. */
-  async check(): Promise<{ ok: true } | { ok: false; error: string }> {
-    try {
-      await this.http.request("GET", "/", undefined, { auth: false });
-      // An unknown media ID answers 404 for a valid key and 401/403 otherwise.
-      await this.http.request("GET", `/v1/media/noa-check-${Date.now()}`).catch((err: unknown) => {
-        if (err instanceof ApiRequestError && err.status === 404) return;
-        throw err;
-      });
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: errorMessage(err) };
-    }
   }
 }

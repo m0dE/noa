@@ -12,6 +12,7 @@ import {
   BatchCreateInput,
   CreateTaskInput,
   currentAccountApiBase,
+  PREVIOUS_ACCOUNT_API_BASES,
   DEFAULT_SETTINGS,
   INTERACTIVE_TOOL_NAMES,
   isXSite,
@@ -79,9 +80,8 @@ describe("pauseReasonForUrl", () => {
 });
 
 describe("settings", () => {
-  it("fills defaults and strips trailing slash", () => {
-    const s = parseSettings({ apiBase: "https://api.example.com//", intervalMinutes: 5, jevThreshold: "bad" });
-    expect(s.apiBase).toBe("https://api.example.com");
+  it("fills defaults", () => {
+    const s = parseSettings({ intervalMinutes: 5, jevThreshold: "bad" });
     expect(s.intervalMinutes).toBe(5);
     expect(s.jevThreshold).toBe(DEFAULT_SETTINGS.jevThreshold);
   });
@@ -92,6 +92,7 @@ describe("settings", () => {
   });
   it("currentAccountApiBase: one rule for settings and sessions", () => {
     expect(currentAccountApiBase(" https://noa-api.jaeyun.workers.dev// ")).toBe(ACCOUNT_API_BASE);
+    for (const old of PREVIOUS_ACCOUNT_API_BASES) expect(currentAccountApiBase(old)).toBe(ACCOUNT_API_BASE);
     expect(currentAccountApiBase("https://app.noa.bot/")).toBe(ACCOUNT_API_BASE);
     expect(currentAccountApiBase("http://127.0.0.1:8787/")).toBe("http://127.0.0.1:8787");
     expect(currentAccountApiBase("")).toBe("");

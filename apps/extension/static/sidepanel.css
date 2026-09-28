@@ -5,11 +5,11 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .view { flex: 1; min-height: 0; }
 .scroll { overflow-y: auto; }
 
-/* Header: over the list, the name and the avatar; over a job, back, its title and "⋯". */
+/* Header, pinned over every view: the name and the avatar; on a job, a row under it with back, its title and "⋯". */
 .top { background: var(--surface); border-bottom: 1px solid var(--border); }
 .head { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 6px 8px 6px 14px; }
 .brand { font-size: var(--text-lg); font-weight: 650; letter-spacing: -0.01em; }
-.job-head { padding-left: 4px; gap: 2px; }
+.job-head { padding-left: 4px; gap: 2px; border-top: 1px solid var(--border); }
 button.job-back { flex: none; width: 30px; height: 30px; padding: 0; color: var(--text); }
 .job-heading { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .job-title {
@@ -128,6 +128,8 @@ button.job-toggle[aria-disabled="true"] { opacity: 0.5; cursor: progress; }
 .jobs-empty p { margin: 0 0 6px; text-wrap: balance; }
 .jobs-empty .empty-title { color: var(--text); font-weight: 500; font-size: var(--text-md); margin-bottom: 4px; }
 .jobs-empty .shortcut-hint { margin-top: 14px; }
+/* The first-run note that Noa acts as you and comes without warranty: quiet, under everything else. */
+.jobs-empty .disclaimer { margin-top: 20px; font-size: var(--text-xs); }
 .jobs-empty kbd {
   font: inherit; font-size: var(--text-xs); padding: 1px 5px; border-radius: 4px;
   border: 1px solid var(--border); background: var(--surface); color: var(--text);
@@ -158,7 +160,7 @@ button.job-tab-view { flex: none; padding: 3px 12px; font-size: var(--text-sm); 
 .job-stats button.link[data-filter="needs"] { color: var(--warn); }
 .job-runs-head { font-size: var(--text-sm); font-weight: 600; color: var(--muted); padding: 0 2px 2px; margin: 0; }
 .job-runs-head.latest { padding-top: 10px; border-top: 1px solid var(--border); }
-/* The instructions of a scheduled task: the first lines (Show all), Edit and Edit schedule; Edit opens a box in place. */
+/* The instructions of a scheduled task: the first lines (Show all) and Edit, which opens a box in place. */
 .job-instr { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 .job-instr.intro { padding: 0; border: 0; background: none; }
 .job-instr-head { display: flex; align-items: center; gap: 6px; min-height: 26px; }
@@ -771,7 +773,7 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 0.35); }
 .sheet-gate-title { margin: 0; font-weight: 600; font-size: var(--text-md); }
 .schedule-sheet .sched-request { max-height: 7.5em; margin-bottom: 8px; }
 
-/* Voice input (voice-input.ts): the Voice button left of Send (a small mic and the word), its tip, and the listening
+/* Voice input (voice-input.ts): the Voice button left of Send (a small sound wave and the word), its tip, and the listening
    orb in the panel's middle (the live look while hands-free is on, Mute, and the voice bar, are in voice.css).
    --level (0..1) is the live microphone level. */
 .now-bar .voice-mic {
@@ -779,7 +781,7 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 0.35); }
   font-size: var(--text-sm); font-weight: 500; color: var(--muted); background: none; white-space: nowrap;
 }
 .now-bar .voice-mic:hover { color: var(--text); background: var(--hover); }
-.voice-mic svg.mic { flex: none; }
+.voice-mic svg.wave { flex: none; }
 .voice-mic .lock { display: none; }
 .voice-mic[data-state="locked"] { color: var(--faint); }
 .voice-mic[data-state="locked"] .lock {

@@ -97,7 +97,7 @@ describe("startApiAgent", () => {
     expect(actTool.input_schema.$schema).toBeUndefined();
     const act = first.body.tools.find((t: any) => t.name === "scroll");
     expect(act.input_schema.required).toEqual(["direction"]);
-    expect(first.body.messages).toEqual([{ role: "user", content: [{ type: "text", text: expect.stringContaining("Post: gm") }] }]);
+    expect(first.body.messages).toEqual([{ role: "user", content: [{ type: "text", text: expect.stringContaining("Post: gm"), cache_control: { type: "ephemeral" } }] }]);
 
     // tool_result blocks answer each tool_use id
     const second = server.requests[1]!;
@@ -210,7 +210,7 @@ describe("startApiAgent", () => {
     expect(content[0].type).toBe("tool_result");
     // Never inside the tool result (untrusted page content): a user text block of its own.
     expect(content[0].content[0].text).not.toContain("use the draft text instead");
-    expect(content[1]).toEqual({ type: "text", text: 'The user just said: "use the draft text instead". Act on it now: a question or remark, answer it in a short reply before your next tool call (in the same message) and go on with the task; otherwise it changes the current task (keep doing what it does not change), or replaces or stops it if that is what it says.' });
+    expect(content[1]).toEqual({ type: "text", text: 'The user just said: "use the draft text instead". Act on it now: a question or remark, answer it in a short reply before your next tool call (in the same message) and go on with the task; otherwise it changes the current task (keep doing what it does not change), or replaces or stops it if that is what it says.', cache_control: { type: "ephemeral" } });
     expect(r.events.some((e) => e.type === "user_message" && e.text === "use the draft text instead")).toBe(true);
   });
 
@@ -232,7 +232,7 @@ describe("startApiAgent", () => {
     );
     session = r.session;
     await session.done;
-    expect(lastUser(r.server.requests[1]!).content.at(-1)).toEqual({ type: "text", text: expect.stringContaining("a question or remark, answer it in a short reply before your next tool call") });
+    expect(lastUser(r.server.requests[1]!).content.at(-1)).toEqual({ type: "text", text: expect.stringContaining("a question or remark, answer it in a short reply before your next tool call"), cache_control: { type: "ephemeral" } });
     const answer = r.events.findIndex((e) => e.type === "assistant_text" && e.text === "Yes, I can speak Korean.");
     const nextCall = r.events.findIndex((e) => e.type === "tool_call" && e.name === "read_page");
     expect(answer).toBeGreaterThan(-1);
@@ -263,7 +263,7 @@ describe("startApiAgent", () => {
     const [refused, said] = lastUser(r.server.requests[1]!).content;
     expect(refused).toMatchObject({ type: "tool_result", is_error: true });
     expect(refused.content[0].text).toBe("Not recorded: the user sent you a new message, so task_complete was not called. Read that message (it follows) and do what it asks before ending.");
-    expect(said).toEqual({ type: "text", text: expect.stringContaining('The user just said: "no, use page B"') });
+    expect(said).toEqual({ type: "text", text: expect.stringContaining('The user just said: "no, use page B"'), cache_control: { type: "ephemeral" } });
     expect(r.events.filter((e) => e.type === "task_end")).toHaveLength(1);
     expect(traces.find((t) => t.name === "interjection")).toMatchObject({ cat: "user", data: { route: "request", count: 1 } });
   });
@@ -368,7 +368,7 @@ describe("startApiAgent", () => {
       expect(await r.session.done).toEqual({ outcome: "done", summary: "changed course" });
       expect(server.requests).toHaveLength(2);
       // The stopped reply is not in the history: the user's message follows the task prompt directly.
-      expect(server.requests[1].messages.at(-1)).toEqual({ role: "user", content: [expect.objectContaining({ type: "text" }), { type: "text", text: expect.stringContaining('The user just said: "no, use page B"') }] });
+      expect(server.requests[1].messages.at(-1)).toEqual({ role: "user", content: [expect.objectContaining({ type: "text" }), { type: "text", text: expect.stringContaining('The user just said: "no, use page B"'), cache_control: { type: "ephemeral" } }] });
       expect(x.calls.some((c) => c.method === "browser.navigate")).toBe(false);
       expect(r.traces.find((t) => t.name === "interjection")).toMatchObject({ data: { route: "interrupt", count: 1 } });
       expect(r.traces.find((t) => t.name === "model.call")).toMatchObject({ data: { result: "interrupted" } });
@@ -427,7 +427,7 @@ describe("startApiAgent", () => {
     ], { stream: false });
     session = r.session;
     expect(await session.done).toEqual({ outcome: "done", summary: "yes" });
-    expect(r.server.requests[1]!.body.messages.at(-1)).toEqual({ role: "user", content: [{ type: "text", text: expect.stringContaining("are you done?") }] });
+    expect(r.server.requests[1]!.body.messages.at(-1)).toEqual({ role: "user", content: [{ type: "text", text: expect.stringContaining("are you done?"), cache_control: { type: "ephemeral" } }] });
   });
 
   it("ending without a task_* tool is a failure", async () => {
@@ -606,7 +606,7 @@ describe("startApiAgent: conversation (continueWith)", () => {
     const followUp = third[4];
     expect(followUp.role).toBe("user");
     expect(followUp.content[0]).toMatchObject({ type: "tool_result", tool_use_id: third[3].content[0].id });
-    expect(followUp.content.at(-1)).toEqual({ type: "text", text: expect.stringMatching(/same conversation.*now do the second thing/) });
+    expect(followUp.content.at(-1)).toEqual({ type: "text", text: expect.stringMatching(/same conversation.*now do the second thing/), cache_control: { type: "ephemeral" } });
     // The user's message shows in the event stream, and each turn ends with its own task_end.
     expect(events.filter((e) => e.type === "user_message")).toEqual([{ type: "user_message", text: "now do the second thing" }]);
     expect(events.filter((e) => e.type === "task_end").map((e) => (e as { summary?: string }).summary)).toEqual(["first done", "second done"]);
@@ -621,7 +621,7 @@ describe("startApiAgent: conversation (continueWith)", () => {
     expect(messages.every((m) => m.content.length > 0)).toBe(true);
     // The task and the follow-up are one user message: roles still alternate.
     expect(messages.map((m) => m.role)).toEqual(["user"]);
-    expect(messages[0]!.content.at(-1)).toEqual({ type: "text", text: expect.stringMatching(/try again$/) });
+    expect(messages[0]!.content.at(-1)).toEqual({ type: "text", text: expect.stringMatching(/try again$/), cache_control: { type: "ephemeral" } });
   });
 
   it("after a stop, the next turn answers the tool calls that never ran", async () => {
@@ -715,7 +715,7 @@ describe("startApiAgent: reasoning (Fast, auto-raise, Thorough)", () => {
     expect(bodies.map((b) => b.max_tokens)).toEqual([4096, 4096, 4096, THINKING_MAX_TOKENS, THINKING_MAX_TOKENS, 4096]);
     // The note follows the third failure's result, once; the history stays append-only.
     const note = raiseNote("switch_tab failed 3 times in a row");
-    expect(lastUser(server.requests[3]!).content.at(-1)).toEqual({ type: "text", text: note });
+    expect(lastUser(server.requests[3]!).content.at(-1)).toEqual({ type: "text", text: note, cache_control: { type: "ephemeral" } });
     expect(lastUser(server.requests[4]!).content.some((b: Block) => b.text === note)).toBe(false);
     expect(bodies[5].messages.flatMap((m: any) => m.content).filter((b: Block) => b.text === note)).toHaveLength(1);
     // The Raw view's lines, and each request's reasoning.

@@ -19,7 +19,7 @@ const PAUSE_REASON =
 
 describe("B: a message to an X job's conversation after its agent session is gone", () => {
   it("a cloud X job keeps its account in the fresh session (the voice question's run got 'Account: none given')", async () => {
-    const h = harness({ cloudEnabled: true, apiBase: "https://api.test", runnerKey: "bt_k" });
+    const h = harness({}, { signedIn: true });
     h.claims.push(claimFixture("01M3J8GMHQM8YS7EP2B8REBFA2", { instructions: MECHA, account: "@mecharoyalecom" }));
     h.brain.script = (o) => {
       o.onEvent({ type: "tool_call", id: "t1", name: "switch_x_account", args: { handle: "@mecharoyalecom" } });

@@ -3,7 +3,8 @@
  * service worker. Requests go through chrome.runtime.sendMessage and always
  * resolve to UiResponse. Live updates go over a long-lived port named
  * UI_PORT_NAME that the side panel opens; the background pushes UiPush
- * messages on it.
+ * messages on it. The options page opens OPTIONS_PORT_NAME and gets only
+ * the state pushes (e.g. the credit after a run).
  */
 import type {
   ApprovalAnswer,
@@ -28,6 +29,8 @@ import type { ApiKeyInfo, CreatedApiKey, CreditInfo, KeyRole, PlanId, PlanInfo }
 export type { ApiKeyInfo, CreatedApiKey, CreditInfo, KeyRole, PlanId, PlanInfo };
 
 export const UI_PORT_NAME = "noa-ui";
+/** The options page's port: state pushes only (it is not a side panel). */
+export const OPTIONS_PORT_NAME = "noa-options";
 
 /** A file the user attached to a local task, sent from the UI as base64. */
 export interface UiMediaUpload {
@@ -182,7 +185,6 @@ export type UiRequest =
   | { type: "settings.save"; settings: Partial<ExtensionSettings> }
   | { type: "settings.testClaude" }
   | { type: "settings.testJev" }
-  | { type: "settings.testCloud" }
   | { type: "helper.connect" }
   /** Start a one-off task now ("Do this now"). tabId: the browser tab it is started from (it acts there, the chat belongs to it). */
   | {
@@ -360,7 +362,6 @@ export interface UiResults {
   "settings.save": UiState;
   "settings.testClaude": { ok: boolean; detail: string };
   "settings.testJev": { ok: boolean; detail: string };
-  "settings.testCloud": { ok: boolean; detail: string };
   "helper.connect": UiState;
   "run.adhoc": { sessionId: string };
   "run.due": { started: boolean; detail?: string };

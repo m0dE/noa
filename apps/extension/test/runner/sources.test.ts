@@ -66,9 +66,9 @@ describe("Runner: local tasks", () => {
   });
 });
 
-describe("Runner: cloud tasks", () => {
-  it("claims after local tasks, downloads media with the runner key, reports retry with retryAfterMinutes and a screenshot", async () => {
-    const h = harness({ cloudEnabled: true, apiBase: "https://api.test", runnerKey: "bt_k", retryAfterMinutes: 12 });
+describe("Runner: the account's tasks", () => {
+  it("claims after local tasks, downloads media with the session token, reports retry with retryAfterMinutes and a screenshot", async () => {
+    const h = harness({ retryAfterMinutes: 12 }, { signedIn: true });
     const local = await h.store.add({ instructions: "local first" });
     const claim = claimFixture("c1", { attempts: 2 });
     claim.media = [{ id: "m1", filename: "clip.mp4", contentType: "video/mp4", size: 3 }];
@@ -83,7 +83,7 @@ describe("Runner: cloud tasks", () => {
     const cloudStart = h.brain.starts[1]!;
     expect(cloudStart.config.isRetry).toBe(true);
     expect(h.materialized[1]!.sources).toEqual([
-      { kind: "url", name: "clip.mp4", url: "https://api.test/v1/media/m1", headers: [{ name: "Authorization", value: "Bearer bt_k" }] },
+      { kind: "url", name: "clip.mp4", url: "https://api.test/v1/media/m1", headers: [{ name: "Authorization", value: "Bearer bt_s_session" }] },
     ]);
     expect(h.results).toEqual([
       {
@@ -96,7 +96,7 @@ describe("Runner: cloud tasks", () => {
   });
 
   it("paused cloud tasks use pauseRetryMinutes", async () => {
-    const h = harness({ cloudEnabled: true, apiBase: "https://api.test", runnerKey: "bt_k", pauseRetryMinutes: 30 });
+    const h = harness({ pauseRetryMinutes: 30 }, { signedIn: true });
     h.claims.push(claimFixture("c2"));
     h.brain.script = () => ({ outcome: "paused", reason: "2FA" });
     await runAll(h);
@@ -104,7 +104,7 @@ describe("Runner: cloud tasks", () => {
   });
 
   it("done and failed cloud results carry no retry delay", async () => {
-    const h = harness({ cloudEnabled: true, apiBase: "https://api.test", runnerKey: "bt_k" });
+    const h = harness({}, { signedIn: true });
     h.claims.push(claimFixture("c3"), claimFixture("c4"));
     const outcomes = [{ outcome: "done" as const }, { outcome: "failed" as const, reason: "button not found" }];
     h.brain.script = () => outcomes.shift()!;
@@ -112,42 +112,21 @@ describe("Runner: cloud tasks", () => {
     expect(h.results.map((r) => r.body.retryAfterMinutes)).toEqual([undefined, undefined]);
   });
 
-  it("signed in: claims from the account (not the runner-key cloud sync) and reports there", async () => {
-    const h = harness({ cloudEnabled: true, apiBase: "https://selfhosted.test", runnerKey: "bt_k" });
-    const runnerKeyClaims = vi.fn(async () => null);
-    const orig = h.deps.createApi;
-    h.deps.createApi = (st) => ({ ...orig(st), claim: runnerKeyClaims });
-    const accountResults: string[] = [];
-    const accountClaims = [claimFixture("a1"), null];
-    h.deps.accountApi = async () => ({
-      claim: async () => accountClaims.shift() ?? null,
-      heartbeat: async () => ({}),
-      result: async (taskId, body) => void accountResults.push(`${taskId} ${body.outcome}`),
-      uploadMedia: async (_b, filename) => ({ id: "shot", filename, contentType: "image/jpeg", size: 1 }),
-      mediaUrl: (id) => `https://account.test/v1/media/${id}`,
-      authHeaders: () => [{ name: "Authorization", value: "Bearer bt_s_session" }],
-    });
-    h.runner = new Runner(h.deps);
+  it("signed out: the account's queue is not claimed", async () => {
+    const h = harness();
+    h.claims.push(claimFixture("c5"));
+    await runAll(h);
+    expect(h.brain.starts).toHaveLength(0);
+    expect(h.claims).toHaveLength(1);
+  });
+
+  it("pauses report to the account and notify", async () => {
+    const h = harness({}, { signedIn: true });
+    h.claims.push(claimFixture("a1"));
     h.brain.script = () => ({ outcome: "paused", reason: "Out of usage credit" });
     await runAll(h);
-    expect(accountResults).toEqual(["a1 paused"]);
-    expect(runnerKeyClaims).not.toHaveBeenCalled();
+    expect(h.results.map((r) => `${r.taskId} ${r.body.outcome}`)).toEqual(["a1 paused"]);
     expect(h.notifications).toEqual([{ title: "Task paused", message: "Out of usage credit" }]);
-  });
-
-  it("signed in without cloud sync: the account queue is still checked", async () => {
-    const h = harness();
-    const claim = vi.fn(async () => null);
-    h.deps.accountApi = async () => ({ claim, heartbeat: async () => ({}), result: async () => {}, uploadMedia: async () => ({}) as never, mediaUrl: () => "", authHeaders: () => [] });
-    h.runner = new Runner(h.deps);
-    await runAll(h);
-    expect(claim).toHaveBeenCalledWith("runner-1");
-  });
-
-  it("cloud sync on but not configured: nothing runs, lastError explains", async () => {
-    const h = harness({ cloudEnabled: true });
-    await runAll(h);
-    expect((await h.runner.state()).lastError).toMatch(/API URL or runner key is missing/);
   });
 });
 

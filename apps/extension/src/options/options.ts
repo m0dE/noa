@@ -6,7 +6,8 @@
  */
 import { OPEN_CHAT_COMMAND, openShortcutSettings, readShortcut, VOICE_COMMAND, type ShortcutCommand } from "../shortcut.js";
 import { errorMessage, LONGEST_RUN_HINT, type BrainMode, type ExtensionSettings } from "@noa/shared";
-import { isStale, uiRequest, type UiState } from "../ui-protocol.js";
+import { isStale, OPTIONS_PORT_NAME, uiRequest, type UiState } from "../ui-protocol.js";
+import { connectBackground } from "../sidepanel/port.js";
 import { createAccountMenu } from "../ui/account-menu.js";
 import { $, busy, closeMenusOnOutsideClick, find, flash, h } from "../ui/dom.js";
 import { initAccountSection } from "./account-section.js";
@@ -196,7 +197,7 @@ $("maxTaskMinutes-hint").textContent = LONGEST_RUN_HINT;
 
 function draft(): Draft {
   const v = readValues();
-  return { brain: v.brain, jevEnabled: v.jevEnabled, cloudEnabled: v.cloudEnabled, anthropicModel: v.anthropicModel, reasoning: v.reasoning };
+  return { brain: v.brain, jevEnabled: v.jevEnabled, anthropicModel: v.anthropicModel, reasoning: v.reasoning };
 }
 
 /** Opens or closes a revealed block; closed blocks are inert (not focusable). */
@@ -254,7 +255,6 @@ function render(): void {
   $("jev-key-row").hidden = !v.showJevKey;
   $("jev-source").textContent = v.jevNote ?? "";
   $("jev-test-hint").textContent = v.jevTestHint;
-  reveal($("cloud-fields"), v.showCloudFields);
 }
 
 function renderState(s: UiState): void {
@@ -316,7 +316,7 @@ $("hosted-action").addEventListener("click", () => accountSection.openBilling())
 
 // ------------------------------------------------------------ tests and helper
 
-function testButton(id: string, type: "settings.testClaude" | "settings.testJev" | "settings.testCloud"): void {
+function testButton(id: string, type: "settings.testClaude" | "settings.testJev"): void {
   const btn = $<HTMLButtonElement>(id);
   const msg = $(`${id}-msg`);
   btn.addEventListener("click", () =>
@@ -336,7 +336,6 @@ function testButton(id: string, type: "settings.testClaude" | "settings.testJev"
 }
 testButton("test-claude", "settings.testClaude");
 testButton("test-jev", "settings.testJev");
-testButton("test-cloud", "settings.testCloud");
 
 const connectBtn = $<HTMLButtonElement>("helper-connect");
 const helperMsg = $("helper-msg");
@@ -368,6 +367,22 @@ async function main(): Promise<void> {
 
 void main();
 initVaultSection();
+
+/**
+ * Plan, credit and brain as they change while the page is open: the background pushes its state (e.g. the
+ * credit after each run), and coming back to this tab reads it again (the background fetches the account when
+ * its copy is old; after a dashboard page was opened, refreshOnReturn forces that). The settings form keeps
+ * what is on screen; only a save or a section's action replaces it.
+ */
+function showBackgroundState(s: UiState): void {
+  if (!isStale(s, latest)) renderState(s);
+}
+connectBackground((m) => m.type === "state" && showBackgroundState(m.state), () => {}, OPTIONS_PORT_NAME);
+function refreshAccount(): void {
+  void uiRequest({ type: "account.refresh" }).then(showBackgroundState, () => {});
+}
+window.addEventListener("focus", refreshAccount);
+document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && refreshAccount());
 
 /** The keyboard shortcuts as Chrome assigned them (id prefix of each row), and where to change them (chrome://extensions/shortcuts). */
 const SHORTCUT_ROWS: readonly [ShortcutCommand, string][] = [

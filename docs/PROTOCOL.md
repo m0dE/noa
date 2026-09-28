@@ -1,13 +1,14 @@
-# Task server protocol
+# Runner protocol
 
-The Noa extension fetches work from any HTTP server that implements
-the runner endpoints below. The hosted service implements them, and you can
-write your own. The zod schemas in `packages/shared/src/task.ts` are the
-source of truth for every body shown here.
+The Noa extension runs a signed-in account's scheduled tasks by claiming them
+from the account server with the runner endpoints below. The hosted service
+implements them, and a self-hosted account server must too. The zod schemas
+in `packages/shared/src/task.ts` are the source of truth for every body shown
+here.
 
-All requests send `Authorization: Bearer <runner key>` and use JSON unless
-stated otherwise. Times are ISO 8601 strings in UTC. Errors return a non-2xx
-status with `{ "error": "message" }`.
+All requests send `Authorization: Bearer <session token>` (the signed-in
+account's) and use JSON unless stated otherwise. Times are ISO 8601 strings
+in UTC. Errors return a non-2xx status with `{ "error": "message" }`.
 
 ## Claim the next task
 

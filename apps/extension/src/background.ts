@@ -15,7 +15,6 @@ import { approvalJev } from "./approval/jev-source.js";
 import type { GateContext } from "./approval/gate.js";
 import { Preapprovals } from "./approval/paused.js";
 import { decidePaused } from "./approval/paused-decision.js";
-import { ApiClient } from "./api-client.js";
 import { Cdp } from "./cdp.js";
 import { agentGroupIds, agentGroupOf, applyGroupLook, tabUrl } from "./chrome-tabs.js";
 import { ControlIndicator } from "./control-indicator.js";
@@ -40,7 +39,7 @@ import { MemorySync } from "./memory/sync.js";
 import { EPISODE_ALARM, EpisodeWriter } from "./memory/episodes.js";
 import { memorySummarizer } from "./memory/summarizers.js";
 import { ChatTitler } from "./engine/chat-titles.js";
-import { testClaude, testCloud, testJev } from "./engine/settings-tests.js";
+import { testClaude, testJev } from "./engine/settings-tests.js";
 import { UiHub } from "./engine/ui-hub.js";
 import { UiRouter, type ExtraRequest } from "./engine/ui-router.js";
 import { HelperLink } from "./helper-link.js";
@@ -201,7 +200,8 @@ const hostedBrain = new ApiBrain({
   backend: hostedBackend({
     core,
     session: () => account.session(),
-    onOutOfCredit: () => void account.markOutOfCredit().catch(() => {}),
+    // Too little for one request is not an empty balance: the credit is fetched again rather than shown as none.
+    onOutOfCredit: (shortfall) => void (shortfall ? account.refresh(true) : account.markOutOfCredit()).catch(() => {}),
     afterTurn: () => void account.refresh(true).catch(() => {}),
   }),
 });
@@ -253,8 +253,6 @@ async function todoSource(): Promise<TodoSource> {
     if (!listed) hub.push({ type: "tasks.changed" });
   });
 }
-
-const createApi = (s: ExtensionSettings) => new ApiClient({ apiBase: s.apiBase, runnerKey: s.runnerKey });
 
 /** A tab's id, address and title (no tabId: the tab the user is looking at); chrome.tabs works on every page. */
 async function pageOf(tabId?: number): Promise<{ tabId: number; url: string; title: string } | null> {
@@ -369,7 +367,6 @@ const pauseMigrationStarted = migrateStoredSettings()
 const runner = new Runner({
   loadSettings,
   getRunnerId,
-  createApi,
   accountApi: () => account.runnerApi(),
   accountQueueHold: async () => {
     await pauseMigrationStarted;
@@ -451,7 +448,6 @@ const router = new UiRouter({
   pauseMigration,
   testClaude: (s) => testClaude(s),
   testJev: (s, brain) => testJev(s, brain, { core, hosted: account.session() }),
-  testCloud: (s) => testCloud(s, (x) => createApi(x).check()),
   vault,
   account,
   todo: todoSource,
@@ -641,6 +637,8 @@ chrome.runtime.onConnect.addListener((port) => {
     port.postMessage({ type: "voice.session", session: voiceSessions.view() } satisfies UiPush);
     maybeConnectHelper(() => void prewarmBrain().catch(() => {}));
     // Credit and plan may have changed elsewhere (dashboard, another browser).
+    void account.refresh().catch(() => {});
+  } else if (hub.watch(port)) {
     void account.refresh().catch(() => {});
   }
 });

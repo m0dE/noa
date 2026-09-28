@@ -234,7 +234,7 @@ export class AccountService {
     await this.refresh().catch(() => undefined);
     const s = this.session();
     if (!s || !this.todoAllowed()) return null;
-    return new ApiClient({ ...this.apiOpts(s.apiBase), runnerKey: s.token, onUnauthorized: () => void this.expire(s.token) });
+    return new ApiClient({ ...this.apiOpts(s.apiBase), token: s.token, onUnauthorized: () => void this.expire(s.token) });
   }
 
   /** A sign-in in progress: a second click waits for it instead of opening another Google window (Chrome allows one). */

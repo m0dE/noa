@@ -122,8 +122,8 @@ export function scenario(kind) {
     startedAt: iso(-2),
   };
   const settings = {
-    brain: "auto", anthropicApiKey: "set", anthropicModel: "claude-sonnet-5", jevApiKey: "", cloudEnabled: false,
-    apiBase: "", runnerKey: "", maxConsecutiveFailures: 3, retryAfterMinutes: 10, intervalMinutes: 15,
+    brain: "auto", anthropicApiKey: "set", anthropicModel: "claude-sonnet-5", jevApiKey: "",
+    maxConsecutiveFailures: 3, retryAfterMinutes: 10, intervalMinutes: 15,
     delayMinSec: 60, delayMaxSec: 180, maxToolCalls: 60, maxTaskMinutes: 10, maxParallelTasks: 2, jevEnabled: true, jevThreshold: 0.8,
     pauseRetryMinutes: 15, accountApiBase: "https://app.noa.bot",
     voiceEngine: "realtime", speechVoice: "", speechRate: 1, realtimeVoice: "marin", realtimeSpeed: 1, realtimeCostNoticed: true, voiceSounds: true, showControlOverlay: true,

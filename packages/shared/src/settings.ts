@@ -7,8 +7,12 @@ import { DEFAULT_REALTIME_VOICE, REALTIME_SPEED, RealtimeVoiceId, STANDARD_SPEED
 
 /** The Noa account server. */
 export const ACCOUNT_API_BASE = "https://app.noa.bot";
-/** Other addresses of the same server (the Worker's workers.dev address); a saved one is moved to ACCOUNT_API_BASE. */
-export const PREVIOUS_ACCOUNT_API_BASES: readonly string[] = ["https://noa-api.jaeyun.workers.dev"];
+/**
+ * Other addresses of the same server (the Worker's workers.dev address, and the one from before the rebrand, which now
+ * redirects: a redirect to another site loses the Authorization header); a saved one is moved to ACCOUNT_API_BASE. The
+ * former name is assembled from parts, as in scripts/lib/old-brand.mjs, so it appears nowhere in the repository.
+ */
+export const PREVIOUS_ACCOUNT_API_BASES: readonly string[] = ["https://noa-api.jaeyun.workers.dev", `https://app.${["brow", "ser", "to", "do"].join("")}.com`];
 
 /**
  * An account server address as it is kept: trimmed, without a trailing
@@ -46,10 +50,6 @@ export const ExtensionSettings = z.object({
    * billing and the hosted AI). Self-hosters point it at their own API.
    */
   accountApiBase: z.string().default(ACCOUNT_API_BASE),
-  /** Cloud task queue with a runner key (self-hosters). Off by default; local tasks always work. */
-  cloudEnabled: z.boolean().default(false),
-  apiBase: z.string().default(""),
-  runnerKey: z.string().default(""),
   /** Pause a scheduled job (the rest of its repeats) after this many of its runs failed in a row. 0 never pauses. */
   maxConsecutiveFailures: z.number().int().min(0).max(100).default(3),
   /** Minutes before a task that hit a temporary problem is retried. */
@@ -116,7 +116,6 @@ export function parseSettings(raw: unknown): ExtensionSettings {
   }
   const s = out as ExtensionSettings;
   if (s.delayMaxSec < s.delayMinSec) s.delayMaxSec = s.delayMinSec;
-  s.apiBase = s.apiBase.replace(/\/+$/, "");
   // Installs saved with an earlier default follow the default to its new address.
   s.accountApiBase = currentAccountApiBase(s.accountApiBase);
   return s;
@@ -130,7 +129,7 @@ export function pickDelayMs(s: Pick<ExtensionSettings, "delayMinSec" | "delayMax
 }
 
 /** Settings that hold secrets: never shown or logged, only marked as set (redactSettings). */
-export const SECRET_SETTING_KEYS = ["anthropicApiKey", "jevApiKey", "runnerKey"] as const satisfies readonly (keyof ExtensionSettings)[];
+export const SECRET_SETTING_KEYS = ["anthropicApiKey", "jevApiKey"] as const satisfies readonly (keyof ExtensionSettings)[];
 /** What a secret that is set reads as in redacted settings ("" when it is not set). */
 export const REDACTED = "set";
 

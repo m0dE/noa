@@ -432,12 +432,11 @@ const page = initJobPage({
   showError: (err) => composer.showError(err),
 });
 
-// Screen readers hear where the panel went; the two views and their headers swap.
+// Screen readers hear where the panel went; the two views swap, and a job's header row joins the panel's.
 const announce = $("view-announce");
 nav.onChange((view) => {
   const onList = view.kind === "list";
   listView.hidden = !onList;
-  $("list-head").hidden = !onList;
   jobView.hidden = onList;
   $("job-head").hidden = onList;
   if (onList) {

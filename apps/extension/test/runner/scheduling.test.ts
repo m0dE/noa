@@ -62,7 +62,7 @@ describe("Runner: scheduling", () => {
   });
 
   it("pauses a failing account job through holdSeries; when it cannot, says so and keeps counting", async () => {
-    const h = harness({ maxConsecutiveFailures: 1, cloudEnabled: true, apiBase: "https://api.test", runnerKey: "bt_k" });
+    const h = harness({ maxConsecutiveFailures: 1 }, { signedIn: true });
     const held: unknown[] = [];
     let refuse = true;
     h.deps.holdSeries = async (...args) => {
@@ -115,10 +115,9 @@ describe("Runner: scheduling", () => {
   });
 
   it("claims none of the account's tasks while accountQueueHold says why; this browser's still run", async () => {
-    const h = harness({ cloudEnabled: true, apiBase: "https://api.test", runnerKey: "bt_k" });
+    const h = harness({}, { signedIn: true });
     let hold: string | null = "Pausing your scheduled jobs one by one";
     h.deps.accountQueueHold = async () => hold;
-    h.deps.accountApi = async () => h.deps.createApi(h.settings);
     h.runner = new Runner(h.deps);
     h.claims.push(claimFixture("c1", { instructions: "cloud one" }));
     await h.store.add({ instructions: "local one" });
@@ -169,7 +168,7 @@ describe("Runner: scheduling", () => {
   });
 
   it("an alarm that fires during a run triggers one more due check afterwards", async () => {
-    const h = harness({ cloudEnabled: true, apiBase: "https://api.test", runnerKey: "bt_k" });
+    const h = harness({}, { signedIn: true });
     await h.store.add({ instructions: "a" });
     // The first claim (end of the first run) finds nothing; the task shows up later.
     h.claims.push(null, claimFixture("late"));

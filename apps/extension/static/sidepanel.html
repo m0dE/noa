@@ -10,19 +10,19 @@
   </head>
   <body class="panel">
     <header class="top">
-      <!-- Over the jobs list: the name and the account avatar with its menu (ui/account-menu.ts, built by header.ts). -->
+      <!-- Over every view: the name and the account avatar with its menu (ui/account-menu.ts, built by header.ts). -->
       <div id="list-head" class="head">
         <h1 id="brand" class="brand">Noa</h1>
         <span class="spacer"></span>
         <span id="acct-slot" class="acct-slot"></span>
       </div>
-      <!-- Over a job's page (job-page.ts): back to the list, the job's title and where it is, and its actions. -->
+      <!-- Under it on a job's page (job-page.ts): back to the list, the job's title and where it is, and its actions. -->
       <div id="job-head" class="head job-head" hidden>
         <button id="job-back" type="button" class="icon job-back" title="Back to jobs" aria-label="Back to jobs">
           <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>
         </button>
         <div class="job-heading">
-          <h1 id="job-title" class="job-title" tabindex="-1"></h1>
+          <h2 id="job-title" class="job-title" tabindex="-1"></h2>
           <p id="job-sub" class="job-sub"></p>
         </div>
         <details id="job-menu" class="menu job-menu">

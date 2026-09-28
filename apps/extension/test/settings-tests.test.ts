@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "@noa/shared";
-import { ANTHROPIC_MODELS_URL, testClaude, testCloud, testJev, type TestJevDeps } from "../src/engine/settings-tests.js";
+import { ANTHROPIC_MODELS_URL, testClaude, testJev, type TestJevDeps } from "../src/engine/settings-tests.js";
 
 const withKey = { ...DEFAULT_SETTINGS, anthropicApiKey: "sk-ant", anthropicModel: "claude-sonnet-5" };
 
@@ -71,14 +71,5 @@ describe("testJev", () => {
     const helper = { version: "2", jevAvailable: true, claudePath: "C", logDir: "L" };
     const r = await testJev(DEFAULT_SETTINGS, { effective: "claude-code", helper }, deps(vi.fn()));
     expect(r.detail).toMatch(/helper's own/);
-  });
-});
-
-describe("testCloud", () => {
-  it("checks configuration, then the API", async () => {
-    const s = { ...DEFAULT_SETTINGS, apiBase: "https://api.test", runnerKey: "bt" };
-    expect(await testCloud(DEFAULT_SETTINGS, vi.fn())).toEqual({ ok: false, detail: "Cloud API URL is not set" });
-    expect(await testCloud(s, async () => ({ ok: true }))).toEqual({ ok: true, detail: "Connected to https://api.test" });
-    expect(await testCloud(s, async () => ({ ok: false, error: "API 401: bad key" }))).toEqual({ ok: false, detail: "API 401: bad key" });
   });
 });

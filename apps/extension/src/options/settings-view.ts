@@ -94,7 +94,6 @@ export function nextSection(current: SectionId, key: string): SectionId | null {
 export interface Draft {
   brain: BrainMode;
   jevEnabled: boolean;
-  cloudEnabled: boolean;
   anthropicModel: string;
   /** Absent: the saved setting. */
   reasoning?: ReasoningLevel;
@@ -160,7 +159,6 @@ export interface SettingsView {
   jevTestHint: string;
   /** Under the key field: where Jev's key comes from, when that is not obvious. */
   jevNote: string | null;
-  showCloudFields: boolean;
 }
 
 export interface ModelChoice {
@@ -288,7 +286,6 @@ export function settingsView(input: ViewInput): SettingsView {
     jevUseHint,
     jevTestHint,
     jevNote: draft.jevEnabled ? jevNote : null,
-    showCloudFields: draft.cloudEnabled,
   };
 }
 
@@ -316,8 +313,8 @@ export const NUMBER_FIELDS = [
   "pauseRetryMinutes",
   "maxConsecutiveFailures",
 ] as const satisfies readonly (keyof ExtensionSettings)[];
-export const TEXT_FIELDS = ["anthropicModel", "apiBase", "accountApiBase"] as const satisfies readonly (keyof ExtensionSettings)[];
-export const BOOL_FIELDS = ["jevEnabled", "cloudEnabled", "reasoningAutoRaise", "showControlOverlay"] as const satisfies readonly (keyof ExtensionSettings)[];
+export const TEXT_FIELDS = ["anthropicModel", "accountApiBase"] as const satisfies readonly (keyof ExtensionSettings)[];
+export const BOOL_FIELDS = ["jevEnabled", "reasoningAutoRaise", "showControlOverlay"] as const satisfies readonly (keyof ExtensionSettings)[];
 export type NumberField = (typeof NUMBER_FIELDS)[number];
 export type TextField = (typeof TEXT_FIELDS)[number];
 export type BoolField = (typeof BOOL_FIELDS)[number];
@@ -377,19 +374,18 @@ export function validateForm(v: FormValues): Partial<Record<NumberField | TextFi
   else if (/\s/.test(v.anthropicModel.trim())) errors.anthropicModel = "A model id has no spaces.";
   if (!v.accountApiBase.trim()) errors.accountApiBase = "Enter the account server's address.";
   else if (!isHttpUrl(v.accountApiBase.trim())) errors.accountApiBase = "Enter a full address starting with https://";
-  if (v.apiBase.trim() && !isHttpUrl(v.apiBase.trim())) errors.apiBase = "Enter a full address starting with https://";
   return errors;
 }
 
 /** Form values -> settings, leaving out fields with a problem (they keep their saved value). */
-export function parseForm(v: FormValues): Partial<Omit<ExtensionSettings, "anthropicApiKey" | "jevApiKey" | "runnerKey">> {
+export function parseForm(v: FormValues): Partial<Omit<ExtensionSettings, "anthropicApiKey" | "jevApiKey">> {
   const errors = validateForm(v);
   const out: Record<string, unknown> = { brain: v.brain, reasoning: v.reasoning };
   for (const k of NUMBER_FIELDS) if (!errors[k]) out[k] = Number(v[k].trim());
   for (const k of TEXT_FIELDS) {
     if (errors[k]) continue;
     const t = v[k].trim();
-    out[k] = k === "apiBase" || k === "accountApiBase" ? t.replace(/\/+$/, "") : t;
+    out[k] = k === "accountApiBase" ? t.replace(/\/+$/, "") : t;
   }
   for (const k of BOOL_FIELDS) out[k] = v[k];
   return out;

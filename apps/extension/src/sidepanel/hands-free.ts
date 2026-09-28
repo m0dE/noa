@@ -375,7 +375,6 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
       elsewhere,
       muted: muted(),
       mute: view.mute,
-      interrupt: phase === "speaking",
     });
   }
 
@@ -649,7 +648,7 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
   function failureTip(err: unknown): VoiceTip {
     if (err instanceof VoiceError) return errorTip(err, deps.openBilling);
     const f = asRealtimeFailure(err);
-    const standard = { label: "Use Standard voice", run: () => void start("standard") };
+    const standard = { label: "Use Whisper voice", run: () => void start("standard") };
     if (f?.kind === "busy" || f?.kind === "replaced") return { text: f.message, level: "error", actions: [{ label: "Take over here", run: () => void start("realtime", false, true) }] };
     if (f?.transient) return { text: f.message, level: "error", actions: [{ label: "Try again", run: () => void start("realtime") }, standard] };
     if (f?.kind === "unavailable") return { text: f.message, level: "error", actions: [standard] };
@@ -753,7 +752,7 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
       const check = checkEngine({ picked: id, engines, creditCents: deps.account()?.credit?.totalCents });
       if (check.blocked) {
         finish(null);
-        deps.notify({ key: ENGINE_NOTICE, text: check.blocked, level: "error", actions: [{ label: "Use Standard voice", run: () => void start("standard") }] });
+        deps.notify({ key: ENGINE_NOTICE, text: check.blocked, level: "error", actions: [{ label: "Use Whisper voice", run: () => void start("standard") }] });
         return;
       }
       if (check.note) deps.notify({ key: ENGINE_NOTICE, text: check.note, level: "info", actions: [{ label: "Top up", run: deps.openBilling }] });
@@ -786,7 +785,7 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
   function costNotice(engines: VoiceEngine[] | null): void {
     const rt = engines?.find((e) => e.id === "realtime");
     const cost = rt ? `Realtime voice uses ${costPerMinuteText(rt.approxCentsPerMinute)}.` : "Realtime voice uses usage credit by the minute.";
-    deps.notify({ key: ENGINE_NOTICE, text: `${cost} Standard costs much less.`, level: "info", actions: [{ label: "Voice settings", run: deps.openVoiceSettings }] });
+    deps.notify({ key: ENGINE_NOTICE, text: `${cost} Whisper voice costs much less.`, level: "info", actions: [{ label: "Voice settings", run: deps.openVoiceSettings }] });
     void deps.saveSettings({ realtimeCostNoticed: true }).catch((err: unknown) => deps.log?.(`saving the cost notice failed: ${errorMessage(err)}`));
   }
 
@@ -974,9 +973,6 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
       return on() && muted();
     },
     toggleMute,
-    interrupt() {
-      if (state.phase === "speaking") dispatch({ type: "cancel", now: now() });
-    },
     get tab() {
       return on() ? tab : null;
     },

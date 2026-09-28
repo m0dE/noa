@@ -3,8 +3,8 @@
  * session is on (sidepanel/voice-bar.ts draws it), and which voice controls
  * the composer row shows (sidepanel/voice-input.ts). The strip only tells:
  * "Voice on" with the state word, the time on and a small meter. Every
- * control is at the bottom, by the box: the mic ends voice, Mute, Interrupt
- * while a line is said, and the task's own Stop.
+ * control is at the bottom, by the box: Voice ends voice, Mute (a mic icon),
+ * and the task's own Stop. A line being said is cut off by Esc or by talking.
  *
  * The strip always names the tab the session runs for ("Voice on · Inbox",
  * voiceOnLabel). On another tab it adds Go to tab and Use voice here; in
@@ -69,8 +69,6 @@ export interface VoiceBarView {
   muted: boolean;
   /** The composer's Mute toggle: pressed while muted, its tooltip and accessible name (null: not offered). */
   mute: { pressed: boolean; label: string } | null;
-  /** The composer's Interrupt: a line is being said and can be cut off (Esc too). */
-  interrupt: boolean;
 }
 
 /** Mute and unmute inside the side panel, by the key's position (Alt on a Mac types another letter). */
@@ -82,10 +80,7 @@ export function isMuteKey(e: { code: string; altKey: boolean; ctrlKey: boolean; 
 
 const muteButton = (muted: boolean) => ({ pressed: muted, label: `${muted ? "Unmute" : "Mute"} the microphone · ${MUTE_KEY.label}` });
 
-/** The composer's Interrupt: its tooltip and accessible name. */
-export const INTERRUPT_LABEL = "Stop talking · Esc";
-
-export const ENGINE_NAMES: Record<VoiceEngineId, string> = { realtime: "Realtime", standard: "Standard" };
+export const ENGINE_NAMES: Record<VoiceEngineId, string> = { realtime: "Realtime", standard: "Whisper" };
 
 /** A session's time on: "0:07", "12:34", "1:02:03". */
 export function elapsedText(ms: number): string {
@@ -114,14 +109,14 @@ const HINTS: Record<Exclude<VoiceBarState, "elsewhere">, string> = {
   muted: "Microphone off · Unmute to talk",
   sending: "Say “cancel” or press Esc to take it back",
   working: "Still listening: talk to add to the task",
-  speaking: "Esc or Interrupt stops it, or just talk",
+  speaking: "Esc stops it, or just talk",
   reconnecting: "The voice connection dropped: connecting again",
 };
 
 /** Muted, the hints that do not ask the user to talk. */
 const MUTED_HINTS: Partial<Record<VoiceBarState, string>> = {
   sending: "Press Esc to take it back",
-  speaking: "Esc or Interrupt stops it · microphone muted",
+  speaking: "Esc stops it · microphone muted",
 };
 const MUTED_WORKING_HINT = "Agent working · updates are still said";
 
@@ -158,7 +153,6 @@ export function voiceBarView(input: VoiceBarInput): VoiceBarView {
       links: { turnOff: false },
       muted,
       mute,
-      interrupt: false,
     };
   }
   const status = STATUS[state];
@@ -176,7 +170,6 @@ export function voiceBarView(input: VoiceBarInput): VoiceBarView {
     links: null,
     muted,
     mute,
-    interrupt: state === "speaking",
   };
 }
 
@@ -201,7 +194,6 @@ export function remoteBarView(input: { where: TabPage | null; engine: VoiceEngin
     links: { turnOff: true },
     muted,
     mute: null,
-    interrupt: false,
   };
 }
 

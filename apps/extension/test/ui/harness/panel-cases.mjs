@@ -289,13 +289,13 @@ export const PANEL_CASES = [
       await p.close();
     },
   },
-  // No jobs yet: the list says how to start one (and the shortcuts), and nothing else.
+  // No jobs yet: the list says how to start one (and the shortcuts), then a quiet no-warranty note, and nothing else.
   {
     names: ["panel-list-empty"],
     async run({ ctx, size, scheme, label, fail, openPanel, shoot, checkLayout, reportErrors }) {
       const p = await openPanel(ctx, "nojobs", ".jobs-empty");
-      const got = await p.evaluate(() => ({ title: document.querySelector(".jobs-empty .empty-title")?.textContent, groups: document.querySelectorAll(".job-group").length, text: document.querySelector(".jobs-empty").textContent }));
-      if (got.title !== "No jobs yet" || got.groups || !/every day at 9/.test(got.text)) fail(`empty list ${JSON.stringify(got)}`);
+      const got = await p.evaluate(() => ({ title: document.querySelector(".jobs-empty .empty-title")?.textContent, groups: document.querySelectorAll(".job-group").length, text: document.querySelector(".jobs-empty").textContent, terms: document.querySelector(".jobs-empty .disclaimer a")?.href }));
+      if (got.title !== "No jobs yet" || got.groups || !/every day at 9/.test(got.text) || !/without warranty/.test(got.text) || got.terms !== "https://noa.bot/terms") fail(`empty list ${JSON.stringify(got)}`);
       await checkLayout(p, `list empty ${label}`);
       await shoot(p, "panel-list-empty", size, scheme);
       reportErrors(p, `list empty ${label}`);
@@ -368,11 +368,13 @@ export const PANEL_CASES = [
         sub: document.getElementById("job-sub").textContent,
         said: document.getElementById("view-announce").textContent,
         focus: document.activeElement?.id,
-        list: document.getElementById("view-list").hidden && document.getElementById("list-head").hidden,
+        list: document.getElementById("view-list").hidden,
+        // The panel's header (the name, the avatar) stays at the top; the job's row is right under it.
+        head: !document.getElementById("list-head").hidden && !!document.querySelector("#list-head #acct") && document.getElementById("list-head").getBoundingClientRect().top <= 0.5 && document.getElementById("list-head").getBoundingClientRect().bottom <= document.getElementById("job-head").getBoundingClientRect().top + 0.5,
         composer: !document.getElementById("composer").hidden,
       }));
       // The task's title leads with the account it posts as (jobs.ts distinctTitle).
-      if (!opened.title.startsWith("@noa · Post the launch thread") || opened.sub !== "Running" || !opened.said.startsWith("Job: @noa · Post the launch") || opened.focus !== "now-text" || !opened.list || !opened.composer) fail(`opened job ${JSON.stringify(opened)}`);
+      if (!opened.title.startsWith("@noa · Post the launch thread") || opened.sub !== "Running" || !opened.said.startsWith("Job: @noa · Post the launch") || opened.focus !== "now-text" || !opened.list || !opened.head || !opened.composer) fail(`opened job ${JSON.stringify(opened)}`);
       if (want("panel-model-running", size, scheme)) {
         // The running task keeps its model: the chip shows it but does not open.
         const chip = page.locator("#now-model");
@@ -1844,8 +1846,8 @@ export const PANEL_CASES = [
             micPressed: mic.getAttribute("aria-pressed"),
             micFill: getComputedStyle(mic).backgroundColor,
             micText: mic.textContent,
-            mics: document.querySelectorAll(".now-bar svg.mic").length,
-            mute: mute && !mute.hidden ? [mute.getAttribute("aria-pressed"), mute.getAttribute("aria-label"), mute.textContent] : null,
+            waves: mic.querySelectorAll("svg.wave").length,
+            mute: mute && !mute.hidden ? [mute.getAttribute("aria-pressed"), mute.getAttribute("aria-label"), mute.title, mute.textContent, mute.dataset.icon, mute.querySelectorAll("svg").length, mute.getBoundingClientRect().width] : null,
             anims: [anim(bar.querySelector(".vb-dot")), anim(mic, "::before"), anim(document.querySelector(".now"))],
             reported: window.__portSent.filter((m) => m.type === "panel.listening").at(-1),
           };
@@ -1853,14 +1855,14 @@ export const PANEL_CASES = [
         const want2 = (ok, what) => ok || fail(`${name} ${label}: ${what} ${JSON.stringify(look)}`);
         want2(look.label === "Voice on · Inbox (1) - ada.lovelace@ex…" && look.status === "Hearing you" && look.live === "Voice on: Listening", "state word / announcement");
         want2(/^0:0\d$/.test(look.time), "time on");
-        want2(look.hint === "Standard voice · Just talk · say “stop” to end", "tooltip");
+        want2(look.hint === "Whisper voice · Just talk · say “stop” to end", "tooltip");
         want2(look.region[0] === "region" && look.region[1] === "Voice status", "strip region");
         want2(look.buttons === 0 && look.height <= 30, "a slim strip without buttons");
         want2(look.meter, "meter");
         want2(look.placeholder === "Listening… just talk" && look.glow, "listening box");
         want2(look.micTitle === `End voice mode · ${VOICE_SHORTCUT_LABEL}` && look.micPressed === "true", "mic ends voice");
-        want2(look.micFill !== "rgba(0, 0, 0, 0)" && look.micText === "Voice" && look.mics === 1, "Voice filled, still \"Voice\", one mic icon");
-        want2(JSON.stringify(look.mute) === JSON.stringify(["false", "Mute the microphone · Alt+M", "Mute"]), "Mute in the composer");
+        want2(look.micFill !== "rgba(0, 0, 0, 0)" && look.micText === "Voice" && look.waves === 1, "Voice filled, still \"Voice\", its sound-wave icon");
+        want2(JSON.stringify(look.mute) === JSON.stringify(["false", "Mute the microphone · Alt+M", "Mute the microphone · Alt+M", "", "live", 1, 28]), "Mute in the composer: a mic icon, named");
         want2(look.reported?.listening === true && look.reported?.tabId === 1, "listening reported with the tab (badge)");
         const still = look.anims.every((a) => a === "none");
         want2(reduced ? still : look.anims.join() === "vb-breathe,vb-mic-ring,vb-glow", reduced ? "something pulses with reduced motion" : "no pulse");
@@ -1886,7 +1888,7 @@ export const PANEL_CASES = [
   },
   // Hands-free voice (the voice shortcut): the orb and the status strip while listening, "Sending…" with the utterance
   // in the box (Standard), the strip while the agent works (the task's Stop and the voice controls apart in the
-  // composer row), a spoken line with Interrupt in the composer; Realtime's one-time cost notice, the narrator
+  // composer row), a spoken line (no button of its own: Esc or talking cuts it off); Realtime's one-time cost notice, the narrator
   // speaking, its send_to_agent starting a task with one acknowledgement, and one message per request: what the
   // narrator understood, with the user's words for it folded under it ("Word for word"); what was said but led to no
   // request is not shown; Realtime unavailable says so and offers Standard (it never switches by itself); a dropped
@@ -2000,7 +2002,7 @@ export const PANEL_CASES = [
         if (playing.join(" | ") !== "I'll open Gmail and read your newest email.") fail(`playing in the chat: ${JSON.stringify(playing)}`);
         if (await p.evaluate(() => document.querySelector(".hf-caption, .voice-tip"))) fail("a floating caption or tip is still drawn");
         if ((await barTitle(p)) !== "Speaking") fail(`speaking bar "${await barTitle(p)}"`);
-        if (await p.evaluate(() => document.querySelector("#now-actions .voice-interrupt").hidden)) fail("no Interrupt in the composer while speaking");
+        if (await p.evaluate(() => document.querySelector("#now-actions .voice-interrupt"))) fail("an Interrupt button in the composer while speaking");
         const sl = await barCheck(p);
         if (sl.length) fail(`speaking: ${sl.join("; ")}`);
         if (!(await p.evaluate(() => document.querySelector(".voice-orb").hidden))) fail("the orb still covers the chat after sending");
@@ -2013,9 +2015,8 @@ export const PANEL_CASES = [
         const stops = await p.evaluate(() => ({
           task: [!document.getElementById("now-stop").hidden, document.getElementById("now-stop").title, !!document.querySelector("#now-stop svg")],
           voice: document.querySelector("#now-actions .voice-mic").title,
-          interrupt: !document.querySelector("#now-actions .voice-interrupt").hidden,
         }));
-        if (JSON.stringify(stops.task) !== JSON.stringify([true, "Stop the task", true]) || !/^End voice/.test(stops.voice) || stops.interrupt) fail(`the two stops ${JSON.stringify(stops)}`);
+        if (JSON.stringify(stops.task) !== JSON.stringify([true, "Stop the task", true]) || !/^End voice/.test(stops.voice)) fail(`the two stops ${JSON.stringify(stops)}`);
         // Said: the line is kept in its chat (compact: the agent's text above starts with it), no longer playing.
         await p.waitForFunction(() => document.querySelector("#chat-log .ev-spoken:not(.live)"));
         const kept = await p.evaluate(() => ({
@@ -2069,7 +2070,7 @@ export const PANEL_CASES = [
         await waitPhase(p, "listening");
         await p.waitForSelector("#now-notice:not([hidden])");
         const tip = await p.textContent("#now-notice:not([hidden])");
-        if (!/^Realtime voice uses about 6¢ of usage credit a minute\. Standard costs much less\.Voice settings×$/.test(tip)) fail(`cost notice "${tip}"`);
+        if (!/^Realtime voice uses about 6¢ of usage credit a minute\. Whisper voice costs much less.Voice settings×$/.test(tip)) fail(`cost notice "${tip}"`);
         if (!(await p.evaluate(() => window.__requests.some((r) => r.type === "settings.save" && r.settings.realtimeCostNoticed === true)))) fail("the cost notice is not remembered");
         const rt = await p.evaluate(() => ({ protocols: window.__rt.protocols, sent: window.__rt.sent.map((e) => e.type), first: window.__rt.sent[0] }));
         if (JSON.stringify(rt.protocols) !== JSON.stringify(["noa", "bt.tok"])) fail(`subprotocols ${JSON.stringify(rt.protocols)}`);
@@ -2343,7 +2344,7 @@ export const PANEL_CASES = [
           live: document.body.classList.contains("voice-live"),
           placeholder: document.getElementById("now-text").placeholder,
         }));
-        if (remote.detail !== "Standard voice · Listening in another window" || remote.meter || !remote.go || !remote.use || !remote.stop || remote.mic !== "idle" || remote.live || /Listening/i.test(remote.placeholder))
+        if (remote.detail !== "Whisper voice · Listening in another window" || remote.meter || !remote.go || !remote.use || !remote.stop || remote.mic !== "idle" || remote.live || /Listening/i.test(remote.placeholder))
           fail(`another tab's session ${JSON.stringify(remote)}`);
         await checkLayout(p, `handsfree-remote ${label}`);
         await shoot(p, "panel-handsfree-remote", size, scheme);
@@ -2380,14 +2381,14 @@ export const PANEL_CASES = [
           transcribed: window.__requests.some((r) => r.type === "voice.transcribe"),
           saved: window.__requests.some((r) => r.type === "settings.save" && "voiceEngine" in r.settings),
         }));
-        if (note.text !== "Realtime voice is unavailable on the server right now." || note.level !== "error" || JSON.stringify(note.actions) !== JSON.stringify(["Use Standard voice"]) || note.transcribed || note.saved)
+        if (note.text !== "Realtime voice is unavailable on the server right now." || note.level !== "error" || JSON.stringify(note.actions) !== JSON.stringify(["Use Whisper voice"]) || note.transcribed || note.saved)
           fail(`unavailable note ${JSON.stringify(note)}`);
         await checkLayout(p, `handsfree-unavailable ${label}`);
         await shoot(p, "panel-handsfree-unavailable", size, scheme);
         // The user's choice: Standard, this once (Settings unchanged).
         await p.click("#now-notice .notice-action");
         await waitPhase(p, "listening");
-        if (await p.evaluate(() => window.__requests.some((r) => r.type === "settings.save" && "voiceEngine" in r.settings))) fail("Use Standard voice changed Settings");
+        if (await p.evaluate(() => window.__requests.some((r) => r.type === "settings.save" && "voiceEngine" in r.settings))) fail("Use Whisper voice changed Settings");
         await p.evaluate(() => window.__push({ type: "panel.voice" }));
         await p.waitForFunction(() => document.querySelector("#voice-bar").hidden);
         reportErrors(p, `handsfree-unavailable ${label}`);
@@ -2430,7 +2431,7 @@ export const PANEL_CASES = [
   // Hands-free muted (the composer's Mute, Alt+M): the strip in grey with "Muted", no meter; Mute pressed; the box
   // without the glow and "Listening…"; the mic still, in grey; the background told (the MUTE badge). Realtime stops
   // streaming the microphone (no input_audio_buffer.append: no input audio billed) and clears the server's buffer; the
-  // narrator is told, and still speaks (Interrupt, Mute, the mic and Send in one row, narrow too). While the agent works
+  // narrator is told, and still speaks (Mute, the mic and Send in one row, narrow too; Esc cuts the line off). While the agent works
   // the hint says updates are still said. Alt+M unmutes: the stream starts again.
   {
     names: ["panel-handsfree-muted", "panel-handsfree-muted-speaking", "panel-handsfree-muted-working"],
@@ -2463,6 +2464,8 @@ export const PANEL_CASES = [
             pressed: mute.getAttribute("aria-pressed"),
             label: mute.getAttribute("aria-label"),
             text: mute.textContent,
+            icon: mute.dataset.icon,
+            slashed: mute.querySelectorAll("svg path").length,
             tooltip: mute.title,
             live: bar.querySelector("[aria-live=polite]").textContent,
             barBg: getComputedStyle(bar).backgroundColor,
@@ -2481,7 +2484,7 @@ export const PANEL_CASES = [
       want(muted.state === "muted" && muted.muted === "true" && muted.title === "Muted" && muted.live === "Voice on: Muted", "state", muted);
       want(muted.detail === "Realtime voice · Microphone off · Unmute to talk", "tooltip", muted);
       want(!muted.meter && muted.ring === "none", "meter or ring", muted);
-      want(muted.pressed === "true" && muted.label === "Unmute the microphone · Alt+M" && muted.text === "Unmute" && muted.tooltip === muted.label, "Mute button", muted);
+      want(muted.pressed === "true" && muted.label === "Unmute the microphone · Alt+M" && muted.text === "" && muted.icon === "off" && muted.slashed === 2 && muted.tooltip === muted.label, "Mute button", muted);
       want(!/200, 35, 63|196, 42, 68/.test(muted.barBg), "the bar is still red", muted);
       want(/muted/i.test(muted.placeholder) && !muted.glow, "box", muted);
       want(muted.micMuted === "true" && muted.micRing === "none", "mic button", muted);
@@ -2499,7 +2502,7 @@ export const PANEL_CASES = [
       await checkLayout(p, `handsfree-muted ${label}`);
       await shoot(p, "panel-handsfree-muted", size, scheme);
 
-      // The narrator still speaks: Speaking, with Interrupt, Mute (still pressed), the mic and Send in one row.
+      // The narrator still speaks: Speaking, with Mute (still pressed), the mic and Send in one row; no Interrupt button.
       await p.evaluate(() => {
         // 3 s of audio, in two deltas (one big spread would overflow the call stack).
         const pcm = btoa(String.fromCharCode(...new Uint8Array(24_000 * 2 * 1.5)));
@@ -2509,12 +2512,13 @@ export const PANEL_CASES = [
       });
       await p.waitForFunction(() => document.getElementById("voice-bar").dataset.state === "speaking", null, { timeout: 5000 });
       const speaking = await look();
-      want(speaking.muted === "true" && speaking.pressed === "true" && /Esc or Interrupt stops it · microphone muted$/.test(speaking.detail), "speaking while muted", speaking);
-      want(await p.evaluate(() => !document.querySelector("#now-actions .voice-interrupt").hidden), "no Interrupt in the composer", speaking);
+      want(speaking.muted === "true" && speaking.pressed === "true" && /Esc stops it · microphone muted$/.test(speaking.detail), "speaking while muted", speaking);
+      want(await p.evaluate(() => !document.querySelector("#now-actions .voice-interrupt")), "an Interrupt button in the composer", speaking);
       want(!speaking.layout.length, "speaking layout", speaking);
       await checkLayout(p, `handsfree-muted-speaking ${label}`);
       await shoot(p, "panel-handsfree-muted-speaking", size, scheme);
-      await p.click("#now-actions .voice-interrupt");
+      // Esc cuts the line off.
+      await p.keyboard.press("Escape");
       await p.waitForFunction(() => document.getElementById("voice-bar").dataset.state === "muted", null, { timeout: 5000 });
 
       // A task runs: the hint says its updates are still said.
@@ -2533,7 +2537,7 @@ export const PANEL_CASES = [
       // Alt+M unmutes: the strip is live again and the microphone streams.
       await p.keyboard.press("Alt+KeyM");
       const unmuted = await look();
-      want(unmuted.muted === null && unmuted.pressed === "false" && unmuted.state !== "muted" && unmuted.reported?.muted === undefined, "Alt+M did not unmute", unmuted);
+      want(unmuted.muted === null && unmuted.pressed === "false" && unmuted.icon === "live" && unmuted.state !== "muted" && unmuted.reported?.muted === undefined, "Alt+M did not unmute", unmuted);
       const at = await appends();
       await p.waitForFunction((n) => window.__rt.sent.filter((e) => e.type === "input_audio_buffer.append").length > n, at, { timeout: 5000 }).catch(() => fail(`unmuted ${label}: no audio streamed`));
       await p.evaluate(() => window.__push({ type: "panel.voice" }));

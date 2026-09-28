@@ -15,13 +15,13 @@ import { UiRouter, type RouterRunner, type UiRouterDeps } from "../src/engine/ui
 import { TabChats } from "../src/tab-chats.js";
 import { applySettingsPatch } from "../src/settings-store.js";
 import { WrongPassphraseError } from "../src/vault.js";
-import { isStale, UI_PORT_NAME, type UiPush, type UiRequest, type UiResponse, type UiState } from "../src/ui-protocol.js";
+import { isStale, OPTIONS_PORT_NAME, UI_PORT_NAME, type UiPush, type UiRequest, type UiResponse, type UiState } from "../src/ui-protocol.js";
 
 const INFO: HelperInfo = { version: "2", jevAvailable: false, claudePath: "C:\\claude.exe", logDir: "L", selfTest: { ok: true, ms: 1, at: "x" } };
 
 function setup() {
   const db = new MemoryKvDb();
-  let settings: ExtensionSettings = { ...DEFAULT_SETTINGS, anthropicApiKey: "sk-secret", runnerKey: "bt_secret" };
+  let settings: ExtensionSettings = { ...DEFAULT_SETTINGS, anthropicApiKey: "sk-secret", jevApiKey: "jk-secret" };
   const rstate: RunnerState = { lastRunAt: "2026-09-24T09:00:00.000Z" };
   const running: SessionInfo | null = null;
   const runner = {
@@ -71,7 +71,6 @@ function setup() {
     testClaude: async () => ({ ok: true, detail: "Key accepted" }),
     // Echoes the resolved brain it was given: the router must pass the settings' brain status.
     testJev: async (_s, brain) => ({ ok: false, detail: `No Jev key set (brain: ${brain.effective ?? "none"})` }),
-    testCloud: async () => ({ ok: true, detail: "Connected" }),
     vault,
   };
   const router = new UiRouter(deps);
@@ -92,8 +91,7 @@ describe("UiRouter", () => {
     const t = setup();
     const s = await t.req({ type: "state.get" });
     expect(s.settings.anthropicApiKey).toBe("set");
-    expect(s.settings.runnerKey).toBe("set");
-    expect(s.settings.jevApiKey).toBe("");
+    expect(s.settings.jevApiKey).toBe("set");
     expect(s.brain).toMatchObject({ effective: "claude-api", hasApiKey: true, helper: null, helperError: "Specified native messaging host not found." });
     expect(s).toMatchObject({ running: null, lastRunAt: "2026-09-24T09:00:00.000Z", nextRunAt: "2026-09-24T10:15:00.000Z" });
   });
@@ -101,10 +99,10 @@ describe("UiRouter", () => {
   it("settings.save: partial update, secrets kept when omitted or 'set', cleared with ''", async () => {
     const t = setup();
     let s = await t.req({ type: "settings.save", settings: { intervalMinutes: 30, anthropicApiKey: "set", jevApiKey: "jk-new" } });
-    expect(t.settings).toMatchObject({ intervalMinutes: 30, anthropicApiKey: "sk-secret", jevApiKey: "jk-new", runnerKey: "bt_secret" });
+    expect(t.settings).toMatchObject({ intervalMinutes: 30, anthropicApiKey: "sk-secret", jevApiKey: "jk-new" });
     expect(s.settings.jevApiKey).toBe("set");
-    s = await t.req({ type: "settings.save", settings: { runnerKey: "", brain: "claude-code" } });
-    expect(t.settings).toMatchObject({ runnerKey: "", brain: "claude-code", anthropicApiKey: "sk-secret" });
+    s = await t.req({ type: "settings.save", settings: { jevApiKey: "", brain: "claude-code" } });
+    expect(t.settings).toMatchObject({ jevApiKey: "", brain: "claude-code", anthropicApiKey: "sk-secret" });
     expect(s.brain.effective).toBeNull();
   });
 
@@ -112,7 +110,6 @@ describe("UiRouter", () => {
     const t = setup();
     expect(await t.req({ type: "settings.testClaude" })).toEqual({ ok: true, detail: "Key accepted" });
     expect(await t.req({ type: "settings.testJev" })).toEqual({ ok: false, detail: "No Jev key set (brain: claude-api)" });
-    expect(await t.req({ type: "settings.testCloud" })).toEqual({ ok: true, detail: "Connected" });
   });
 
   it("helper.connect connects with the self-test and returns state, even when it fails", async () => {
@@ -292,6 +289,23 @@ describe("UiHub", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(pushes(p).map((m) => m.type)).toEqual(["state", "tasks.changed", "event", "state"]);
     p.hostDisconnect();
+    expect(hub.size).toBe(0);
+  });
+
+  it("options page ports get every state push and nothing else", async () => {
+    const getState = vi.fn(async () => ({ paused: false }) as never);
+    const hub = new UiHub(getState, { stateDelayMs: 5 });
+    const options = port(OPTIONS_PORT_NAME);
+    expect(hub.attach(options)).toBe(false);
+    expect(hub.watch(port())).toBe(false);
+    expect(hub.watch(options)).toBe(true);
+    await vi.waitFor(() => expect(pushes(options).map((m) => m.type)).toEqual(["state"]));
+    // No side panel is open: the state (e.g. the credit after a run) still reaches the options page.
+    hub.push({ type: "tasks.changed" });
+    hub.event({ type: "status", text: "x", ts: "t", sessionId: "s" });
+    hub.pushState();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(pushes(options).map((m) => m.type)).toEqual(["state", "state"]);
     expect(hub.size).toBe(0);
   });
 

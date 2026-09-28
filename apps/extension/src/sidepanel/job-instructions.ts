@@ -1,6 +1,6 @@
 /**
  * A task's instructions on its job's page, and the way to change them: the first lines (Show all for the rest), Edit
- * (the text becomes a box: Save or Cancel, Ctrl+Enter or Escape) and Edit schedule. Saving changes the task's
+ * (the text becomes a box: Save or Cancel, Ctrl+Enter or Escape); its schedule is changed from the page's "⋯". Saving changes the task's
  * waiting row (the next run is given the new words; its series and memory stay), as the user's own words: a task the
  * agent wrote is the user's once they edit it (the patch says so).
  *
@@ -18,14 +18,10 @@ const INSTRUCTIONS_LINES = 3;
 export interface InstructionsDeps {
   /** Saves the task's new instructions (then the page shows them). */
   save(task: JobTask, instructions: string): Promise<void>;
-  /** The schedule sheet (from `trigger`). */
-  editSchedule(trigger: HTMLElement): void;
 }
 
 export interface InstructionsState {
   task: JobTask;
-  /** Its schedule can be changed now (the page's menu offers Edit schedule). */
-  canSchedule: boolean;
   /** Shown in place of the text: a task that never ran has its request as the page's opening bubble. */
   intro?: HTMLElement;
 }
@@ -68,11 +64,6 @@ export function initInstructions(deps: InstructionsDeps): InstructionsView {
     const s = state!;
     const can = editable(s.task);
     const out = h("div.job-instr-actions");
-    if (s.canSchedule) {
-      const sched = h("button.small.ghost", { type: "button" }, "Edit schedule");
-      sched.addEventListener("click", () => deps.editSchedule(sched));
-      out.append(sched);
-    }
     if (can !== "no") {
       const edit = h(
         "button.small.ghost.job-instr-edit",
@@ -181,7 +172,7 @@ export function initInstructions(deps: InstructionsDeps): InstructionsView {
       state = next;
       // The box keeps what is typed; the rest follows the task (drawn again only when that changes, so the focus stays).
       if (editing && was?.task.id === next.task.id && editable(next.task) === "yes") return;
-      const sig = JSON.stringify([next.task.id, next.task.instructions, editable(next.task), next.canSchedule, !!next.intro]);
+      const sig = JSON.stringify([next.task.id, next.task.instructions, editable(next.task), !!next.intro]);
       if (!editing && sig === drawnSig) return;
       drawnSig = sig;
       editing = false;

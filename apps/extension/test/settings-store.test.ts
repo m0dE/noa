@@ -23,19 +23,18 @@ describe("settings store", () => {
   });
 
   it("parses stored values and repairs invalid ones", async () => {
-    chrome.storage.local.data.settings = { apiBase: "https://api.example.com///", intervalMinutes: -3, delayMinSec: 5, delayMaxSec: 1 };
+    chrome.storage.local.data.settings = { intervalMinutes: -3, delayMinSec: 5, delayMaxSec: 1 };
     const s = await loadSettings();
-    expect(s.apiBase).toBe("https://api.example.com");
     expect(s.intervalMinutes).toBe(15);
     expect(s.delayMinSec).toBe(5);
     expect(s.delayMaxSec).toBe(5);
   });
 
   it("saveSettings merges a partial update and stores parsed values", async () => {
-    await saveSettings({ runnerKey: "bt_x" });
+    await saveSettings({ jevApiKey: "jk_x" });
     await saveSettings({ intervalMinutes: 30 });
     const stored = chrome.storage.local.data.settings as Record<string, unknown>;
-    expect(stored.runnerKey).toBe("bt_x");
+    expect(stored.jevApiKey).toBe("jk_x");
     expect(stored.intervalMinutes).toBe(30);
     expect(stored.delayMinSec).toBe(60);
   });
@@ -50,10 +49,11 @@ describe("settings store", () => {
 
 describe("settings.save patches", () => {
   it("keeps omitted secrets and the 'set' marker, clears with '', sets new values", async () => {
-    await saveSettings({ anthropicApiKey: "sk-1", jevApiKey: "jk-1", runnerKey: "bt-1" });
-    await saveSettingsPatch({ anthropicApiKey: "set", jevApiKey: "", runnerKey: " bt-2 ", brain: "claude-api", maxConsecutiveFailures: 5 });
-    const s = await loadSettings();
-    expect(s).toMatchObject({ anthropicApiKey: "sk-1", jevApiKey: "", runnerKey: "bt-2", brain: "claude-api", maxConsecutiveFailures: 5 });
+    await saveSettings({ anthropicApiKey: "sk-1", jevApiKey: "jk-1" });
+    await saveSettingsPatch({ anthropicApiKey: "set", jevApiKey: " jk-2 ", brain: "claude-api", maxConsecutiveFailures: 5 });
+    expect(await loadSettings()).toMatchObject({ anthropicApiKey: "sk-1", jevApiKey: "jk-2", brain: "claude-api", maxConsecutiveFailures: 5 });
+    await saveSettingsPatch({ jevApiKey: "" });
+    expect((await loadSettings()).jevApiKey).toBe("");
   });
 
   it("ignores unknown keys and keeps old values for invalid ones", async () => {
@@ -65,7 +65,7 @@ describe("settings.save patches", () => {
   });
 
   it("has defaults for the v2 fields", async () => {
-    expect(await loadSettings()).toMatchObject({ brain: "auto", cloudEnabled: false, maxConsecutiveFailures: 3, retryAfterMinutes: 10 });
+    expect(await loadSettings()).toMatchObject({ brain: "auto", maxConsecutiveFailures: 3, retryAfterMinutes: 10 });
   });
 });
 
@@ -94,7 +94,7 @@ describe("alarm scheduling", () => {
   it("ignores unrelated changes", async () => {
     await ensureAlarm();
     const before = chrome.alarms.all.get(ALARM_NAME);
-    await handleStorageChange({ settings: { oldValue: { intervalMinutes: 15 }, newValue: { intervalMinutes: 15, runnerKey: "k" } } }, "local");
+    await handleStorageChange({ settings: { oldValue: { intervalMinutes: 15 }, newValue: { intervalMinutes: 15, jevApiKey: "k" } } }, "local");
     await handleStorageChange({ other: { newValue: 1 } }, "local");
     await handleStorageChange({ settings: { newValue: { intervalMinutes: 99 } } }, "session");
     expect(chrome.alarms.all.get(ALARM_NAME)).toBe(before);
@@ -121,5 +121,20 @@ describe("the account server's earlier default in stored settings", () => {
       expect(await migrateStoredSettings()).toBe(false);
       expect(chrome.storage.local.data.settings).toEqual({ accountApiBase });
     }
+  });
+});
+
+describe("settings of the removed runner-key cloud sync", () => {
+  it("are deleted from storage once at worker start, the runner key with them", async () => {
+    chrome.storage.local.data.settings = { cloudEnabled: true, apiBase: "https://tasks.example.com", runnerKey: "bt_secret", brain: "noa" };
+    expect(await migrateStoredSettings()).toBe(true);
+    expect(chrome.storage.local.data.settings).toEqual({ brain: "noa" });
+    expect(await migrateStoredSettings()).toBe(false);
+  });
+
+  it("go together with moving an earlier default account server", async () => {
+    chrome.storage.local.data.settings = { accountApiBase: PREVIOUS_ACCOUNT_API_BASES[0], runnerKey: "" };
+    expect(await migrateStoredSettings()).toBe(true);
+    expect(chrome.storage.local.data.settings).toEqual({ accountApiBase: ACCOUNT_API_BASE });
   });
 });

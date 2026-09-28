@@ -155,9 +155,9 @@ describe("redaction", () => {
   });
 
   it("fields named after secrets, whatever they hold, and every string inside", () => {
-    expect(redactDeep({ password: "p", nested: { jevApiKey: "k", runnerKey: "", note: "Bearer abcdefghijkl" }, list: ["sk-ant-abcdefghijk"] })).toEqual({
+    expect(redactDeep({ password: "p", nested: { jevApiKey: "k", anthropicApiKey: "", note: "Bearer abcdefghijkl" }, list: ["sk-ant-abcdefghijk"] })).toEqual({
       password: "[redacted]",
-      nested: { jevApiKey: "[redacted]", runnerKey: "", note: "Bearer [redacted]" },
+      nested: { jevApiKey: "[redacted]", anthropicApiKey: "", note: "Bearer [redacted]" },
       list: ["[redacted]"],
     });
   });

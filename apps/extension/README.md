@@ -24,7 +24,8 @@ saved with an earlier default (`PREVIOUS_ACCOUNT_API_BASES` in
 `packages/shared/src/settings.ts`) moves to it by itself, signed in session
 included, when the service worker starts (install, update, browser start).
 Self-hosters can change it in Settings > Advanced > Account server.
-The runner-key cloud sync stays there as well, for servers without accounts.
+The same start deletes the settings of the removed runner-key cloud sync
+(`cloudEnabled`, `apiBase`, `runnerKey`) from storage.
 
 Plans, top-ups and invoices are on the dashboard's Billing page
 (`<account server origin>/billing`); every plan or top-up button in the

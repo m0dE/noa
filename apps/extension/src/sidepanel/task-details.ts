@@ -51,7 +51,7 @@ export interface PreviousRun {
 /** How long a previous run's first line is. */
 export const RUN_LINE_CHARS = 90;
 
-export type Origin = "account" | "local" | "api" | "adhoc";
+export type Origin = "account" | "local" | "adhoc";
 
 export interface DetailsField {
   label: string;
@@ -98,11 +98,10 @@ export function previousRuns(runs: readonly MemoryEntry[], when: WhenOptions = {
 export const ORIGIN_LABELS: Record<Origin, string> = {
   account: "Scheduled in your account",
   local: "Scheduled in this browser",
-  api: "Cloud queue (API)",
   adhoc: "Chat message",
 };
 
-/** Where a task came from: its TODO list, the cloud queue, or a message typed in Chat. */
+/** Where a task came from: its TODO list (a claimed run: the account's), or a message typed in Chat. */
 export function originOf(input: DetailsInput): Origin | undefined {
   if (input.task) return input.listSource === "account" ? "account" : "local";
   switch (input.session?.source) {
@@ -111,7 +110,7 @@ export function originOf(input: DetailsInput): Origin | undefined {
     case "local":
       return "local";
     case "cloud":
-      return "api";
+      return "account";
     default:
       return undefined;
   }

@@ -20,6 +20,7 @@ import type {
   ToolResult,
   TraceDraft,
 } from "@noa/shared";
+import type { CreditShortfall } from "./api-errors.js";
 import type { ApiAttachment } from "./attachments.js";
 import type { Interjections } from "./interjections.js";
 import type { SecretRedactor } from "./redact.js";
@@ -177,10 +178,12 @@ export interface ApiAgentOptions {
    */
   stream?: boolean;
   /**
-   * HTTP 402 (the account is out of usage credit): called, then the turn ends
-   * paused with reason OUT_OF_CREDIT ("Out of usage credit").
+   * HTTP 402: called, then the turn ends paused, with reason OUT_OF_CREDIT
+   * ("Out of usage credit") when the account has none left, or LOW_CREDIT
+   * ("Not enough usage credit") when some is left but too little for the
+   * request (`shortfall` says how much).
    */
-  onOutOfCredit?(info: { message: string; topupUrl?: string }): void;
+  onOutOfCredit?(info: { message: string; topupUrl?: string; shortfall?: CreditShortfall }): void;
   /**
    * The conversation's timing trace: each Messages request (duration, time to
    * the response and to the first text, stream deltas, tokens, retries and

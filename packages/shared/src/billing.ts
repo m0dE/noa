@@ -1,5 +1,6 @@
 import { z } from "zod";
 import catalog from "./billing-catalog.json";
+import { formatCents } from "./format.js";
 import { User } from "./task.js";
 
 /**
@@ -177,6 +178,12 @@ export type RedirectUrlResponse = z.infer<typeof RedirectUrlResponse>;
 export const OUT_OF_CREDIT_CODE = "out_of_credit";
 /** What the user reads when the hosted AI has no usage credit left (a paused run's reason starts with it). */
 export const OUT_OF_CREDIT = "Out of usage credit";
+/** A paused run's reason when credit is left, but too little for the request (a 402 with `neededCents`). */
+export const LOW_CREDIT = "Not enough usage credit";
+/** What the user reads for that 402: "Not enough usage credit for this request ($0.67 left; about $0.80 needed)". */
+export function lowCreditText(balanceCents: number, neededCents: number): string {
+  return `${LOW_CREDIT} for this request (${formatCents(balanceCents)} left; about ${formatCents(neededCents)} needed)`;
+}
 
 /**
  * The `error` code of a 502 from /v1/ai/*: the AI provider refused this
@@ -187,11 +194,18 @@ export const HOSTED_AI_UNAVAILABLE_CODE = "hosted_ai_unavailable";
 /** What the user reads when the hosted AI answered HOSTED_AI_UNAVAILABLE_CODE (a failed turn's reason is exactly this). */
 export const HOSTED_AI_UNAVAILABLE = "Noa AI is unavailable right now";
 
-/** 402 of /v1/ai/* when the user has no credit left. */
+/**
+ * 402 of /v1/ai/* when the user has no credit left, or too little for the request (then with `balanceCents`
+ * and `neededCents`).
+ */
 export const OutOfCreditError = z.object({
   error: z.literal(OUT_OF_CREDIT_CODE),
   message: z.string(),
   topupUrl: z.string(),
+  /** Credit left: what the request could hold (the balance less what requests in flight hold), in whole cents. */
+  balanceCents: z.number().int().optional(),
+  /** About what the request needed (its input and the least output, as charged), in whole cents. */
+  neededCents: z.number().int().optional(),
 });
 export type OutOfCreditError = z.infer<typeof OutOfCreditError>;
 
@@ -276,7 +290,18 @@ export const UsageReport = z.object({
       audioSeconds: z.number().optional(),
     }),
   ),
-  byDay: z.array(z.object({ date: z.string(), tasksRun: z.number().int(), chargedCents: z.number() })),
+  byDay: z.array(
+    z.object({
+      date: z.string(),
+      tasksRun: z.number().int(),
+      chargedCents: z.number(),
+      /**
+       * The day's charge split by what was billed (optional: older servers do not send it), largest first.
+       * One row per kind and model; realtime rows cover both the voice model and its input transcription.
+       */
+      charges: z.array(z.object({ kind: UsageKind, model: z.string(), chargedCents: z.number() })).optional(),
+    }),
+  ),
 });
 export type UsageReport = z.infer<typeof UsageReport>;
 

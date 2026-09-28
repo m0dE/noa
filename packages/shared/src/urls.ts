@@ -5,6 +5,9 @@ const X_HOSTS = ["x.com", "twitter.com"];
 /** X's home timeline (where the composer and the account switcher are). */
 export const X_HOME_URL = "https://x.com/home";
 
+/** The website's terms (apps/web/public/terms.html): the no-warranty wording the app's disclaimers point to. */
+export const TERMS_URL = "https://noa.bot/terms";
+
 /** "@name" from "name", "@name" or " @@name ". */
 export function normalizeHandle(handle: string): string {
   return `@${handle.trim().replace(/^@+/, "").trim()}`;

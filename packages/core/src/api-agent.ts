@@ -7,7 +7,7 @@
  * abort) its message history stays in memory, and continueWith(text) runs
  * the next turn on top of it, like a chat.
  */
-import { ANTHROPIC_MESSAGES_URL, ATTACHMENT_LIMITS, delay, DeltaBatcher, errorMessage, OUT_OF_CREDIT, stopwatch, toolsFor, traceText, type AgentEvent, type RunConfig, type Sleep, type TaskRunResult, type ToolName, type TraceDraft } from "@noa/shared";
+import { ANTHROPIC_MESSAGES_URL, ATTACHMENT_LIMITS, delay, DeltaBatcher, errorMessage, stopwatch, toolsFor, traceText, type AgentEvent, type RunConfig, type Sleep, type TaskRunResult, type ToolName, type TraceDraft } from "@noa/shared";
 import type { AgentSession, ApiAgentOptions } from "./types.js";
 import { attachmentBlocks, withAttachmentLines, type ApiAttachment } from "./attachments.js";
 import { createToolExecutor } from "./executor.js";
@@ -338,11 +338,11 @@ export function startApiAgentWith(opts: ApiAgentOptions, internals: ApiAgentInte
         if (r.kind === "credit") {
           emit({ type: "error", text: r.reason });
           try {
-            opts.onOutOfCredit?.(r.topupUrl ? { message: r.reason, topupUrl: r.topupUrl } : { message: r.reason });
+            opts.onOutOfCredit?.({ message: r.reason, ...(r.topupUrl ? { topupUrl: r.topupUrl } : {}), ...(r.shortfall ? { shortfall: r.shortfall } : {}) });
           } catch {
             /* the listener must not break the loop */
           }
-          finish({ outcome: "paused", reason: OUT_OF_CREDIT });
+          finish({ outcome: "paused", reason: r.pauseReason });
           return null;
         }
         if (r.kind === "auth") {

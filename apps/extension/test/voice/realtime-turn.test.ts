@@ -580,7 +580,7 @@ describe("the side panel's hands-free session on Realtime", () => {
       expect(t.hf.active).toBe(false);
       const tip = t.tips.at(-1)!;
       expect(tip.text).toBe("Voice disconnected.");
-      expect(tip.actions?.map((a) => a.label)).toEqual(["Try again", "Use Standard voice"]);
+      expect(tip.actions?.map((a) => a.label)).toEqual(["Try again", "Use Whisper voice"]);
       expect(t.saved).toEqual([]);
       expect(t.trace.filter((e) => e.name === "voice.reconnect").map((e) => e.data?.attempt)).toEqual([0, 1, 2, 3]);
       expect(t.trace.at(-1)).toMatchObject({ name: "voice.end", data: { why: "error" } });

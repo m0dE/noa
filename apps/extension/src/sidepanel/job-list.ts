@@ -10,6 +10,7 @@
  * screens), or Delete (Backspace) on the focused row, which then moves to the next one; Needs you has Dismiss all.
  * The panel keeps the view it showed last (job-nav.ts storedView).
  */
+import { TERMS_URL } from "@noa/shared";
 import { h } from "../ui/dom.js";
 import { HOLD_TITLE, RELEASE_TITLE } from "./job-actions.js";
 import type { JobData } from "./job-data.js";
@@ -167,6 +168,12 @@ export function initJobList(root: HTMLElement, deps: JobListDeps): JobList {
       h("p.empty-title", null, "No jobs yet"),
       h("p", null, "Type below to start one, like “Post ‘good morning’ on X”, or say when: “every day at 9 post a tip on X”."),
       shortcutHint(),
+      h(
+        "p.disclaimer",
+        null,
+        "Noa acts as you and can make mistakes, like a wrong post, purchase or deletion. You're responsible for what you ask it to do, and Noa comes as is, without warranty. ",
+        h("a", { href: TERMS_URL, target: "_blank", rel: "noopener noreferrer" }, "Terms"),
+      ),
     );
   }
 

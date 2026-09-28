@@ -8,14 +8,14 @@ describe("the voice strip: it only tells", () => {
   it("'Voice on' and each phase's state word, the time on, the meter, the announcement; the hint in the tooltip", () => {
     const rows = (["starting", "listening", "sending", "working", "speaking"] as const).map((phase) => {
       const v = view({ phase });
-      return [phase, v.label, v.status, v.time, v.meter, v.announce, v.interrupt, v.hint];
+      return [phase, v.label, v.status, v.time, v.meter, v.announce, v.hint];
     });
     expect(rows).toEqual([
-      ["starting", "Voice on", "Starting…", null, false, "Voice on: Starting…", false, "Turning on the microphone"],
-      ["listening", "Voice on", "Listening", "0:42", true, "Voice on: Listening", false, "Realtime voice · Just talk · say “stop” to end"],
-      ["sending", "Voice on", "Sending", "0:42", true, "Voice on: Sending", false, "Realtime voice · Say “cancel” or press Esc to take it back"],
-      ["working", "Voice on", "Agent working", "0:42", true, "Voice on: Agent working", false, "Realtime voice · Still listening: talk to add to the task"],
-      ["speaking", "Voice on", "Speaking", "0:42", false, "Voice on: Speaking", true, "Realtime voice · Esc or Interrupt stops it, or just talk"],
+      ["starting", "Voice on", "Starting…", null, false, "Voice on: Starting…", "Turning on the microphone"],
+      ["listening", "Voice on", "Listening", "0:42", true, "Voice on: Listening", "Realtime voice · Just talk · say “stop” to end"],
+      ["sending", "Voice on", "Sending", "0:42", true, "Voice on: Sending", "Realtime voice · Say “cancel” or press Esc to take it back"],
+      ["working", "Voice on", "Agent working", "0:42", true, "Voice on: Agent working", "Realtime voice · Still listening: talk to add to the task"],
+      ["speaking", "Voice on", "Speaking", "0:42", false, "Voice on: Speaking", "Realtime voice · Esc stops it, or just talk"],
     ]);
     // No links on its own tab: the controls are in the composer.
     expect(view({}).links).toBeNull();
@@ -41,13 +41,13 @@ describe("the voice strip: it only tells", () => {
   });
 
   it("names the engine (once chosen) in the tooltip", () => {
-    expect(view({ engine: "standard" }).hint).toMatch(/^Standard voice · /);
+    expect(view({ engine: "standard" }).hint).toMatch(/^Whisper voice · /);
     expect(view({ engine: null }).hint).toMatch(/^Voice · /);
   });
 
   it("on another tab it names the tab it listens in, with Go to tab and Use voice here (the mic here ends it: no Turn off)", () => {
     const v = view({ phase: "speaking", where: { title: "Inbox (3) - Gmail", url: null }, elsewhere: true });
-    expect(v).toMatchObject({ state: "elsewhere", label: "Voice on · Inbox (3) - Gmail", status: "", time: "0:42", links: { turnOff: false }, interrupt: false, announce: "Voice on · Inbox (3) - Gmail" });
+    expect(v).toMatchObject({ state: "elsewhere", label: "Voice on · Inbox (3) - Gmail", status: "", time: "0:42", links: { turnOff: false }, announce: "Voice on · Inbox (3) - Gmail" });
     expect(view({ elsewhere: true }).label).toBe("Voice on · another tab");
   });
 
@@ -57,13 +57,12 @@ describe("the voice strip: it only tells", () => {
       label: "Voice on · Shop A",
       status: "",
       time: null,
-      hint: `Standard voice · ${NOT_HERE_TEXT}`,
+      hint: `Whisper voice · ${NOT_HERE_TEXT}`,
       meter: false,
       announce: "Voice on · Shop A",
       links: { turnOff: true },
       muted: false,
       mute: null,
-      interrupt: false,
     });
     expect(remoteBarView({ where: null, engine: null })).toMatchObject({ label: "Voice on · another tab", hint: `Voice · ${NOT_HERE_TEXT}` });
   });
@@ -86,13 +85,13 @@ describe("the voice strip and the composer's Mute: muted", () => {
 
   it("muted while listening or working: 'Muted', no meter, no 'Hearing you', the hint says updates still come", () => {
     const listening = view({ muted: true, hearing: true });
-    expect(listening).toMatchObject({ state: "muted", status: "Muted", meter: false, announce: "Voice on: Muted", interrupt: false, muted: true, mute: UNMUTE });
+    expect(listening).toMatchObject({ state: "muted", status: "Muted", meter: false, announce: "Voice on: Muted", muted: true, mute: UNMUTE });
     expect(listening.hint).toBe("Realtime voice · Microphone off · Unmute to talk");
     expect(view({ phase: "working", muted: true })).toMatchObject({ state: "muted", status: "Muted", hint: "Realtime voice · Agent working · updates are still said" });
   });
 
   it("muted while a line is said or a message waits: that state, its hint without talking", () => {
-    expect(view({ phase: "speaking", muted: true })).toMatchObject({ state: "speaking", status: "Speaking", interrupt: true, muted: true, mute: UNMUTE, hint: "Realtime voice · Esc or Interrupt stops it · microphone muted" });
+    expect(view({ phase: "speaking", muted: true })).toMatchObject({ state: "speaking", status: "Speaking", muted: true, mute: UNMUTE, hint: "Realtime voice · Esc stops it · microphone muted" });
     expect(view({ phase: "sending", muted: true })).toMatchObject({ state: "sending", meter: false, muted: true, hint: "Realtime voice · Press Esc to take it back" });
   });
 

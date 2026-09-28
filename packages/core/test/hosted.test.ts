@@ -1,7 +1,7 @@
 /** The Noa hosted AI: startApiAgent with a custom endpoint and bearer auth, 402 handling, and Jev through the proxy. */
 import { describe, expect, it, vi } from "vitest";
 import { startApiAgentWith } from "../src/api-agent.js";
-import { HOSTED_AI_UNAVAILABLE, HOSTED_AI_UNAVAILABLE_CODE, OUT_OF_CREDIT } from "@noa/shared";
+import { HOSTED_AI_UNAVAILABLE, HOSTED_AI_UNAVAILABLE_CODE, LOW_CREDIT, OUT_OF_CREDIT } from "@noa/shared";
 import { OutOfCreditError } from "../src/api-errors.js";
 import { createJev } from "../src/jev.js";
 import type { ApiAgentOptions } from "../src/types.js";
@@ -116,6 +116,17 @@ describe("createJev through the Noa proxy", () => {
     expect(err).toBeInstanceOf(OutOfCreditError);
     expect((err as OutOfCreditError).message).toBe("Out of usage credit: No usage credit left");
     expect((err as OutOfCreditError).topupUrl).toBe("https://dash.test/billing");
+    expect((err as OutOfCreditError).pauseReason).toBe(OUT_OF_CREDIT);
+  });
+
+  it("402 with credit left but too little: the amounts, and LOW_CREDIT as the pause reason", async () => {
+    const body = { error: "out_of_credit", message: "Not enough usage credit for this request: $0.03 left, it needs about $0.05.", topupUrl: "https://dash.test/billing", balanceCents: 3, neededCents: 5 };
+    const s = fakeMessagesServer([{ status: 402, body }]);
+    const jev = createJev("t", { fetch: s.fetchImpl, endpoint: "https://api.test/v1/ai/jev" });
+    const err = (await jev.decide({ goal: "g", snapshot }).catch((e: unknown) => e)) as OutOfCreditError;
+    expect(err.message).toBe("Not enough usage credit for this request ($0.03 left; about $0.05 needed)");
+    expect(err.shortfall).toEqual({ balanceCents: 3, neededCents: 5 });
+    expect(err.pauseReason).toBe(LOW_CREDIT);
   });
 
   it("a machine code with a message reads as the message", async () => {

@@ -39,7 +39,7 @@ function view(opts: {
   const settings = redactSettings({ ...DEFAULT_SETTINGS, brain: opts.brain ?? "auto", ...opts.settings });
   const input: ViewInput = {
     settings,
-    draft: { brain: settings.brain, jevEnabled: settings.jevEnabled, cloudEnabled: settings.cloudEnabled, anthropicModel: settings.anthropicModel, ...opts.draft },
+    draft: { brain: settings.brain, jevEnabled: settings.jevEnabled, anthropicModel: settings.anthropicModel, ...opts.draft },
     brain: { effective: opts.effective ?? null, helper: opts.helper === undefined ? null : opts.helper, hasApiKey: !!settings.anthropicApiKey, jevActive: false, ...(opts.helperError ? { helperError: opts.helperError } : {}) },
     account: opts.account === undefined ? SIGNED_OUT : opts.account,
   };
@@ -223,10 +223,6 @@ describe("model, Jev and cloud", () => {
     expect(cc.jevUseHint).toMatch(/helper's own Jev key/);
     expect(view({ draft: { brain: "claude-api", jevEnabled: false } }).showJevKey).toBe(false);
   });
-  it("cloud fields only when cloud sync is on", () => {
-    expect(view({ draft: { cloudEnabled: true } }).showCloudFields).toBe(true);
-    expect(view({}).showCloudFields).toBe(false);
-  });
 });
 
 describe("validation", () => {
@@ -244,8 +240,6 @@ describe("validation", () => {
   it("checks addresses and the model id", () => {
     expect(validateForm({ ...ok, accountApiBase: "" }).accountApiBase).toMatch(/Enter the account server/);
     expect(validateForm({ ...ok, accountApiBase: "example.com" }).accountApiBase).toMatch(/https:\/\//);
-    expect(validateForm({ ...ok, apiBase: "" }).apiBase).toBeUndefined();
-    expect(validateForm({ ...ok, apiBase: "ftp://x" }).apiBase).toBeDefined();
     expect(validateForm({ ...ok, anthropicModel: " " }).anthropicModel).toBeDefined();
     expect(validateForm({ ...ok, anthropicModel: "claude sonnet" }).anthropicModel).toBeDefined();
   });
@@ -260,16 +254,16 @@ describe("storage round-trip", () => {
   beforeEach(() => {
     installChromeFake();
   });
-  const secrets = (s: ExtensionSettings) => ({ anthropicApiKey: s.anthropicApiKey, jevApiKey: s.jevApiKey, runnerKey: s.runnerKey });
+  const secrets = (s: ExtensionSettings) => ({ anthropicApiKey: s.anthropicApiKey, jevApiKey: s.jevApiKey });
 
   it("an untouched form changes nothing", () => {
-    const saved = redactSettings({ ...DEFAULT_SETTINGS, anthropicApiKey: "sk", brain: "claude-code", apiBase: "https://tasks.test" });
+    const saved = redactSettings({ ...DEFAULT_SETTINGS, anthropicApiKey: "sk", brain: "claude-code", accountApiBase: "https://acct.test" });
     expect(buildSettingsPatch(saved, parseForm(formValues(saved)))).toEqual({});
   });
 
   it("every field saved from the form reads back the same, under the same storage key", async () => {
     const chrome = installChromeFake();
-    chrome.storage.local.data.settings = { ...DEFAULT_SETTINGS, anthropicApiKey: "sk-keep", jevApiKey: "jev-keep", runnerKey: "run-keep" };
+    chrome.storage.local.data.settings = { ...DEFAULT_SETTINGS, anthropicApiKey: "sk-keep", jevApiKey: "jev-keep" };
     const before = await loadSettings();
     const v = formValues(redactSettings(before));
     const edited = {
@@ -278,9 +272,8 @@ describe("storage round-trip", () => {
       anthropicModel: "claude-opus-5-5",
       jevEnabled: false,
       jevThreshold: "0.65",
-      accountApiBase: "https://acct.example.com/",
-      cloudEnabled: true,
-      apiBase: "https://tasks.example.com//",
+      accountApiBase: "https://acct.example.com//",
+      showControlOverlay: false,
       intervalMinutes: "30",
       delayMinSec: "5",
       delayMaxSec: "15",
@@ -302,8 +295,7 @@ describe("storage round-trip", () => {
       jevEnabled: false,
       jevThreshold: 0.65,
       accountApiBase: "https://acct.example.com",
-      cloudEnabled: true,
-      apiBase: "https://tasks.example.com",
+      showControlOverlay: false,
       intervalMinutes: 30,
       delayMinSec: 5,
       delayMaxSec: 15,
@@ -315,8 +307,8 @@ describe("storage round-trip", () => {
       maxConsecutiveFailures: 0,
     });
     // Keys the form never touched are kept; the form shows them back as saved.
-    expect(secrets(after)).toEqual({ anthropicApiKey: "sk-keep", jevApiKey: "jev-keep", runnerKey: "run-keep" });
-    expect(formValues(redactSettings(after))).toEqual({ ...edited, accountApiBase: "https://acct.example.com", apiBase: "https://tasks.example.com" });
+    expect(secrets(after)).toEqual({ anthropicApiKey: "sk-keep", jevApiKey: "jev-keep" });
+    expect(formValues(redactSettings(after))).toEqual({ ...edited, accountApiBase: "https://acct.example.com" });
   });
 
   it("keys: set, replace and remove save one key at a time", async () => {
@@ -326,7 +318,7 @@ describe("storage round-trip", () => {
     await saveSettingsPatch({ jevApiKey: "j-1" });
     await saveSettingsPatch({ anthropicApiKey: "" });
     const s = await loadSettings();
-    expect(secrets(s)).toEqual({ anthropicApiKey: "", jevApiKey: "j-1", runnerKey: "" });
+    expect(secrets(s)).toEqual({ anthropicApiKey: "", jevApiKey: "j-1" });
   });
 
   it("a redacted marker never overwrites a stored key", () => {

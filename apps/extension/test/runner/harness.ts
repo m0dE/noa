@@ -10,6 +10,7 @@ import { SessionEndedError, type Brain, type BrainContinueOptions, type BrainRun
 import { MemoryKvDb } from "../memory-kv.js";
 import { LocalStore } from "../../src/engine/local-store.js";
 import type { MediaSource } from "../../src/engine/media-files.js";
+import type { RunnerApi } from "../../src/engine/run/jobs.js";
 import { Runner, type RunnerDeps } from "../../src/engine/runner.js";
 import { SessionStore } from "../../src/engine/sessions.js";
 import { TraceStore } from "../../src/engine/trace-store.js";
@@ -132,6 +133,8 @@ export interface Harness {
   cleanups: number;
   results: { taskId: string; body: ResultInput }[];
   claims: (ClaimResponse | null)[];
+  /** The account's task queue: claims h.claims, records h.results and h.uploads (deps.accountApi when signed in). */
+  accountQueue: RunnerApi;
   uploads: string[];
   verify: ReturnType<typeof vi.fn>;
   noBrain: boolean;
@@ -177,7 +180,8 @@ function oneSlot(h: Harness): SlotPool {
   return { size: 1, take: () => slot, release: () => {}, endChat: async () => {} };
 }
 
-export function harness(overrides: Partial<ExtensionSettings> = {}): Harness {
+/** signedIn: the due loop claims from h.accountQueue (the signed-in account's tasks). */
+export function harness(overrides: Partial<ExtensionSettings> = {}, opts: { signedIn?: boolean } = {}): Harness {
   const db = new MemoryKvDb();
   let n = 0;
   const now = () => new Date(env.clock);
@@ -205,23 +209,24 @@ export function harness(overrides: Partial<ExtensionSettings> = {}): Harness {
     prepared: [],
     browser: { call: async () => ({}) as never },
   } as unknown as Harness;
+  h.accountQueue = {
+    claim: async () => h.claims.shift() ?? null,
+    heartbeat: async () => ({}),
+    result: async (taskId, body) => {
+      h.results.push({ taskId, body });
+    },
+    uploadMedia: async (_blob, filename) => {
+      h.uploads.push(filename);
+      return { id: `shot-${h.uploads.length}`, filename, contentType: "image/jpeg", size: 1 };
+    },
+    mediaUrl: (id) => `https://api.test/v1/media/${id}`,
+    authHeaders: () => [{ name: "Authorization", value: "Bearer bt_s_session" }],
+  };
   let sid = 0;
   h.deps = {
     loadSettings: async () => ({ ...h.settings }),
     getRunnerId: async () => "runner-1",
-    createApi: () => ({
-      claim: async () => h.claims.shift() ?? null,
-      heartbeat: async () => ({}),
-      result: async (taskId, body) => {
-        h.results.push({ taskId, body });
-      },
-      uploadMedia: async (_blob, filename) => {
-        h.uploads.push(filename);
-        return { id: `shot-${h.uploads.length}`, filename, contentType: "image/jpeg", size: 1 };
-      },
-      mediaUrl: (id) => `https://api.test/v1/media/${id}`,
-      authHeaders: () => [{ name: "Authorization", value: "Bearer bt_k" }],
-    }),
+    ...(opts.signedIn ? { accountApi: async () => h.accountQueue } : {}),
     localStore: store,
     sessions,
     attachments,

@@ -4,7 +4,7 @@
  * not the one the user looks at: that tab, with View to watch the agent there.
  *
  * A task's page puts above its latest run's conversation: how many runs it had and how they went (each count opens
- * the runs list filtered), its instructions with Edit and Edit schedule while it is scheduled (job-instructions.ts),
+ * the runs list filtered), its instructions with Edit while it is scheduled (job-instructions.ts),
  * and "Earlier runs (N)", which opens to its runs a page at a time (job-runs-view.ts). A run picked there shows its
  * conversation in the page's place ("‹ Runs" goes back to the list). A task that never ran shows its request and
  * when it will run.
@@ -113,10 +113,6 @@ export function initJobPage(deps: JobPageDeps): JobPage {
     save: async (task, text) => {
       await uiRequest({ type: "tasks.update", id: task.id, patch: { instructions: text, agentAuthored: false } });
       await data.loadTasks();
-    },
-    editSchedule: (trigger) => {
-      const job = current();
-      if (job) deps.openSchedule(job, trigger);
     },
   });
   const latestHead = h("h2.job-runs-head.latest");
@@ -473,7 +469,7 @@ export function initJobPage(deps: JobPageDeps): JobPage {
     // Its instructions while it is scheduled (a task that never ran: its request as the opening bubble).
     const task = job.task;
     if (task && (job.scheduled || !latest)) {
-      instructions.update({ task, canSchedule: jobActions(job, data.source).some((a) => a.id === "schedule"), ...(latest ? {} : { intro: introOf(job, task) }) });
+      instructions.update({ task, ...(latest ? {} : { intro: introOf(job, task) }) });
     } else instructions.reset();
     latestHead.hidden = !latest || !runs.list.childElementCount;
     latestHead.textContent = latest ? `Latest run · ${formatWhen(latest.firstStartedAt ?? latest.startedAt)}` : "";

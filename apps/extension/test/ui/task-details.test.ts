@@ -133,7 +133,7 @@ describe("detailsModel", () => {
     const clipped = detailsModel({ session: session({ source: "cloud", taskId: "c9", title: "Post the weekly recap with the numbers from the dashboard and tag the whole te…" }) }, NOW, WHEN);
     expect(clipped.text).toMatch(/^Post the weekly recap/);
     expect(clipped.textNote).toBe("Only the start of the instructions was saved with this run.");
-    expect(field(clipped, "Source")?.value).toBe("Cloud queue (API)");
+    expect(field(clipped, "Source")?.value).toBe("Scheduled in your account");
     expect(field(clipped, "Task id")?.value).toBe("c9");
     const whole = detailsModel({ session: session({ title: "Like three posts" }) }, NOW, WHEN);
     expect(whole.textNote).toBe("Only a one-line copy of the instructions was saved with this run.");
@@ -145,7 +145,7 @@ describe("originOf", () => {
   it("the TODO list it is in, else the run's source", () => {
     expect(originOf({ task: task(), listSource: "account" })).toBe("account");
     expect(originOf({ task: task() })).toBe("local");
-    expect(originOf({ session: session({ source: "cloud" }) })).toBe("api");
+    expect(originOf({ session: session({ source: "cloud" }) })).toBe("account");
     expect(originOf({ session: session({ source: "adhoc" }) })).toBe("adhoc");
     expect(originOf({})).toBeUndefined();
   });

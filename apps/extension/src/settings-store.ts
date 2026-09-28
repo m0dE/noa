@@ -12,18 +12,33 @@ export async function loadSettings(): Promise<ExtensionSettings> {
   return parseSettings(got[SETTINGS_KEY]);
 }
 
+/** Settings of the removed runner-key cloud sync; runnerKey is a secret, so they are deleted from storage. */
+const REMOVED_SETTING_KEYS = ["cloudEnabled", "apiBase", "runnerKey"];
+
 /**
  * Writes the stored account server back at its current address when it is an
  * earlier default (loadSettings already reads it that way), so storage, the
- * Advanced tab and the session agree. Runs at every service worker start:
- * install, update and browser start. True when it wrote.
+ * Advanced tab and the session agree, and deletes REMOVED_SETTING_KEYS. Runs
+ * at every service worker start: install, update and browser start. True when it wrote.
  */
 export async function migrateStoredSettings(): Promise<boolean> {
   const raw: unknown = (await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY];
   if (!raw || typeof raw !== "object") return false;
-  const stored = (raw as Record<string, unknown>).accountApiBase;
-  if (typeof stored !== "string" || currentAccountApiBase(stored) === stored) return false;
-  await chrome.storage.local.set({ [SETTINGS_KEY]: { ...raw, accountApiBase: currentAccountApiBase(stored) } });
+  const next: Record<string, unknown> = { ...raw };
+  let changed = false;
+  for (const key of REMOVED_SETTING_KEYS) {
+    if (key in next) {
+      delete next[key];
+      changed = true;
+    }
+  }
+  const stored = next.accountApiBase;
+  if (typeof stored === "string" && currentAccountApiBase(stored) !== stored) {
+    next.accountApiBase = currentAccountApiBase(stored);
+    changed = true;
+  }
+  if (!changed) return false;
+  await chrome.storage.local.set({ [SETTINGS_KEY]: next });
   return true;
 }
 

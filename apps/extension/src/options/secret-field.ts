@@ -1,13 +1,13 @@
 /**
- * Options page: the masked key fields (Anthropic API key, Jev API key,
- * runner key). A saved key shows as Set with Replace and Remove; otherwise
+ * Options page: the masked key fields (Anthropic API key, Jev API key).
+ * A saved key shows as Set with Replace and Remove; otherwise
  * a password field with its own Save button. Keys never auto-save.
  */
 import { REDACTED, SECRET_SETTING_KEYS, type ExtensionSettings } from "@noa/shared";
 import { busy, find, flash, h } from "../ui/dom.js";
 import type { SecretKey } from "./settings-patch.js";
 
-const SECRET_LABELS: Record<SecretKey, string> = { anthropicApiKey: "Anthropic API key", jevApiKey: "Jev API key", runnerKey: "Runner key" };
+const SECRET_LABELS: Record<SecretKey, string> = { anthropicApiKey: "Anthropic API key", jevApiKey: "Jev API key" };
 
 export interface SecretFieldDeps {
   /** The saved settings (secrets redacted to REDACTED / ""). */

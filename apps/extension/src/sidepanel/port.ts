@@ -1,7 +1,8 @@
 /**
  * The side panel's push port to the background. The background (a service
  * worker) may restart at any time, so the port reconnects by itself and
- * `onConnect` runs again each time (say hello, refetch the state).
+ * `onConnect` runs again each time (say hello, refetch the state). The
+ * options page uses it too, on OPTIONS_PORT_NAME.
  */
 import { UI_PORT_NAME, type UiPush } from "../ui-protocol.js";
 import type { PanelMessage } from "../panel-command.js";
@@ -14,13 +15,13 @@ export interface BackgroundPort {
   send(msg: PanelMessage): void;
 }
 
-export function connectBackground(onPush: (msg: UiPush) => void, onConnect: () => void): BackgroundPort {
+export function connectBackground(onPush: (msg: UiPush) => void, onConnect: () => void, name = UI_PORT_NAME): BackgroundPort {
   let port: chrome.runtime.Port | null = null;
 
   function connect(): void {
     let p: chrome.runtime.Port;
     try {
-      p = chrome.runtime.connect({ name: UI_PORT_NAME });
+      p = chrome.runtime.connect({ name });
     } catch {
       setTimeout(connect, RECONNECT_MS);
       return;

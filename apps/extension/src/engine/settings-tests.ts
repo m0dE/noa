@@ -91,18 +91,3 @@ async function askJev(name: string, jev: JevLike): Promise<TestResult> {
     return { ok: false, detail: `${name} test failed: ${errorMessage(err)}` };
   }
 }
-
-/** Reachability and runner key check against the cloud API. */
-export async function testCloud(
-  settings: ExtensionSettings,
-  check: (s: ExtensionSettings) => Promise<{ ok: true } | { ok: false; error: string }>,
-): Promise<TestResult> {
-  if (!settings.apiBase) return { ok: false, detail: "Cloud API URL is not set" };
-  if (!settings.runnerKey) return { ok: false, detail: "Runner key is not set" };
-  try {
-    const r = await check(settings);
-    return r.ok ? { ok: true, detail: `Connected to ${settings.apiBase}` } : { ok: false, detail: r.error };
-  } catch (err) {
-    return { ok: false, detail: errorMessage(err) };
-  }
-}

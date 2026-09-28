@@ -10,7 +10,7 @@ export { createToolExecutor } from "./executor.js";
 /** Jev client over fetch (works in the extension and in Node). */
 export { createJev, proxyJevClient, type CreateJevOptions, type JevClientLike } from "./jev.js";
 /** A hosted-AI request refused for lack of usage credit (HTTP 402); error text made readable for the user. */
-export { OutOfCreditError, plainErrorText } from "./api-errors.js";
+export { OutOfCreditError, plainErrorText, type CreditShortfall } from "./api-errors.js";
 /** Keeps passwords the agent was given out of events and logs. */
 export { mapStrings, REDACTED, SecretRedactor } from "./redact.js";
 /** System prompt for either brain, the first user message of a task, and how later messages are framed. */

@@ -12,7 +12,6 @@ import {
   delay,
   errorMessage,
   isXSite,
-  OUT_OF_CREDIT,
   picksText,
   siteHost,
   TASK_END_TOOLS,
@@ -305,7 +304,11 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
           ...(trace ? { trace } : {}),
           ...(opts.interjections ? { interrupted: () => opts.interjections!.unseen, userSpeaks: () => opts.interjections!.spoken(true) } : {}),
           // The hosted Jev and the hosted AI share one credit: pause the task, like a 402 from the Messages API does.
-          outOfCredit: () => endTask({ outcome: "paused", reason: OUT_OF_CREDIT }, "Task paused: the account is out of usage credit. Stop now."),
+          outOfCredit: (e) =>
+            endTask(
+              { outcome: "paused", reason: e.pauseReason },
+              `Task paused: the account ${e.shortfall ? "has too little usage credit for this request" : "is out of usage credit"}. Stop now.`,
+            ),
         });
       case "schedule_task":
       case "list_scheduled_tasks":

@@ -12,7 +12,7 @@ import type { VoiceEngineId, VoiceEnginesResponse } from "@noa/shared";
 export const LOW_CREDIT_MINUTES = 3;
 
 /** The engines' names (the owner's wording; the server's list gives their prices). */
-export const ENGINE_NAMES: Record<VoiceEngineId, string> = { realtime: "Realtime (OpenAI)", standard: "Standard" };
+export const ENGINE_NAMES: Record<VoiceEngineId, string> = { realtime: "OpenAI Realtime (recommended)", standard: "OpenAI Whisper + browser voice" };
 
 /** Realtime cannot run on the account server (not offered, or it refused the server's key). */
 export const REALTIME_UNAVAILABLE_TEXT = "Realtime voice is unavailable on the server right now.";

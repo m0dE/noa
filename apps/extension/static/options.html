@@ -328,6 +328,8 @@
               </div>
             </div>
           </div>
+          <!-- Also on the panel's first screen (job-list.ts); the link is TERMS_URL in packages/shared urls.ts. -->
+          <p class="group-hint disclaimer">Noa acts as you and can make mistakes, like a wrong post, purchase or deletion. You're responsible for what you ask it to do, and Noa comes as is, without warranty. <a href="https://noa.bot/terms" target="_blank" rel="noopener noreferrer">Terms</a></p>
         </section>
 
         <!-- Tasks -->
@@ -481,24 +483,6 @@
                 <label class="srow-label" for="f-accountApiBase"><b>Account server</b><small>Sign-in, your account's scheduled jobs, billing and Noa AI. Changing it signs you out of the current server.</small></label>
                 <div class="srow-control wide"><input id="f-accountApiBase" type="url" spellcheck="false" placeholder="https://noa-api.example.com" aria-describedby="err-accountApiBase" /><small id="err-accountApiBase" class="field-error"></small></div>
               </div>
-              <div class="srow">
-                <label class="srow-label" for="f-cloudEnabled"><b>Cloud sync with a runner key</b><small>Take tasks from your own task server without accounts. When you are logged in, your account's tasks are used instead.</small></label>
-                <div class="srow-control"><span class="switch"><input id="f-cloudEnabled" type="checkbox" role="switch" /></span></div>
-              </div>
-              <div class="reveal" id="cloud-fields"><div class="reveal-inner">
-                <div class="srow">
-                  <label class="srow-label" for="f-apiBase"><b>Task server</b></label>
-                  <div class="srow-control wide"><input id="f-apiBase" type="url" placeholder="https://tasks.example.com" spellcheck="false" aria-describedby="err-apiBase" /><small id="err-apiBase" class="field-error"></small></div>
-                </div>
-                <div class="srow">
-                  <div class="srow-label"><b>Runner key</b></div>
-                  <div class="srow-control wide"><div class="field secret" data-secret="runnerKey"><span class="sr-only">Runner key</span></div></div>
-                </div>
-                <div class="srow">
-                  <div class="srow-label"><b>Check the connection</b></div>
-                  <div class="srow-control"><div class="row"><button id="test-cloud" type="button" class="small">Test connection</button><span id="test-cloud-msg" class="msg" role="status"></span></div></div>
-                </div>
-              </div></div>
             </div>
           </div>
         </section>

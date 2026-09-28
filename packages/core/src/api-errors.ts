@@ -3,16 +3,28 @@
  * one way for Messages requests and for Jev.
  */
 import { z } from "zod";
-import { HOSTED_AI_UNAVAILABLE_CODE, isApiErrorCode, OUT_OF_CREDIT, OutOfCreditError as OutOfCreditBody } from "@noa/shared";
+import { HOSTED_AI_UNAVAILABLE_CODE, isApiErrorCode, LOW_CREDIT, lowCreditText, OUT_OF_CREDIT, OutOfCreditError as OutOfCreditBody } from "@noa/shared";
 
-/** A hosted-AI request was refused with 402: the account has no usage credit left. */
+/** Credit left, but too little for the request (a 402 with both amounts), in whole cents. */
+export interface CreditShortfall {
+  balanceCents: number;
+  neededCents: number;
+}
+
+/** A hosted-AI request was refused with 402: the account has no usage credit left, or too little for the request (`shortfall`). */
 export class OutOfCreditError extends Error {
   constructor(
     message: string,
     readonly topupUrl?: string,
+    readonly shortfall?: CreditShortfall,
   ) {
     super(message);
     this.name = "OutOfCreditError";
+  }
+
+  /** The paused run's reason: LOW_CREDIT when credit is left, else OUT_OF_CREDIT. */
+  get pauseReason(): string {
+    return this.shortfall ? LOW_CREDIT : OUT_OF_CREDIT;
   }
 }
 
@@ -26,13 +38,21 @@ export function parseJsonBody(text: string): unknown {
 }
 
 /** The 402 body's fields, read leniently: a body without them still means "out of credit". */
-const CreditBody = OutOfCreditBody.pick({ message: true, topupUrl: true }).partial();
+const CreditBody = OutOfCreditBody.pick({ message: true, topupUrl: true, balanceCents: true, neededCents: true }).partial();
 
-/** A 402 answer as an error: OUT_OF_CREDIT, the server's explanation, and the top-up link. */
+/**
+ * A 402 answer as an error. With the credit left and what the request needed: lowCreditText ("Not enough
+ * usage credit for this request ($0.67 left; about $0.80 needed)"). Else OUT_OF_CREDIT and the server's
+ * explanation. Either way with the top-up link.
+ */
 export function outOfCreditError(body: string): OutOfCreditError {
   const parsed = CreditBody.safeParse(parseJsonBody(body));
-  const { message, topupUrl } = parsed.success ? parsed.data : {};
-  return new OutOfCreditError(message ? `${OUT_OF_CREDIT}: ${message}` : OUT_OF_CREDIT, topupUrl || undefined);
+  const { message, topupUrl, balanceCents, neededCents } = parsed.success ? parsed.data : {};
+  const topup = topupUrl || undefined;
+  if (balanceCents !== undefined && neededCents !== undefined && balanceCents > 0) {
+    return new OutOfCreditError(lowCreditText(balanceCents, neededCents), topup, { balanceCents, neededCents });
+  }
+  return new OutOfCreditError(message ? `${OUT_OF_CREDIT}: ${message}` : OUT_OF_CREDIT, topup);
 }
 
 /** Whether an error answer is the hosted AI's HOSTED_AI_UNAVAILABLE_CODE (the server's own AI credentials were refused). */

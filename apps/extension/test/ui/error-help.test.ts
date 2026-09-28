@@ -30,7 +30,7 @@ describe("errorHelp", () => {
     [CLAUDE_CODE_GONE, "Local Claude Code isn't connected.", ["Set up Claude Code", "Use Noa AI"], true],
     ["No Claude API key set", "No Claude API key is set.", ["Add API key"], false],
     ["Claude API key rejected (HTTP 401: authentication_error: invalid x-api-key)", "Your Claude API key was refused.", ["Add API key"], false],
-    ["No AI set up. Install the helper, add a Claude API key, or log in.", "No AI is set up yet.", ["Set up AI"], false],
+    ["No AI set up. Install the helper, add a Claude API key, or log in.", "AI model not detected.", ["Set up AI"], false],
     ["No AI set up: Claude Code self-test failed: not logged in.", "Claude Code isn't ready.", ["Set up Claude Code"], false],
     ["Cannot access contents of url \"chrome://settings/\"", "Chrome blocks extensions on this page.", ["Open a new tab"], true],
     ["Claude API rate limit (HTTP 429: rate_limit_error: slow down); gave up after 4 attempts", "Too many requests right now.", [], true],

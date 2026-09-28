@@ -1,5 +1,5 @@
 /**
- * The due loop: starts due tasks (local first, then cloud claims) while there
+ * The due loop: starts due tasks (local first, then the account's claims) while there
  * is room, with the random pause between starts, until nothing more is due.
  * An alarm that fires while it runs makes it look again once it ends.
  *
@@ -27,7 +27,6 @@ export interface DueLoopDeps {
   localStore: LocalStore;
   loadSettings(): Promise<ExtensionSettings>;
   getRunnerId(): Promise<string>;
-  createApi(settings: ExtensionSettings): RunnerApi;
   accountApi?(): Promise<RunnerApi | null>;
   /** Why the account's tasks are not claimed now (RunnerDeps.accountQueueHold); null: they are. */
   accountQueueHold?(): Promise<string | null>;
@@ -135,14 +134,11 @@ export class DueLoop {
         if (started) settings = await this.deps.loadSettings();
         const held = await this.deps.accountQueueHold?.().catch(() => null);
         const accountApi = held ? null : ((await this.deps.accountApi?.().catch(() => null)) ?? null);
-        // Held, no queue is claimed at all (not the runner-key one either: the account's replaces it while signed in).
-        const cloudOn = !held && (!!accountApi || (settings.cloudEnabled && !!settings.apiBase && !!settings.runnerKey));
+        // Held or signed out, the account's queue is not claimed.
+        const cloudOn = !!accountApi;
         const { startable, blocked } = await dueLocal(this.deps.localStore, this.deps.now(), live.localRunning, !live.xTurn.free);
         const cloudReady = cloudOn && !cloudEmpty && live.xTurn.free;
         if (!startable.length && !cloudReady) {
-          if (!started && settings.cloudEnabled && !cloudOn) {
-            await state.patch({ lastError: "Cloud sync is on but the API URL or runner key is missing" });
-          }
           // Due tasks wait for the X task running beside the loop (a one-off run) to finish.
           const waitFor = scheduled.size > 0 || (blocked > 0 && live.size > 0) || (cloudOn && !cloudEmpty && !live.xTurn.free);
           if (!waitFor) break;
@@ -166,14 +162,13 @@ export class DueLoop {
 
         let job: FirstJob | null = null;
         if (startable[0]) job = { source: "local", task: startable[0] };
-        else {
-          const api = accountApi ?? this.deps.createApi(settings);
+        else if (accountApi) {
           try {
-            const claim = await api.claim(runnerId);
-            if (claim) job = { source: "cloud", claim, api, runnerId };
+            const claim = await accountApi.claim(runnerId);
+            if (claim) job = { source: "cloud", claim, api: accountApi, runnerId };
             else cloudEmpty = true;
           } catch (err) {
-            await state.patch({ lastError: `${accountApi ? "Account" : "Cloud"} claim failed: ${errorMessage(err)}` });
+            await state.patch({ lastError: `Account claim failed: ${errorMessage(err)}` });
             cloudEmpty = true;
           }
         }

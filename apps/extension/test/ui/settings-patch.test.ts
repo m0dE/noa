@@ -2,17 +2,17 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS, redactSettings, type ExtensionSettings } from "@noa/shared";
 import { adjustedFields, buildSettingsPatch, HELPER_WHY, helperStatus } from "../../src/options/settings-patch.js";
 
-const saved: ExtensionSettings = redactSettings({ ...DEFAULT_SETTINGS, anthropicApiKey: "sk-real", runnerKey: "" });
+const saved: ExtensionSettings = redactSettings({ ...DEFAULT_SETTINGS, anthropicApiKey: "sk-real" });
 
 describe("buildSettingsPatch", () => {
   it("is empty when nothing changed", () => {
-    const { anthropicApiKey: _a, jevApiKey: _j, runnerKey: _r, ...form } = saved;
+    const { anthropicApiKey: _a, jevApiKey: _j, ...form } = saved;
     expect(buildSettingsPatch(saved, form)).toEqual({});
   });
   it("includes only changed plain fields", () => {
-    expect(buildSettingsPatch(saved, { brain: "claude-api", intervalMinutes: 15, cloudEnabled: true })).toEqual({
+    expect(buildSettingsPatch(saved, { brain: "claude-api", intervalMinutes: 15, jevEnabled: false })).toEqual({
       brain: "claude-api",
-      cloudEnabled: true,
+      jevEnabled: false,
     });
   });
   it("skips undefined (blank number inputs)", () => {

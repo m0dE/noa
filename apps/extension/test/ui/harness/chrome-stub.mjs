@@ -46,13 +46,12 @@ export function installChromeStub(data) {
     "state.get": () => data.state,
     "settings.save": (req) => {
       const s = { ...data.state.settings, ...req.settings };
-      for (const k of ["anthropicApiKey", "jevApiKey", "runnerKey"]) if (k in req.settings) s[k] = req.settings[k] ? "set" : "";
+      for (const k of ["anthropicApiKey", "jevApiKey"]) if (k in req.settings) s[k] = req.settings[k] ? "set" : "";
       data.state = { ...data.state, settings: s };
       return data.state;
     },
     "settings.testClaude": () => ({ ok: true, detail: "Claude answered in 1.2 s (claude-sonnet-5)." }),
     "settings.testJev": () => ({ ok: false, detail: "No Jev key set." }),
-    "settings.testCloud": () => ({ ok: true, detail: "Server reachable, runner key accepted." }),
     "helper.connect": () => data.state,
     "run.adhoc": (req) => newChat(req.screen ? "Figure out what to do based on the current screen" : req.instructions, req),
     // A message to no conversation starts one (in its tab), like run.adhoc.
