@@ -20,6 +20,7 @@ import {
   TRANSCRIPTION_PROMPT,
   type RealtimeHandlers,
   type RealtimeSocketLike,
+  SENT_OUTPUT,
 } from "../../src/voice/realtime-client.js";
 import { RealtimeEngine } from "../../src/voice/realtime-engine.js";
 import { installMiniDom, MiniElement } from "../ui/mini-dom.js";
@@ -84,7 +85,7 @@ describe("the narrator: tool first, at most one acknowledgement", () => {
   });
 
   it("a reply that only called send_to_agent is followed by exactly one short acknowledgement", async () => {
-    const { socket } = client({ onTool: () => "Started. Your updates on it will follow." });
+    const { socket } = client({ onTool: () => SENT_OUTPUT });
     userTurn(socket, "in1", "r1");
     transcribed(socket, "in1", "open gmail");
     callSend(socket, "Open Gmail");
@@ -101,13 +102,13 @@ describe("the narrator: tool first, at most one acknowledgement", () => {
   });
 
   it("the acknowledgement is out of the conversation: cut off, nothing of it is truncated (there is no such item)", async () => {
-    const { c, socket } = client({ onTool: () => "Started. Your updates on it will follow." });
+    const { c, socket } = client({ onTool: () => SENT_OUTPUT });
     userTurn(socket, "in1", "r1");
     transcribed(socket, "in1", "open gmail");
     callSend(socket, "Open Gmail");
     await flush();
     replyDone(socket, "r1");
-    socket.event({ type: "response.created", response: { id: "r2" } });
+    socket.event({ type: "response.created", response: { id: "r2", metadata: { noa: "ack" } } });
     socket.event({ type: "response.output_audio.delta", item_id: "a2", delta: "AAAA" });
     c.truncate("a2", 300);
     expect(socket.sent.filter((e) => e.type === "conversation.item.truncate")).toEqual([]);
@@ -144,9 +145,10 @@ describe("the narrator: tool first, at most one acknowledgement", () => {
     transcribed(socket, "in1", "open gmail");
     callSend(socket, "Open Gmail");
     await flush();
-    c.note("Your update (problem): the page did not load.", "error");
+    c.say("error", "The page did not load.");
     replyDone(socket, "r1");
-    expect(socket.replies()).toEqual([{ type: "response.create" }]);
+    expect(socket.replies()).toHaveLength(1);
+    expect(socket.replies()[0]!.response.instructions).toContain("«The page did not load.»");
   });
 
   it("the user talking again drops the acknowledgement (their turn gets its own reply)", async () => {
@@ -270,7 +272,7 @@ describe("RealtimeEngine: a turn, and stopping while it starts", () => {
     const log: string[] = [];
     const sockets: FakeSocket[] = [];
     const mic = new FakeMic();
-    const player = { play: vi.fn(), stop: vi.fn(() => null), close: vi.fn(), playing: false };
+    const player = { play: vi.fn(), stop: vi.fn(() => null), close: vi.fn(), playing: false, pause: vi.fn(() => false), resume: vi.fn(), level: () => 0 };
     const e = new RealtimeEngine({ ticket, createSource: () => mic, events: engineEvents(log), openSocket: () => (sockets.push(new FakeSocket()), sockets.at(-1)!), player });
     return { e, log, sockets, mic };
   }
@@ -289,7 +291,7 @@ describe("RealtimeEngine: a turn, and stopping while it starts", () => {
     callSend(socket, "Open Gmail and read the newest email from Sarah");
     await flush();
     expect(t.log).toEqual(["speech", "forward:Open Gmail and read the newest email from Sarah [could you check what Sarah wrote me]"]);
-    expect(socket.sent.find((x) => x.item?.type === "function_call_output")!.item.output).toBe("Started. Your updates on it will follow.");
+    expect(socket.sent.find((x) => x.item?.type === "function_call_output")!.item.output).toBe(SENT_OUTPUT);
     // A turn with no request, answered aloud: its words once its reply is done.
     userTurn(socket, "in2", "r2");
     transcribed(socket, "in2", "thanks");
@@ -584,7 +586,7 @@ describe("the side panel's hands-free session on Realtime", () => {
       expect(t.hf.active).toBe(false);
       const tip = t.tips.at(-1)!;
       expect(tip.text).toBe("Voice disconnected.");
-      expect(tip.actions?.map((a) => a.label)).toEqual(["Try again", "Use Nova-3 voice"]);
+      expect(tip.actions?.map((a) => a.label)).toEqual(["Try again", "Use browser voice"]);
       expect(t.saved).toEqual([]);
       expect(t.trace.filter((e) => e.name === "voice.reconnect").map((e) => e.data?.attempt)).toEqual([0, 1, 2, 3]);
       expect(t.trace.at(-1)).toMatchObject({ name: "voice.end", data: { why: "error" } });

@@ -43,6 +43,8 @@ describe("costPerMinuteText: the cost from the server's numbers", () => {
     expect(costPerMinuteText(30)).toBe("about 30¢ of usage credit a minute");
     expect(costPerMinuteText(125)).toBe("about $1.25 of usage credit a minute");
     expect(costPerMinuteText(0.42)).toBe("about 0.42¢ of usage credit a minute");
+    expect(costPerMinuteText(1.729)).toBe("about 1.7¢ of usage credit a minute");
+    expect(costPerMinuteText(6.0762)).toBe("about 6.1¢ of usage credit a minute");
     expect(costPerMinuteText(0.004)).toBe("under 0.01¢ of usage credit a minute");
   });
 });

@@ -8,6 +8,7 @@ import { errorMessage, type ExtensionSettings, type SessionInfo, type TodoToolNa
 import { AccountService, browserTimeZone, type AccountServiceDeps } from "./account/account.js";
 import type { AccountTaskList } from "./account/account-api.js";
 import { AccountTodo, LocalTodo, type TodoSource } from "./account/todo-source.js";
+import { answerDashboardSignIn, isDashboardSignInMessage, syncDashboardBridge } from "./account/dashboard-sign-in.js";
 import { PauseMigration } from "./engine/pause-migration.js";
 import { AgentSlots } from "./agent-slots.js";
 import { ApprovalBroker } from "./approval/broker.js";
@@ -16,6 +17,7 @@ import type { GateContext } from "./approval/gate.js";
 import { Preapprovals } from "./approval/paused.js";
 import { decidePaused } from "./approval/paused-decision.js";
 import { Cdp } from "./cdp.js";
+import { noaBrowserAwareDebugger } from "./noa-browser/host-debugger.js";
 import { agentGroupIds, agentGroupOf, applyGroupLook, tabUrl } from "./chrome-tabs.js";
 import { ControlIndicator } from "./control-indicator.js";
 import { GOOGLE_CLIENT_ID } from "./build-config.js";
@@ -23,6 +25,7 @@ import { ApiBrain } from "./engine/api-brain.js";
 import { hostedBackend } from "./engine/hosted-brain.js";
 import { needsHelper, resolveBrain } from "./engine/brain-resolver.js";
 import { registerBrowserHandlers } from "./engine/browser-caller.js";
+import { ImageGenerator } from "./engine/image-generator.js";
 import type { Brain } from "./engine/brains.js";
 import { ClaudeCodeBrain } from "./engine/claude-code-brain.js";
 import { runConfig } from "./engine/run/turn.js";
@@ -30,6 +33,7 @@ import { IdbKvDb } from "./engine/kv.js";
 import { AttachmentStore } from "./engine/attachment-store.js";
 import { LocalStore } from "./engine/local-store.js";
 import { MediaFiles } from "./engine/media-files.js";
+import { NoaFolder } from "./engine/noa-folder.js";
 import { Runner, type ResolvedBrain } from "./engine/runner.js";
 import { reviewJob } from "./engine/task-review.js";
 import { MAX_SESSIONS, SessionStore } from "./engine/sessions.js";
@@ -37,6 +41,7 @@ import { TraceStore } from "./engine/trace-store.js";
 import { MEMORY_SEARCH_LIMIT, MemoryService, type MemoryTool } from "./memory/service.js";
 import { MemoryStore } from "./memory/store.js";
 import { MemorySync } from "./memory/sync.js";
+import { BOOKMARK_PULL_MINUTES, BOOKMARK_SYNC_ALARM, BookmarkSync, type BookmarksApi } from "./bookmarks/sync.js";
 import { EPISODE_ALARM, EpisodeWriter } from "./memory/episodes.js";
 import { memorySummarizer } from "./memory/summarizers.js";
 import { ChatTitler } from "./engine/chat-titles.js";
@@ -45,7 +50,8 @@ import { UiHub } from "./engine/ui-hub.js";
 import { UiRouter, type ExtraRequest } from "./engine/ui-router.js";
 import { HelperLink } from "./helper-link.js";
 import { logger } from "./log.js";
-import { notify } from "./notify.js";
+import { notifier } from "./notify.js";
+import { noticePlayer } from "./voice/notice-voice.js";
 import { PanelCommands } from "./panel-command.js";
 import { INDICATOR_MESSAGE, isIndicatorMessage, pageIndicators } from "./page-indicator.js";
 import { ALARM_NAME, DUE_ALARM, ensureAlarm, getRunnerId, handleStorageChange, loadSettings, migrateStoredSettings, saveSettingsPatch } from "./settings-store.js";
@@ -53,6 +59,7 @@ import type { UiPush, UiRequest } from "./ui-protocol.js";
 import { VOICE_BADGES, VoiceSessions } from "./voice-session.js";
 import { TabBadges, type BadgeLook } from "./tab-badges.js";
 import { TabChats } from "./tab-chats.js";
+import { isChatTabsKey, keptChatTabs } from "./agent-tab.js";
 import { JobDismissals } from "./job-dismissals.js";
 import { Vault } from "./vault.js";
 
@@ -67,7 +74,16 @@ const DUE_ALARM_SLACK_MS = 1000;
 // Pushes to the side panel. Its state comes from the router below; nothing pushes before this module has run.
 const hub = new UiHub(() => router.getState());
 
-const cdp = new Cdp();
+// Notifications are said aloud too (Settings > Voice), unless hands-free voice is on (voiceSessions: declared below, used later).
+// In a Realtime or Deepgram voice, or as a chime, an offscreen document plays them (Settings > AI > Voice > Notifications).
+const notify = notifier({ settings: loadSettings, voiceOn: () => voiceSessions.view() !== null, play: noticePlayer() });
+// In Noa Browser the agent's tabs are driven through the browser's own DevTools connection
+// (noa-browser/host-debugger.ts); in Chrome through chrome.debugger.
+const tabDebugger = noaBrowserAwareDebugger(
+  (tabId, reason) => cdp.handleDetach({ tabId }, reason),
+  (tabId, method, params) => cdp.handleEvent({ tabId }, method, params),
+);
+const cdp = new Cdp(tabDebugger);
 const vault = new Vault();
 // Each browser tab has its own chat (tab -> conversation); the side panel shows the active tab's.
 const tabChats = new TabChats();
@@ -107,6 +123,14 @@ const slots: AgentSlots = new AgentSlots(
     preapproved: (sessionId, ask) => preapprovals.take([sessionId, runner.runningSessions.find((s: SessionInfo) => s.sessionId === sessionId)?.taskId], ask),
   },
   (sessionId, event) => void sessions.note(sessionId, event),
+  // generate_image: made by the account's hosted AI, saved in the Noa folder and copied to the account's cloud files
+  // when its plan has them (engine/image-generator.ts).
+  new ImageGenerator({
+    settings: loadSettings,
+    generate: (req, opts) => account.generateImage(req, opts),
+    keepInCloud: (png, name, folder) => account.keepInCloud(png, name, folder),
+    onCloudError: (err) => logger("images")(`cloud copy of a generated image failed: ${errorMessage(err)}`),
+  }),
 );
 const { tab: agentTab, driver, browser } = slots.get(0);
 const db = new IdbKvDb();
@@ -173,6 +197,24 @@ let signInIdentity: SignInIdentity = {
   },
 };
 
+// Noa Browser (its copy of Noa has the bookmarks permission): bookmarks sync with the signed-in account when the
+// user switched it on (bookmarks/sync.ts). The extension in Chrome has no chrome.bookmarks.
+const bookmarkSync: BookmarkSync | null = chrome.bookmarks
+  ? new BookmarkSync({
+      bookmarks: chrome.bookmarks as unknown as BookmarksApi,
+      account: async () => {
+        await account.load();
+        return account.session() ? { userId: account.session()!.user.id, api: await account.api() } : null;
+      },
+      enabled: async () => (await loadSettings()).bookmarkSync,
+      log: logger("bookmarks"),
+    })
+  : null;
+if (bookmarkSync) {
+  bookmarkSync.listen();
+  void chrome.alarms.create(BOOKMARK_SYNC_ALARM, { periodInMinutes: BOOKMARK_PULL_MINUTES });
+}
+
 // The Noa account: Google sign-in, the account's TODO list, billing and the hosted AI.
 const account = new AccountService({
   loadSettings,
@@ -183,16 +225,19 @@ const account = new AccountService({
     return signInIdentity.identity;
   },
   localTasks: localStore,
+  runnerId: getRunnerId,
   onChange: () => {
     hub.pushState();
     hub.push({ type: "tasks.changed" });
     // Signed in, out, or a new plan: memory syncs (or stops) accordingly.
     memorySync.schedule();
+    bookmarkSync?.schedule();
   },
   log: logger("account"),
 });
 void account.load().catch(() => {});
 memorySync.schedule();
+bookmarkSync?.schedule();
 const hostedBrain = new ApiBrain({
   core,
   browser,
@@ -250,10 +295,15 @@ function noteAccountTasks(listed?: AccountTaskList): void {
 async function todoSource(): Promise<TodoSource> {
   await account.load();
   if (!account.session()) return new LocalTodo(localStore);
-  return new AccountTodo(await account.api(), browserTimeZone(), (listed) => {
-    noteAccountTasks(listed);
-    if (!listed) hub.push({ type: "tasks.changed" });
-  });
+  return new AccountTodo(
+    await account.api(),
+    browserTimeZone(),
+    (listed) => {
+      noteAccountTasks(listed);
+      if (!listed) hub.push({ type: "tasks.changed" });
+    },
+    getRunnerId,
+  );
 }
 
 /** A tab's id, address and title (no tabId: the tab the user is looking at); chrome.tabs works on every page. */
@@ -401,6 +451,8 @@ const runner = new Runner({
   slots,
   tabChats,
   notify,
+  // A scheduled job starts in its own tab while the user may be anywhere: a notification, said aloud.
+  onScheduledStart: (job) => notify(`Started: ${job.title}`, "Working on it in the background. Open the side panel to watch or stop it.", `Noa started working on: ${job.title}`),
   // Its chat's tab is in front, in a window whose side panel is open: the panel shows that tab's job.
   watching: async (sessionId) => {
     const tabId = await tabChats.tabOf(sessionId);
@@ -448,6 +500,7 @@ const router = new UiRouter({
   memoryBackfill: () => episodes.backfillProgress(),
   titles,
   showAgent: (sessionId) => slots.show(sessionId ?? runner.running?.sessionId),
+  folder: new NoaFolder(),
   localStore,
   sessions,
   openConversations: () => [...claudeCodeBrain.openSessions(), ...apiBrain.openSessions()],
@@ -456,6 +509,7 @@ const router = new UiRouter({
   nextRunAt,
   pauseMigration,
   testClaude: (s) => testClaude(s),
+  testNotification: () => notify("Started: Post a tip on X", "Working on it in the background.", "Noa started working on: Post a tip on X"),
   testJev: (s, brain) => testJev(s, brain, { core, hosted: account.session() }),
   vault,
   account,
@@ -507,6 +561,7 @@ const router = new UiRouter({
     }
     return out;
   },
+  chatTabs: keptChatTabs,
 });
 sessions.subscribe({
   onEvent: (e) => {
@@ -578,12 +633,15 @@ function onStart(): void {
   void runner.recover().catch(() => {});
   void episodes.resume();
   void scheduleDueAlarm().catch(() => {});
+  // The dashboard's sign-in bridge, on the account server's pages (account/dashboard-sign-in.ts).
+  void loadSettings().then((s) => syncDashboardBridge(s.accountApiBase)).catch(() => {});
 }
 
 chrome.runtime.onInstalled.addListener(() => onStart());
 chrome.runtime.onStartup.addListener(() => onStart());
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (episodes.onAlarm(alarm.name)) return;
+  if (bookmarkSync?.onAlarm(alarm.name)) return;
   if (alarm.name === DUE_ALARM && accountNextDue !== null && accountNextDue <= Date.now()) accountNextDue = null;
   if (alarm.name === ALARM_NAME || alarm.name === DUE_ALARM) void pauseMigrationStarted.then(() => runner.runDue("alarm"));
 });
@@ -591,9 +649,15 @@ chrome.storage.onChanged.addListener((changes, area) => {
   void handleStorageChange(changes, area);
   // A run's tabs (agent-tab.ts) or the overlay setting changed.
   if ((area === "session" && Object.keys(changes).some((k) => k.startsWith("agentTab"))) || (area === "local" && changes.settings)) controlIndicator.refresh();
+  // A chat's turn ended and its opened tabs were kept (or the chat is over): the panel there shows its job (or not).
+  if (area === "session" && Object.keys(changes).some(isChatTabsKey)) hub.pushState();
   if (area === "local" && changes.settings) {
-    // The account server URL may have changed: the session belongs to the old one.
+    // Bookmark sync may have been switched on or off.
+    bookmarkSync?.schedule(0);
+    // The account server URL may have changed: the session belongs to the old one, and the dashboard bridge moves.
     void account.load().then(() => hub.pushState(), () => hub.pushState());
+    const [was, now] = [changes.settings.oldValue, changes.settings.newValue].map((s) => (s as Partial<ExtensionSettings> | undefined)?.accountApiBase);
+    if (was !== now) void loadSettings().then((s) => syncDashboardBridge(s.accountApiBase)).catch(() => {});
   }
 });
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => void runner.onTabUpdated(tabId, changeInfo));
@@ -625,11 +689,21 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 // Before anything is awaited: sidePanel.open() needs the key press as its user gesture.
 chrome.commands?.onCommand.addListener((command, tab) => void panelCommands.onCommand(command, tab));
-chrome.debugger.onDetach.addListener((source, reason) => cdp.handleDetach(source, String(reason)));
-// The agent's tabs' JavaScript dialogs (alert, confirm, prompt, "Leave site?"): see cdp.ts.
+chrome.debugger.onDetach.addListener((source, reason) => {
+  if (source.tabId !== undefined) tabDebugger.forget(source.tabId);
+  cdp.handleDetach(source, String(reason));
+});
+// The agent's tabs' JavaScript dialogs (alert, confirm, prompt, "Leave site?"): see cdp.ts. In Noa Browser the
+// tab bridge brings them instead (noaBrowserAwareDebugger's onEvent).
 chrome.debugger.onEvent.addListener((source, method, params) => cdp.handleEvent(source, method, params));
 chrome.runtime.onMessage.addListener((msg: UiRequest | ExtraRequest, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return false;
+  // The dashboard's bridge asks for a sign-in code (account/dashboard-sign-in.ts).
+  if (isDashboardSignInMessage(msg)) {
+    const deps = { selfId: chrome.runtime.id, code: (origin: string) => account.dashboardSignInCode(origin), log: logger("account") };
+    void answerDashboardSignIn(sender, deps).then(sendResponse);
+    return true;
+  }
   // The overlay's pill on a page the agent controls (page-indicator.ts).
   if (isIndicatorMessage(msg as unknown)) {
     const tabId = sender.tab?.id;
@@ -690,16 +764,19 @@ onStart();
   media: mediaFiles,
   vault,
   cdp,
+  tabDebugger,
   slots,
   agentTab,
   tabChats,
   memory,
   memorySync,
+  bookmarkSync,
   episodes,
   titles,
   scheduleDueAlarm,
   panelCommands,
   voiceSessions,
+  notify,
   controlIndicator,
   pageIndicators,
   /** Runs use this brain instead of the real ones (null: back to the real ones). */

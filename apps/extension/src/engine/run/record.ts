@@ -78,6 +78,7 @@ export class ResultRecorder {
     if (result.suggestion) end.suggestion = result.suggestion;
     if (result.spoken) end.spoken = result.spoken;
     if (result.draft) end.draft = result.draft;
+    if (result.byAgent) end.byAgent = true;
     this.deps.sessions.append(sessionId, end);
     const patch: Partial<SessionInfo> = { endedAt: this.deps.now().toISOString(), outcome: result.outcome };
     if (result.summary) patch.summary = result.summary;

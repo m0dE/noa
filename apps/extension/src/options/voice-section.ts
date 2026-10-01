@@ -1,20 +1,25 @@
 /**
- * Settings > AI > Voice: which engine hands-free voice uses (Realtime or
- * Standard, each with its cost a minute from the account server), and the
- * selected engine's voice and speed with a Test button: Realtime's are
- * OpenAI's voices (a short relay session says the sample), Standard's the
- * browser's. Sounds: the soft sound when the microphone turns on and off.
+ * Settings > AI > Voice: which engine hands-free voice uses (OpenAI Realtime,
+ * Realtime mini, Deepgram or the browser voice, each with its cost a minute
+ * from the account server), and the selected engine's voice and speed with a
+ * Test button: Realtime's are OpenAI's voices (a short relay session says the
+ * sample), Deepgram's are Aura's (the account server says it), the browser
+ * voice is the browser's. Sounds: the soft sound when the microphone turns on
+ * and off. Notifications: how Noa's notifications are heard (notify.ts), and
+ * in which of that engine's voices, just for them.
  * Saves by itself, like the rest of the page; voice-view.ts decides what
  * shows.
  */
-import { DEFAULT_REALTIME_VOICE, errorMessage, type ExtensionSettings, type VoiceEngine, type VoiceEngineId } from "@noa/shared";
+import { chosenLanguage, DEFAULT_REALTIME_VOICE, errorMessage, isRealtimeEngine, LanguageSetting, NotificationVoice, type ExtensionSettings, type VoiceEngine, type VoiceEngineId } from "@noa/shared";
 import { VOICE_COMMAND, readShortcut } from "../shortcut.js";
 import { uiRequest, type UiState } from "../ui-protocol.js";
 import { $, find, flash, h } from "../ui/dom.js";
 import { sayRealtimeSample } from "../voice/realtime-sample.js";
 import { Speaker, speechVoices } from "../voice/speaker.js";
 import { VoiceError } from "../voice/transcribe.js";
-import { sampleFailureText, speedText, voicePatch, voicePicker, voiceView } from "./voice-view.js";
+import { DeepgramSpeaker } from "../voice/deepgram-speaker.js";
+import { localizeLine } from "../voice/phrases.js";
+import { languageHint, languageOptions, notificationOptions, notificationVoicePicker, sampleFailureText, speedText, voicePatch, voicePicker, voiceView } from "./voice-view.js";
 
 /** What Test voice says. */
 export const SPEECH_SAMPLE = "Opening Gmail. You have two new emails; Jordan needs a reply by Friday.";
@@ -30,10 +35,21 @@ export function initVoiceSection(opts: { onState(state: UiState): void }): Voice
   const testBtn = $<HTMLButtonElement>("speech-test");
   const testMsg = $("speech-test-msg");
   const sounds = $<HTMLInputElement>("voice-sounds");
+  const noteVoice = $<HTMLSelectElement>("notification-voice");
+  const noteSpeakerRow = $("notification-speaker-row");
+  const noteSpeaker = $<HTMLSelectElement>("notification-speaker");
+  const noteTest = $<HTMLButtonElement>("notification-test");
+  const noteMsg = $("notification-test-msg");
+  const languageSelect = $<HTMLSelectElement>("voice-language");
+  languageSelect.replaceChildren(...languageOptions().map((o) => h("option", { value: o.value }, o.label)));
   let state: UiState | null = null;
   let engines: VoiceEngine[] | null | "loading" = "loading";
   /** What the voice select was last filled with (refilled only when that changes). */
   let filled = "";
+  /** What the notifications select was last filled with. */
+  let notesFilled = "";
+  /** What the notification voice select was last filled with. */
+  let speakerFilled = "";
 
   const settings = (): ExtensionSettings | null => state?.settings ?? null;
 
@@ -84,6 +100,26 @@ export function initVoiceSection(opts: { onState(state: UiState): void }): Voice
     note.hidden = !v.note;
     note.textContent = v.note ?? "";
     sounds.checked = s.voiceSounds;
+    const notes = notificationOptions({ settings: s, engines });
+    const notesKey = JSON.stringify(notes);
+    if (notesKey !== notesFilled) {
+      notesFilled = notesKey;
+      noteVoice.replaceChildren(...notes.map((o) => h("option", { value: o.value, disabled: o.disabled }, o.label)));
+    }
+    noteVoice.value = s.notificationVoice;
+    languageSelect.value = s.language;
+    $("voice-language-hint").textContent = languageHint(s);
+    const sp = notificationVoicePicker({ settings: s, browserVoices: speechVoices() });
+    noteSpeakerRow.hidden = !sp;
+    if (sp) {
+      $("notification-speaker-hint").textContent = `${sp.title}s, just for notifications; hands-free voice keeps its own.`;
+      const speakerKey = JSON.stringify(sp.options);
+      if (speakerKey !== speakerFilled) {
+        speakerFilled = speakerKey;
+        noteSpeaker.replaceChildren(...sp.options.map((o) => h("option", { value: o.value }, o.label)));
+      }
+      noteSpeaker.value = sp.value;
+    }
     drawPicker(s);
   }
 
@@ -96,23 +132,72 @@ export function initVoiceSection(opts: { onState(state: UiState): void }): Voice
   rate.addEventListener("input", () => (rateValue.textContent = speedText(Number(rate.value))));
   rate.addEventListener("change", () => void save(voicePatch(engine(), { speed: Number(rate.value) })));
   sounds.addEventListener("change", () => void save({ voiceSounds: sounds.checked }));
+  languageSelect.addEventListener("change", () => {
+    const v = LanguageSetting.safeParse(languageSelect.value);
+    if (v.success) void save({ language: v.data });
+  });
+  /** The language picked (null: Auto) and Test voice's sample in it. */
+  const language = () => chosenLanguage(settings()?.language);
+  const sample = () => localizeLine(SPEECH_SAMPLE, language()?.code);
+  noteVoice.addEventListener("change", () => {
+    const v = NotificationVoice.safeParse(noteVoice.value);
+    if (v.success) void save({ notificationVoice: v.data });
+  });
+  noteSpeaker.addEventListener("change", () => void save({ notificationSpeaker: noteSpeaker.value }));
+  noteTest.addEventListener("click", () => {
+    noteTest.disabled = true;
+    flash(noteMsg, settings()?.notificationVoice === "off" ? "Notifications are silent." : "Playing…");
+    void uiRequest({ type: "notify.test" })
+      .then(
+        () => flash(noteMsg, ""),
+        (err: unknown) => flash(noteMsg, errorMessage(err), "bad"),
+      )
+      .finally(() => (noteTest.disabled = false));
+  });
 
-  const speaker = new Speaker(() => ({ voice: voiceSelect.value, rate: Number(rate.value) || 1 }));
+  const speaker = new Speaker(() => {
+    const lang = language();
+    return { voice: voiceSelect.value, rate: Number(rate.value) || 1, ...(lang ? { lang: lang.tag } : {}) };
+  });
   async function testRealtime(): Promise<void> {
     const s = settings();
+    const mini = engine() === "realtime-mini";
     await sayRealtimeSample({
       ticket: async () => {
-        const r = await uiRequest({ type: "voice.realtime" });
+        const r = await uiRequest({ type: "voice.realtime", ...(mini ? { tier: "mini" as const } : {}) });
         if ("error" in r) throw new VoiceError(r.error);
         return r;
       },
       voice: s?.realtimeVoice ?? DEFAULT_REALTIME_VOICE,
       speed: Number(rate.value) || 1,
-      text: SPEECH_SAMPLE,
+      text: sample(),
+      ...(language() ? { language: language()!.name } : {}),
     });
   }
+  async function testDeepgram(): Promise<void> {
+    let failed: VoiceError | null = null;
+    let started = false;
+    await new DeepgramSpeaker({
+      settings: () => ({ voice: settings()?.deepgramVoice ?? "thalia", speed: Number(rate.value) || 1 }),
+      fetch: (text, voice) => uiRequest({ type: "voice.speak", text, voice }),
+      onError: (err) => (failed = err),
+    }).speak(SPEECH_SAMPLE, { onStart: () => (started = true) });
+    if (failed) throw failed;
+    if (!started) throw new Error("The Deepgram voice could not play.");
+  }
   testBtn.addEventListener("click", () => {
-    if (engine() === "realtime") {
+    if (engine() === "deepgram") {
+      flash(testMsg, "Loading…");
+      testBtn.disabled = true;
+      void testDeepgram()
+        .then(
+          () => flash(testMsg, ""),
+          (err: unknown) => flash(testMsg, errorMessage(err), "bad"),
+        )
+        .finally(() => (testBtn.disabled = false));
+      return;
+    }
+    if (isRealtimeEngine(engine())) {
       flash(testMsg, "Connecting…");
       testBtn.disabled = true;
       void testRealtime()
@@ -125,7 +210,7 @@ export function initVoiceSection(opts: { onState(state: UiState): void }): Voice
     }
     if (typeof speechSynthesis === "undefined") return flash(testMsg, "This browser has no built-in speech.", "bad");
     flash(testMsg, "Speaking…");
-    void speaker.speak(SPEECH_SAMPLE).then(() => flash(testMsg, ""));
+    void speaker.speak(sample()).then(() => flash(testMsg, ""));
   });
   // Chrome loads its voices a moment after the page.
   globalThis.speechSynthesis?.addEventListener?.("voiceschanged", draw);

@@ -83,6 +83,8 @@ interface Spare {
   /** The settings it was started with. */
   model: string | null;
   jev: boolean;
+  /** generate_image offered (RunConfig.imageGeneration). */
+  images: boolean;
   thinking: boolean;
   warm: WarmClaude;
   timer: ReturnType<typeof setTimeout>;
@@ -209,9 +211,10 @@ export class TaskRunner {
     if (!brain.warm) return false;
     const model = config.model?.trim() || null;
     const jev = this.jevKey(config) !== null;
+    const images = config.imageGeneration !== false;
     const thinking = reasoningOf(config).level === "thorough";
     const current = this.spare;
-    if (current?.warm.ready && current.model === model && current.jev === jev && current.thinking === thinking) {
+    if (current?.warm.ready && current.model === model && current.jev === jev && current.images === images && current.thinking === thinking) {
       current.timer.refresh();
       return true;
     }
@@ -219,22 +222,22 @@ export class TaskRunner {
     const toolTaskId = `warm-${randomUUID()}`;
     const runDir = runDirFor(this.deps.runsDir, toolTaskId);
     mkdirSync(runDir, { recursive: true });
-    const files = this.sessionFiles(runDir, toolTaskId, jev, brain.persistent === true);
+    const files = this.sessionFiles(runDir, toolTaskId, jev, brain.persistent === true, images);
     const warm = brain.warm({ ...files, ...(model ? { model } : {}), thinking });
     const timer = setTimeout(() => this.dropSpare(), this.deps.warmMs ?? RUNNER_DEFAULTS.warmMs);
     (timer as { unref?: () => void }).unref?.();
-    this.spare = { toolTaskId, runDir, model, jev, thinking, warm, timer };
+    this.spare = { toolTaskId, runDir, model, jev, images, thinking, warm, timer };
     return true;
   }
 
-  /** The spare, for a new session with this Jev setting (its MCP config and prompt depend on it); else it is stopped. */
-  private takeSpare(jev: boolean): Spare | null {
+  /** The spare, for a new session with these Jev and image settings (its MCP config and prompt depend on them); else it is stopped. */
+  private takeSpare(jev: boolean, images: boolean): Spare | null {
     const spare = this.spare;
     if (!spare) return null;
     this.spare = null;
     clearTimeout(spare.timer);
     // The brain takes the process only when started with the session's model and thinking too.
-    if (spare.warm.ready && spare.jev === jev) return spare;
+    if (spare.warm.ready && spare.jev === jev && spare.images === images) return spare;
     spare.warm.stop();
     return null;
   }
@@ -261,9 +264,10 @@ export class TaskRunner {
     toolTaskId: string,
     jev: boolean,
     followUps: boolean,
+    images: boolean,
   ): { mcpConfigPath: string; readDir: string; allowedTools: string[]; systemPrompt: string } {
     // act replaces click and type (steps can still name an exact element index).
-    const allowed = new Set<ToolName>(toolsFor());
+    const allowed = new Set<ToolName>(toolsFor({ images }));
     const toolNames = TOOL_NAMES.filter((n) => allowed.has(n));
     const mcpConfigPath = join(runDir, "mcp-config.json");
     const mcpConfig = buildMcpConfig({
@@ -294,7 +298,8 @@ export class TaskRunner {
     const jevKey = this.jevKey(config);
     const jev = jevKey ? this.deps.makeJev(jevKey) : null;
     // An agent started ahead (prewarm) comes with its run folder; its tool calls carry its own task id.
-    const spare = this.takeSpare(jev !== null);
+    const images = config.imageGeneration !== false;
+    const spare = this.takeSpare(jev !== null, images);
     const runDir = spare?.runDir ?? runDirFor(this.deps.runsDir, sessionId);
     const toolTaskId = spare?.toolTaskId ?? sessionId;
     if (spare) this.toolTaskIds.set(toolTaskId, sessionId);
@@ -302,7 +307,7 @@ export class TaskRunner {
     const secrets = new SecretRedactor();
     const log = new RunLog(join(runDir, "log.jsonl"), this.deps.live ?? null, sessionId, secrets);
     // act replaces click and type (steps can still name an exact element index).
-    const allowed = new Set<ToolName>(toolsFor());
+    const allowed = new Set<ToolName>(toolsFor({ images }));
     const brain = this.deps.makeBrain();
 
     const s = new TaskSession({
@@ -347,7 +352,7 @@ export class TaskRunner {
     });
 
     try {
-      const { mcpConfigPath, readDir, allowedTools, systemPrompt } = this.sessionFiles(runDir, toolTaskId, jev !== null, s.persistent);
+      const { mcpConfigPath, readDir, allowedTools, systemPrompt } = this.sessionFiles(runDir, toolTaskId, jev !== null, s.persistent, images);
       // The run folder, the MCP config and the prompts, before the agent starts.
       s.emit({ type: "trace", trace: { t: setup.t, ms: setup.elapsed(), cat: "brain", name: "helper.setup", src: "helper", data: { jev: jev !== null, media: mediaPaths.length, prewarmed: spare !== null } } });
       s.brainDone = brain

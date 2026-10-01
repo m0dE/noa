@@ -33,6 +33,7 @@ import {
   errorMessage,
   ForgetArgs,
   isEarlierRuns,
+  isMemoryUndone,
   isTaskRun,
   MAX_MEMORY_NOTE_CHARS,
   MAX_RUN_OUTPUT_CHARS,
@@ -48,6 +49,7 @@ import {
   secretProblem,
   seriesTaskKey,
   TASK_RUN_SUBJECT,
+  type AgentEvent,
   type ExtensionSettings,
   type MemoryEntry,
   type MemoryKind,
@@ -98,7 +100,7 @@ export interface MemoryToolResult {
 export type MemoryRequest = Extract<
   UiRequest,
   {
-    type: "memory.list" | "memory.edit" | "memory.delete" | "memory.pin" | "memory.deleteTask" | "memory.taskRuns" | "memory.clear" | "memory.undo" | "memory.syncChoice" | "chat.setMemory";
+    type: "memory.list" | "memory.edit" | "memory.delete" | "memory.pin" | "memory.deleteTask" | "memory.taskRuns" | "memory.clear" | "memory.undo" | "memory.redo" | "memory.syncChoice" | "chat.setMemory";
   }
 >;
 export const MEMORY_REQUESTS: readonly MemoryRequest["type"][] = [
@@ -110,6 +112,7 @@ export const MEMORY_REQUESTS: readonly MemoryRequest["type"][] = [
   "memory.deleteTask",
   "memory.clear",
   "memory.undo",
+  "memory.redo",
   "memory.syncChoice",
   "chat.setMemory",
 ];
@@ -340,6 +343,8 @@ export class MemoryService {
       }
       case "memory.undo":
         return { ok: await this.undo(requireText(msg.sessionId, "sessionId"), requireText(msg.changeId, "changeId")) };
+      case "memory.redo":
+        return { ok: await this.redo(requireText(msg.sessionId, "sessionId"), requireText(msg.changeId, "changeId")) };
       case "chat.setMemory":
         return { session: await this.setChatMemory(requireText(msg.sessionId, "sessionId"), msg.on === true) };
     }
@@ -347,15 +352,32 @@ export class MemoryService {
 
   /** Undo on a "Remembered" note: the entry goes back to how it was before that change. Undoing twice is harmless. */
   async undo(sessionId: string, changeId: string): Promise<boolean> {
-    const events = await this.deps.sessions.eventsOf(sessionId);
-    const change = events.find((e) => e.type === "memory" && e.changeId === changeId);
-    if (change?.type !== "memory") throw new Error("That memory change was not made in this chat");
-    if (events.some((e) => e.type === "memory_undone" && e.changeId === changeId)) return true;
+    const { change, undone } = await this.changeOf(sessionId, changeId);
+    if (undone) return true;
     const id = (change.after ?? change.before)!.id;
     await this.deps.store.restore(id, change.before);
     if (change.replaced) await this.deps.store.restore(change.replaced.id, change.replaced);
     await this.deps.sessions.note(sessionId, { type: "memory_undone", changeId });
     return true;
+  }
+
+  /** Redo on an undone note: the entry is as that change left it again (an entry it replaced goes again). Redoing twice is harmless. */
+  async redo(sessionId: string, changeId: string): Promise<boolean> {
+    const { change, undone } = await this.changeOf(sessionId, changeId);
+    if (!undone) return true;
+    const id = (change.after ?? change.before)!.id;
+    await this.deps.store.restore(id, change.after);
+    if (change.replaced) await this.deps.store.restore(change.replaced.id, null);
+    await this.deps.sessions.note(sessionId, { type: "memory_redone", changeId });
+    return true;
+  }
+
+  /** A memory change made in this chat, and whether it is undone now (its latest undo is not followed by a redo). */
+  private async changeOf(sessionId: string, changeId: string): Promise<{ change: Extract<AgentEvent, { type: "memory" }>; undone: boolean }> {
+    const events = await this.deps.sessions.eventsOf(sessionId);
+    const change = events.find((e) => e.type === "memory" && e.changeId === changeId);
+    if (change?.type !== "memory") throw new Error("That memory change was not made in this chat");
+    return { change, undone: isMemoryUndone(events, changeId) };
   }
 
   /** Memory on or off for one conversation (from its next turn; its tools at once). */

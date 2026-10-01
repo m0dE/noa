@@ -23,6 +23,8 @@ export interface ScheduledCardActions {
 export interface MemoryNoteActions {
   /** Undo: the entry goes back to how it was before the change (the note then says so). */
   undo(changeId: string): Promise<void>;
+  /** Redo on an undone note: the change is made again (the note then shows it with Undo). */
+  redo(changeId: string): Promise<void>;
 }
 
 /**
@@ -123,38 +125,35 @@ export function renderEvent(v: EventView, onContinue?: () => void, scheduled?: S
 
 /**
  * A change to the agent's memory: "Remembered: <subject> · <text>" on one quiet line, with Undo ("replaced “<old>”"
- * after the subject when it replaced another entry). Undone, it says so and keeps no button; a failed undo says why
- * under the line and keeps Undo.
+ * after the subject when it replaced another entry). Undone, it says so, with Redo; a failed undo or redo says why
+ * under the line and keeps its button.
  */
 export function renderMemoryNote(v: MemoryNoteView, actions?: MemoryNoteActions): HTMLElement {
-  const note = h(
-    "div.ev-memory",
-    { class: v.undone ? "undone" : null, "data-change-id": v.changeId },
-    h(
-      "div.mem-line",
-      { title: v.title },
-      svgIcon(13, MEMORY_ICON),
-      h("span.mem-label", null, v.undone ? "Undone:" : `${v.label}:`),
-      h("span.mem-subject", null, v.subject),
-      v.replaced ? h("span.mem-replaced", null, v.replaced.text) : null,
-      h("span.mem-text", null, `· ${v.text}`),
-    ),
+  const line = h(
+    "div.mem-line",
+    { title: v.title },
+    svgIcon(13, MEMORY_ICON),
+    h("span.mem-label", null, v.undone ? "Undone:" : `${v.label}:`),
+    h("span.mem-subject", null, v.subject),
+    v.replaced ? h("span.mem-replaced", null, v.replaced.text) : null,
+    h("span.mem-text", null, `· ${v.text}`),
   );
-  if (v.undone) {
-    note.append(h("div.mem-note", null, undoneText(v)));
-    return note;
-  }
+  const note = h("div.ev-memory", { class: v.undone ? "undone" : null, "data-change-id": v.changeId }, line);
+  if (v.undone) note.append(h("div.mem-note", null, undoneText(v)));
   if (!actions) return note;
   const problem = h("div.mem-note.bad", { hidden: true, role: "alert" });
-  const undo = h("button.small.ghost.mem-undo", { type: "button", title: v.change === "forgot" ? "Keep this memory after all" : "Undo this change to memory" }, "Undo");
-  undo.addEventListener("click", () => {
+  const [word, title, act] = v.undone
+    ? (["Redo", "Make this change to memory again", actions.redo] as const)
+    : (["Undo", v.change === "forgot" ? "Keep this memory after all" : "Undo this change to memory", actions.undo] as const);
+  const button = h(`button.small.ghost.mem-${word.toLowerCase()}`, { type: "button", title }, word);
+  button.addEventListener("click", () => {
     problem.hidden = true;
-    void busy(undo, () => actions.undo(v.changeId), (message) => {
-      problem.textContent = `Couldn't undo: ${message}`;
+    void busy(button, () => act(v.changeId), (message) => {
+      problem.textContent = `Couldn't ${word.toLowerCase()}: ${message}`;
       problem.hidden = false;
     });
   });
-  note.firstElementChild!.append(undo);
+  line.append(button);
   note.append(problem);
   return note;
 }

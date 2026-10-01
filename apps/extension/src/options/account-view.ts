@@ -1,6 +1,6 @@
-/** Pure helpers for the options page's Account and API keys tabs. */
-import { formatCents, formatDate, PLAN_CATALOG, PLAN_FEATURE_TEXT, planIncludesText, planName, plansWithText, planStatusText } from "@noa/shared";
-import { apiKeysAllowed, isPaidActive, type PlanInfo } from "../account/types.js";
+/** Pure helpers for the options page's Account tab. */
+import { formatCents, formatDate, PLAN_CATALOG, planIncludesText, planName, planStatusText } from "@noa/shared";
+import { isPaidActive, type PlanInfo } from "../account/types.js";
 import type { AccountView } from "../ui-protocol.js";
 
 export interface AccountSummary {
@@ -15,8 +15,6 @@ export interface AccountSummary {
   /** "$4.40 subscription (expires Oct 24) + $8.00 top-up" */
   creditDetail: string;
   paid: boolean;
-  /** The plan includes API keys (the catalog's apiKeys) and is in good standing. */
-  keysAllowed: boolean;
   /** The one billing button, which opens the dashboard's Billing page: "Choose a plan" (Free), "Manage plan & billing" (paid), "Top up or change plan" (paid, out of credit). */
   billingLabel: string;
   /** Stripe is set up on the server; false: the billing button is replaced by a plain note. undefined: not known yet. */
@@ -59,15 +57,9 @@ export function accountSummary(a: AccountView): AccountSummary {
     credit: c ? formatCents(c.totalCents) : "",
     creditDetail: parts.join(" + "),
     paid,
-    keysAllowed: apiKeysAllowed(plan),
     // On Free a plan is the way to credit (a top-up is on the same page).
     billingLabel: !paid ? "Choose a plan" : a.outOfCredit ? "Top up or change plan" : "Manage plan & billing",
     billing: a.stripeConfigured === true ? "ready" : a.stripeConfigured === false ? "not-set-up" : "unknown",
     outOfCredit: !!a.outOfCredit,
   };
-}
-
-/** The API keys tab on a plan without them, from the catalog: "API access to add TODO tasks comes with a paid plan." */
-export function keysLockedText(): string {
-  return `${PLAN_FEATURE_TEXT.apiKeys.has} comes with ${plansWithText("apiKeys")}.`;
 }

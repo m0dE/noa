@@ -98,6 +98,9 @@ describe("settings", () => {
     expect(currentAccountApiBase("")).toBe("");
   });
   it("fixes an inverted delay range", () => {
+    expect(parseSettings({ speakNotifications: false }).notificationVoice).toBe("off");
+    expect(parseSettings({ speakNotifications: true }).notificationVoice).toBe("same");
+    expect(parseSettings({ speakNotifications: false, notificationVoice: "chime" }).notificationVoice).toBe("chime");
     const s = parseSettings({ delayMinSec: 100, delayMaxSec: 10 });
     expect(s.delayMaxSec).toBe(100);
   });

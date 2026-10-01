@@ -435,6 +435,21 @@ async function removeAll(tabIds: number[]): Promise<number[]> {
 
 const chatTabsKey = (owner: string) => `${CHAT_TABS_KEY}.${owner}`;
 
+/** True for a storage key of a chat's kept tabs (its change changes keptChatTabs). */
+export const isChatTabsKey = (key: string): boolean => key.startsWith(`${CHAT_TABS_KEY}.`);
+
+/** The tabs each chat's agent opened and keeps between its turns (session id -> Chrome tab ids). */
+export async function keptChatTabs(): Promise<Record<string, number[]>> {
+  const all = await chrome.storage.session.get(null);
+  const out: Record<string, number[]> = {};
+  for (const [key, value] of Object.entries(all)) {
+    if (!isChatTabsKey(key)) continue;
+    const tabs = ((value as ChatTabs | undefined)?.tabs ?? []).map((t) => t.tabId);
+    if (tabs.length) out[key.slice(CHAT_TABS_KEY.length + 1)] = tabs;
+  }
+  return out;
+}
+
 /** Adds tabs to the ones kept for a chat between its turns. */
 async function parkTabs(owner: string, tabs: RunTab[], next: number): Promise<void> {
   if (!tabs.length) return;

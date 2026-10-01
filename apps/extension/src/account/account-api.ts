@@ -1,6 +1,16 @@
 /** The signed-in account's API client: sign-in, profile, billing, keys, tasks and media, with the session token. */
 import {
   AuthResponse,
+  BOOKMARKS_PATH,
+  BOOKMARKS_SYNC_PATH,
+  BookmarkSyncResponse,
+  CloudFile,
+  type CloudFolder,
+  FILES_PATH,
+  type BookmarkSyncInput,
+  GenerateImageResponse,
+  IMAGES_PATH,
+  type GenerateImageRequest,
   MeBillingResponse,
   MEMORY_PATH,
   MEMORY_SEARCH_PATH,
@@ -10,9 +20,12 @@ import {
   type MemorySearchInput,
   type MemorySyncInput,
   SESSION_HEADER,
+  SignInCodeResponse,
   Task,
   TaskListResponse,
   TRANSCRIBE_CONTENT_TYPE,
+  SPEAK_PATH,
+  type SpeakRequest,
   TRANSCRIBE_PATH,
   TRANSCRIBE_QUERY,
   TranscribeResponse,
@@ -23,7 +36,7 @@ import {
   type UpdateTaskInput,
 } from "@noa/shared";
 import { HttpClient } from "../http-client.js";
-import { Me, type ApiKeyInfo, type CreatedApiKey, type KeyRole } from "./types.js";
+import { Me } from "./types.js";
 
 export interface AccountApiOptions {
   apiBase: string;
@@ -68,6 +81,11 @@ export class AccountApi {
     return this.http.json(AuthResponse, "POST", "/v1/auth/google", { idToken }, { auth: false });
   }
 
+  /** POST /v1/auth/code: a one-time code that signs the dashboard in to this account (dashboard-sign-in.ts). */
+  signInCode(): Promise<SignInCodeResponse> {
+    return this.http.json(SignInCodeResponse, "POST", "/v1/auth/code");
+  }
+
   async logout(): Promise<void> {
     await this.http.request("POST", "/v1/auth/logout");
   }
@@ -78,18 +96,6 @@ export class AccountApi {
 
   billing(): Promise<MeBillingResponse> {
     return this.http.json(MeBillingResponse, "GET", "/v1/me/billing");
-  }
-
-  async listKeys(): Promise<ApiKeyInfo[]> {
-    return ((await (await this.http.request("GET", "/v1/me/keys")).json()) as { keys: ApiKeyInfo[] }).keys;
-  }
-
-  async createKey(name: string, role: KeyRole): Promise<CreatedApiKey> {
-    return (await (await this.http.request("POST", "/v1/me/keys", { name, role })).json()) as CreatedApiKey;
-  }
-
-  async revokeKey(id: string): Promise<void> {
-    await this.http.request("DELETE", `/v1/me/keys/${encodeURIComponent(id)}`);
   }
 
   /**
@@ -158,6 +164,14 @@ export class AccountApi {
     return this.http.uploadMedia(blob, filename);
   }
 
+  /** POST /v1/files: keeps a file in the account's cloud files (403 plan_required without the TODO list, 413 when full). */
+  uploadFile(blob: Blob, filename: string, folder: CloudFolder = ""): Promise<CloudFile> {
+    const form = new FormData();
+    form.append("file", blob, filename);
+    form.append("folder", folder);
+    return this.http.json(CloudFile, "POST", FILES_PATH, form);
+  }
+
   /** GET /v1/billing/voice-engines (public): the hands-free voice engines and what a minute of each costs. */
   /** POST /v1/memory/sync: this browser's memory changes, and the account's since `since` (403 plan_required without the TODO list). */
   memorySync(input: MemorySyncInput): Promise<MemorySyncResponse> {
@@ -169,6 +183,16 @@ export class AccountApi {
     return this.http.json(MemorySearchResponse, "POST", MEMORY_SEARCH_PATH, input);
   }
 
+  /** POST /v1/bookmarks/sync: this computer's bookmark changes, and the account's since `since` (Noa Browser). */
+  bookmarkSync(input: BookmarkSyncInput): Promise<BookmarkSyncResponse> {
+    return this.http.json(BookmarkSyncResponse, "POST", BOOKMARKS_SYNC_PATH, input);
+  }
+
+  /** GET /v1/bookmarks?since=rev: the account's bookmark changes after `since`. */
+  bookmarkChanges(since: number): Promise<BookmarkSyncResponse> {
+    return this.http.json(BookmarkSyncResponse, "GET", `${BOOKMARKS_PATH}?since=${since}`);
+  }
+
   /** DELETE /v1/memory: forget everything the account keeps (any plan). */
   async forgetMemory(): Promise<void> {
     await this.http.request("DELETE", MEMORY_PATH);
@@ -176,6 +200,23 @@ export class AccountApi {
 
   voiceEngines(): Promise<VoiceEnginesResponse> {
     return this.http.json(VoiceEnginesResponse, "GET", VOICE_ENGINES_PATH, undefined, { auth: false });
+  }
+
+  /** POST /v1/ai/speak: `text` said in a Deepgram voice, as MP3 bytes (paid plans). */
+  async speak(req: SpeakRequest, opts: { sessionId?: string; signal?: AbortSignal } = {}): Promise<Uint8Array> {
+    const res = await this.http.request("POST", SPEAK_PATH, req, {
+      ...(opts.sessionId ? { headers: { [SESSION_HEADER]: opts.sessionId } } : {}),
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
+    return new Uint8Array(await res.arrayBuffer());
+  }
+
+  /** POST /v1/ai/images: a picture from a description (the generate_image tool; paid from usage credit). */
+  generateImage(req: GenerateImageRequest, opts: { sessionId?: string; signal?: AbortSignal } = {}): Promise<GenerateImageResponse> {
+    return this.http.json(GenerateImageResponse, "POST", IMAGES_PATH, req, {
+      ...(opts.sessionId ? { headers: { [SESSION_HEADER]: opts.sessionId } } : {}),
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
   }
 
   /** POST /v1/ai/transcribe: a WAV clip to text (voice input; paid plans). */

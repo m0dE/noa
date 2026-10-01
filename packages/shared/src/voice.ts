@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { LanguageInfo } from "./language.js";
 
 /**
  * Voice input: the one place for its contract, limits and tuning. The API
@@ -114,7 +115,15 @@ export const REALTIME_QUERY = {
    * `session_replaced` event) and this one takes its place, instead of the 409 session_open.
    */
   takeover: "takeover",
+  /**
+   * REALTIME_TIER_MINI ("mini"): the session runs on the server's smaller Realtime model (the
+   * realtime-mini voice engine, about a third of the price). Absent: the full model.
+   */
+  tier: "tier",
 } as const;
+
+/** REALTIME_QUERY.tier of the smaller model. */
+export const REALTIME_TIER_MINI = "mini";
 
 /** Limits of one realtime session (the server enforces them). */
 export const REALTIME_LIMITS = {
@@ -196,13 +205,18 @@ export const REALTIME_UNAVAILABLE_CODE = "realtime_unavailable";
 // ---- Voice engines (GET /v1/billing/voice-engines, public) -------------------------------------
 
 export const VOICE_ENGINES_PATH = "/v1/billing/voice-engines";
-export const VoiceEngineId = z.enum(["realtime", "standard"]);
+/**
+ * realtime: OpenAI Realtime (the full model) listens and talks. realtime-mini: the same on the
+ * smaller model. deepgram: Deepgram Nova-3 turns speech into text, Deepgram Aura says the replies
+ * (SPEAK_PATH). standard: Nova-3 turns speech into text, the browser's own voice says the replies.
+ */
+export const VoiceEngineId = z.enum(["realtime", "realtime-mini", "deepgram", "standard"]);
 export type VoiceEngineId = z.infer<typeof VoiceEngineId>;
 
 export const VoiceEngine = z.object({
   id: VoiceEngineId,
   name: z.string(),
-  /** The provider model (realtime: the OpenAI model; standard: the speech-to-text model). */
+  /** The provider model (realtime*: the OpenAI model; deepgram: speech-to-text + text-to-speech; standard: the speech-to-text model). */
   model: z.string(),
   /** Usage credit per minute of conversation, in (fractional) cents, under `assumption`. */
   approxCentsPerMinute: z.number(),
@@ -235,6 +249,58 @@ export const RECOMMENDED_REALTIME_VOICES: ReadonlySet<RealtimeVoiceId> = new Set
 
 /** A voice's name as users read it ("marin" -> "Marin"). */
 export const realtimeVoiceName = (id: RealtimeVoiceId): string => id.charAt(0).toUpperCase() + id.slice(1);
+
+/** The engines where OpenAI Realtime listens and talks (one relay session). */
+export const isRealtimeEngine = (id: VoiceEngineId): id is "realtime" | "realtime-mini" => id === "realtime" || id === "realtime-mini";
+
+// ---- Text-to-speech (POST SPEAK_PATH): Deepgram Aura on Workers AI --------------------------------
+
+/** Says `text` in a Deepgram voice: JSON SpeakRequest in, audio/mpeg out (header CHARGED_CENTS_HEADER). */
+export const SPEAK_PATH = "/v1/ai/speak";
+
+/**
+ * Deepgram Aura-2's English voices (Workers AI @cf/deepgram/aura-2-en `speaker`, checked 2026-09-30).
+ * Deepgram features Thalia, Andromeda, Helena, Apollo, Arcas and Aries.
+ */
+export const DEEPGRAM_VOICES = [
+  "thalia", "andromeda", "helena", "apollo", "arcas", "aries",
+  "amalthea", "asteria", "athena", "atlas", "aurora", "callista", "cora", "cordelia", "delia", "draco",
+  "electra", "harmonia", "hera", "hermes", "hyperion", "iris", "janus", "juno", "jupiter", "luna",
+  "mars", "minerva", "neptune", "odysseus", "ophelia", "orion", "orpheus", "pandora", "phoebe", "pluto",
+  "saturn", "theia", "vesta", "zeus",
+] as const;
+export const DeepgramVoiceId = z.enum(DEEPGRAM_VOICES);
+export type DeepgramVoiceId = z.infer<typeof DeepgramVoiceId>;
+export const DEFAULT_DEEPGRAM_VOICE: DeepgramVoiceId = "thalia";
+export const RECOMMENDED_DEEPGRAM_VOICES: ReadonlySet<DeepgramVoiceId> = new Set(["thalia", "andromeda", "helena", "apollo", "arcas", "aries"]);
+/**
+ * Whether the Deepgram voice can say lines in the language picked in Settings (null: "auto", as before): its Aura
+ * voices are English (aura-2-en). In another language the browser's voice says them (the hands-free engine, notifications).
+ */
+export const deepgramSpeaks = (language: Pick<LanguageInfo, "code"> | null | undefined): boolean => !language || language.code === "en";
+/** "thalia" -> "Thalia". */
+export const deepgramVoiceName = (id: DeepgramVoiceId): string => id.charAt(0).toUpperCase() + id.slice(1);
+
+/** Longest text one SPEAK_PATH request says (a spoken summary or notice is far shorter). */
+export const SPEAK_MAX_CHARS = 1_000;
+
+export const SpeakRequest = z.object({ text: z.string().trim().min(1).max(SPEAK_MAX_CHARS), voice: DeepgramVoiceId });
+export type SpeakRequest = z.infer<typeof SpeakRequest>;
+
+/** The Deepgram voice's speed, applied by the player (Aura has no speed of its own). */
+export const DEEPGRAM_SPEED: SpeedRange = { min: 0.5, max: 2, step: 0.05, default: 1 };
+
+/**
+ * How Noa's notifications are said (Settings > AI > Voice): "same" as the hands-free voice engine, one
+ * engine's voice, "chime" (a short sound, no words), or "off" (silent; the notification still shows).
+ */
+export const NotificationVoice = z.enum(["same", "realtime", "realtime-mini", "deepgram", "standard", "chime", "off"]);
+export type NotificationVoice = z.infer<typeof NotificationVoice>;
+
+/** The engine notifications are said with ("same" = the hands-free engine), or "chime" / "off". */
+export function notificationSource(s: { notificationVoice: NotificationVoice; voiceEngine: VoiceEngineId }): VoiceEngineId | "chime" | "off" {
+  return s.notificationVoice === "same" ? s.voiceEngine : s.notificationVoice;
+}
 
 /** A speaking speed range: a multiple of normal speed, `step` for the slider. */
 export interface SpeedRange {

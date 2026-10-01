@@ -121,6 +121,26 @@ describe("Undo on the chat's note", () => {
     await expect(memory.handle({ type: "memory.undo", sessionId: "run1", changeId: "c1" })).rejects.toThrow(/not made in this chat/);
     expect((await events("chat")).filter((e) => e.type === "memory_undone")).toHaveLength(3);
   });
+
+  it("Redo makes an undone change again, and it can be undone again", async () => {
+    await memory.tool("chat", "remember", { kind: "preference", subject: "Tone", text: "calm" }); // c1
+    await memory.tool("chat", "remember", { kind: "preference", subject: "Tone", text: "cheerful" }); // c2
+    // Not undone: redo is harmless.
+    expect(await memory.handle({ type: "memory.redo", sessionId: "chat", changeId: "c2" })).toEqual({ ok: true });
+    await memory.handle({ type: "memory.undo", sessionId: "chat", changeId: "c2" });
+    expect((await store.get("m1"))?.text).toBe("calm");
+    await memory.handle({ type: "memory.redo", sessionId: "chat", changeId: "c2" });
+    expect((await store.get("m1"))?.text).toBe("cheerful");
+    await memory.handle({ type: "memory.redo", sessionId: "chat", changeId: "c2" });
+    await memory.handle({ type: "memory.undo", sessionId: "chat", changeId: "c2" });
+    expect((await store.get("m1"))?.text).toBe("calm");
+    await memory.handle({ type: "memory.undo", sessionId: "chat", changeId: "c1" });
+    expect(await store.list()).toEqual([]);
+    await memory.handle({ type: "memory.redo", sessionId: "chat", changeId: "c1" });
+    expect((await store.get("m1"))?.text).toBe("calm");
+    const marks = (await events("chat")).filter((e) => e.type === "memory_undone" || e.type === "memory_redone").map((e) => e.type);
+    expect(marks).toEqual(["memory_undone", "memory_redone", "memory_undone", "memory_undone", "memory_redone"]);
+  });
 });
 
 describe("a repeating task's memory", () => {

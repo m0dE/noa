@@ -14,12 +14,18 @@ export interface VaultLike {
   getCredential(site: string): Promise<BrowserMethods["vault.getCredential"]["result"]>;
 }
 
+/** Makes pictures for generate_image (engine/image-generator.ts, bound to the calling session). */
+export interface ImagesLike {
+  generate(params: BrowserMethods["media.generateImage"]["params"]): Promise<BrowserMethods["media.generateImage"]["result"]>;
+}
+
 interface Targets {
   driver: DriverLike;
   vault: VaultLike;
+  images?: ImagesLike | undefined;
 }
 
-/** Every browser.* and vault.* method, performed by the driver and the vault. */
+/** Every browser.*, vault.* and media.* method, performed by the driver, the vault and the image maker. */
 const METHODS: { [M in BrowserMethod]: (t: Targets, params: BrowserMethods[M]["params"]) => Promise<BrowserMethods[M]["result"]> } = {
   "browser.navigate": ({ driver }, p) => driver.navigate(p),
   "browser.readPage": ({ driver }, p) => driver.readPage(p ?? {}),
@@ -39,6 +45,10 @@ const METHODS: { [M in BrowserMethod]: (t: Targets, params: BrowserMethods[M]["p
   "browser.waitFor": ({ driver }, p) => driver.waitFor(p),
   "browser.handleDialog": ({ driver }, p) => driver.handleDialog(p),
   "vault.getCredential": ({ driver, vault }, p) => credentialForCurrentTab(driver, vault, p.site),
+  "media.generateImage": async ({ images }, p) => {
+    if (!images) throw new Error("Image generation is not available here.");
+    return images.generate(p);
+  },
 };
 
 /**
@@ -63,8 +73,8 @@ function perform<M extends BrowserMethod>(t: Targets, method: M, params: Browser
 }
 
 /** BrowserCaller for the in-extension (Claude API) brain and the post verifier. */
-export function createBrowserCaller(driver: DriverLike, vault: VaultLike): BrowserCaller {
-  return { call: (method, params) => perform({ driver, vault }, method, params) };
+export function createBrowserCaller(driver: DriverLike, vault: VaultLike, images?: ImagesLike): BrowserCaller {
+  return { call: (method, params) => perform({ driver, vault, images }, method, params) };
 }
 
 /**
@@ -127,6 +137,8 @@ function resultSize(method: BrowserMethod, r: unknown): Record<string, TraceValu
       return typeof o.url === "string" ? { host: hostOf(o.url) } : {};
     case "browser.openTabs":
       return Array.isArray(o.tabs) ? { tabs: o.tabs.length } : {};
+    case "media.generateImage":
+      return typeof o.chargedCents === "number" ? { chargedCents: o.chargedCents } : {};
     default:
       return {};
   }

@@ -365,18 +365,27 @@ export function fakeEmbedding(text) {
   return v;
 }
 
+/** What the fake Deepgram voice answers unless given audio: a few MP3 frame-header bytes (not playable). */
+export const FAKE_SPEECH_MP3 = Buffer.from([0xff, 0xfb, 0x90, 0x44, 0, 0, 0, 0]);
+
 /**
  * Workers AI's REST API shape (POST /ai/run/<model>, { success, result, errors }) for
  * the API's WORKERS_AI_BASE_URL dev hook: Whisper answers FAKE_TRANSCRIPT for a WAV
- * and fails like the real one (3030) for anything else.
+ * and fails like the real one (3030) for anything else. Deepgram's voice (Aura: { text,
+ * speaker }) answers audio/mpeg, `speechAudio` (real MP3 bytes for a live run) or FAKE_SPEECH_MP3.
  */
-export function createFakeWorkersAi() {
+export function createFakeWorkersAi({ speechAudio = FAKE_SPEECH_MP3 } = {}) {
   const requests = [];
   const srv = makeServer(async (req, res) => {
     const url = new URL(req.url, "http://x");
     const model = url.pathname.replace(/^\/ai\/run\//, "");
     if (req.method !== "POST" || model === url.pathname) return sendJson(res, 404, { success: false, errors: [{ message: "not found" }] });
     const body = JSON.parse(await readBody(req));
+    if (model.includes("/aura") && typeof body.text === "string") {
+      requests.push({ model, body, audioBytes: 0 });
+      res.writeHead(200, { "Content-Type": "audio/mpeg", "Content-Length": speechAudio.length });
+      return res.end(speechAudio);
+    }
     // Text embeddings (memory search): { text: string[] } -> one deterministic vector per text.
     if (Array.isArray(body.text)) {
       requests.push({ model, body, audioBytes: 0 });

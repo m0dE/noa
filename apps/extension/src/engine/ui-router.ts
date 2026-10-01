@@ -2,12 +2,12 @@
  * Background side of ui-protocol.ts: answers every UiRequest. The pushes to
  * the side panel are in ui-hub.ts.
  */
-import { ApprovalAnswer, type ApprovalAnsweredBy, cleanUserTitle, errorMessage, IssuableKeyRole, MAX_TRACE_TEXT, redactSettings, secretProblem, type ExtensionSettings, type HelperInfo, type HelperMethods, type LocalTask, type TaskAbout, type TraceCategory, type TraceEvent, type TraceValue } from "@noa/shared";
+import { ApprovalAnswer, type ApprovalAnsweredBy, cleanUserTitle, errorMessage, LanguageCode, MAX_TRACE_TEXT, redactSettings, secretProblem, SpeakRequest, type ExtensionSettings, type HelperInfo, type HelperMethods, type LocalTask, type TaskAbout, type TraceCategory, type TraceEvent, type TraceValue } from "@noa/shared";
 import type { AccountService } from "../account/account.js";
 import { LocalTodo, type TodoSource } from "../account/todo-source.js";
 import { HELPER_CALL_TIMEOUT_MS } from "../helper-link.js";
 import type { BrainStatus, TraceEnv, UiRequest, UiResponse, UiResults, UiState } from "../ui-protocol.js";
-import { realtimeTicketForPanel, voiceEnginesForPanel, type RealtimeAccount } from "../voice/realtime-access.js";
+import { realtimeTicketForPanel, speakForPanel, voiceEnginesForPanel, type RealtimeAccount, type SpeakAccount } from "../voice/realtime-access.js";
 import { transcribeForPanel, type VoiceAccount } from "../voice/transcribe.js";
 import type { LocalStore } from "./local-store.js";
 import { TaskScheduler, type TodoAccess, type TodoApprovalAsk } from "./schedule-task.js";
@@ -33,10 +33,11 @@ export type RouterVault = Pick<Vault, "unlock" | "lock" | "list" | "set" | "dele
 /** The account side the router uses, and voice (one WAV clip to text; the Realtime voice engines and session). */
 export type RouterAccount = Pick<
   AccountService,
-  "view" | "signIn" | "signOut" | "refresh" | "migrateLocalTasks" | "dismissMigration" | "listKeys" | "createKey" | "revokeKey"
+  "view" | "signIn" | "signOut" | "refresh" | "migrateLocalTasks" | "dismissMigration"
 > &
   VoiceAccount &
-  Partial<RealtimeAccount>;
+  Partial<RealtimeAccount> &
+  Partial<SpeakAccount>;
 
 export interface UiRouterDeps {
   loadSettings(): Promise<ExtensionSettings>;
@@ -45,6 +46,10 @@ export interface UiRouterDeps {
   runner: RouterRunner;
   /** Brings the session's agent tab (default: the first agent tab) to the front. */
   showAgent(sessionId?: string): Promise<boolean>;
+  /** A sample notification, heard as Settings say (Settings > AI > Voice > Notifications: Test). */
+  testNotification?(): Promise<void>;
+  /** The user's Noa folder (noa-folder.ts). Absent: it cannot be opened. */
+  folder?: { open(): Promise<string> };
   localStore: LocalStore;
   sessions: SessionStore;
   /** Conversations with an open agent session (both brains). */
@@ -77,6 +82,8 @@ export interface UiRouterDeps {
   dismissals?: Pick<JobDismissals, "all" | "set">;
   /** The tabs each running session acts in (session id -> tab ids). */
   runningTabs?(): Promise<Record<string, number[]>>;
+  /** The tabs each chat's agent opened and keeps between its turns (session id -> tab ids). */
+  chatTabs?(): Promise<Record<string, number[]>>;
   /** Activates a browser tab and focuses its window. */
   focusTab?(tabId: number): Promise<boolean>;
   /** Where conversations run (extension, browser, OS, helper), for the Raw view's export. */
@@ -154,6 +161,7 @@ export class UiRouter {
     if (account) state.account = account;
     if (d.tabChats) state.tabChats = await d.tabChats.all().catch(() => ({}));
     if (d.runningTabs) state.runningTabs = await d.runningTabs().catch(() => ({}));
+    if (d.chatTabs) state.chatTabs = await d.chatTabs().catch(() => ({}));
     const awaiting = d.approvals?.waitingSessions() ?? [];
     if (awaiting.length) state.awaitingApproval = awaiting;
     const dismissals = d.dismissals ? await d.dismissals.all().catch(() => ({})) : {};
@@ -335,6 +343,10 @@ export class UiRouter {
         return { ok: d.runner.stop(optId(msg.sessionId)) } satisfies UiResults["run.stop"];
       case "agent.show":
         return { ok: await d.showAgent(optId(msg.sessionId)) } satisfies UiResults["agent.show"];
+      case "folder.open": {
+        if (!d.folder) throw new Error("The Noa folder cannot be opened here");
+        return { path: await d.folder.open() } satisfies UiResults["folder.open"];
+      }
       case "run.say":
         return { ok: await d.runner.say(String(msg.text ?? ""), optId(msg.sessionId)) } satisfies UiResults["run.say"];
       case "pause.migrate":
@@ -384,17 +396,6 @@ export class UiRouter {
       case "account.dismissMigration":
         await this.account().dismissMigration();
         return this.getState();
-      case "account.keys.list":
-        return { keys: await this.account().listKeys() } satisfies UiResults["account.keys.list"];
-      case "account.keys.create": {
-        const name = String(msg.name ?? "").trim();
-        if (!name) throw new Error("Give the key a name");
-        if (!IssuableKeyRole.safeParse(msg.role).success) throw new Error(`The role must be ${IssuableKeyRole.options.join(" or ")}`);
-        return this.account().createKey(name, msg.role) satisfies Promise<UiResults["account.keys.create"]>;
-      }
-      case "account.keys.revoke":
-        await this.account().revokeKey(String(msg.id ?? ""));
-        return { ok: true } satisfies UiResults["account.keys.revoke"];
       case "sessions.list": {
         const sessions = await d.sessions.list(msg.limit ?? 50, msg.taskId);
         d.titles?.shown(sessions);
@@ -458,11 +459,20 @@ export class UiRouter {
           speechMs: Number(msg.speechMs) || 0,
           ...(typeof msg.context === "string" ? { context: msg.context } : {}),
           ...(typeof msg.sessionId === "string" ? { sessionId: msg.sessionId } : {}),
+          ...(LanguageCode.safeParse(msg.language).success ? { language: msg.language as string } : {}),
         }) satisfies Promise<UiResults["voice.transcribe"]>;
       case "voice.engines":
         return voiceEnginesForPanel(realtimeAccount(d.account)) satisfies Promise<UiResults["voice.engines"]>;
       case "voice.realtime":
-        return realtimeTicketForPanel(realtimeAccount(d.account), optId(msg.sessionId)) satisfies Promise<UiResults["voice.realtime"]>;
+        return realtimeTicketForPanel(realtimeAccount(d.account), optId(msg.sessionId), msg.tier === "mini") satisfies Promise<UiResults["voice.realtime"]>;
+      case "notify.test":
+        await d.testNotification?.();
+        return { ok: true } satisfies UiResults["notify.test"];
+      case "voice.speak": {
+        const req = SpeakRequest.safeParse({ text: msg.text, voice: msg.voice });
+        if (!req.success) throw new Error("text (1 to 1,000 characters) and a Deepgram voice are required");
+        return speakForPanel(d.account?.speak ? { speak: (r, o) => d.account!.speak!(r, o) } : undefined, req.data, optId(msg.sessionId)) satisfies Promise<UiResults["voice.speak"]>;
+      }
       case "voice.spoken": {
         const text = typeof msg.text === "string" ? msg.text.trim() : "";
         const sessionId = optId(msg.sessionId);

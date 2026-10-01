@@ -11,7 +11,8 @@ import type { RealtimeTicket } from "./realtime-access.js";
 /** A sample session lasts at most this long (connecting, one line, playing it). */
 export const SAMPLE_TIMEOUT_MS = 20_000;
 
-const SAMPLE_INSTRUCTIONS = "You are a voice sample. When asked, say the given sentence exactly, once, in English, and nothing else.";
+/** A voice sample's instructions: the sentence is in `language` (English unless the user picked another in Settings). */
+const sampleInstructions = (language = "English") => `You are a voice sample. When asked, say the given sentence exactly, once, in ${language}, and nothing else.`;
 
 /** About how long a sample runs: connecting, then one short line. */
 const SAMPLE_SECONDS = 10;
@@ -28,6 +29,10 @@ export interface SampleDeps {
   voice: RealtimeVoiceId;
   speed: number;
   text: string;
+  /** The session's instructions; default: a voice sample's. */
+  instructions?: string;
+  /** The language of `text` by its English name, for a voice sample's instructions (default English). */
+  language?: string;
   openSocket?: OpenSocket;
   /** Plays the reply; calls onIdle when nothing is left to play. */
   createPlayer?(onIdle: () => void): Pick<PcmPlayer, "play" | "close" | "playing">;
@@ -55,12 +60,12 @@ export async function sayRealtimeSample(deps: SampleDeps): Promise<void> {
     const client = new RealtimeClient({
       url: ticket.url,
       token: ticket.token,
-      instructions: SAMPLE_INSTRUCTIONS,
+      instructions: deps.instructions ?? sampleInstructions(deps.language),
       voice: deps.voice,
       speed: deps.speed,
       ...(deps.openSocket ? { open: deps.openSocket } : {}),
       handlers: {
-        onReady: () => client.note(`Say exactly: "${deps.text}"`, "result"),
+        onReady: () => client.say("result", deps.text),
         onAudio: (b64, itemId) => player.play(b64, itemId),
         onReplyDone: () => {
           replied = true;

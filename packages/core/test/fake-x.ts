@@ -39,6 +39,8 @@ export interface FakeXOptions {
   menuOpenedBefore?: boolean;
   /** The page ignores an untrusted click on a menu entry (only a real mouse press switches). */
   ignoresPageClicks?: boolean;
+  /** The switcher ignores its click in the first N page loads (X not ready yet: the menu does not open). */
+  deadSwitcherLoads?: number;
   hasSwitcher?: boolean;
   credentials?: Record<string, { username: string; password: string }>;
   vaultLocked?: boolean;
@@ -66,6 +68,7 @@ export class FakeX {
   /** browser.clickXAccountEntry picks that clicked an entry: in the page, or a real press. */
   entryClicks: { handle: string; press: boolean }[] = [];
   ignoresPageClicks: boolean;
+  deadSwitcherLoads: number;
   composeText = "";
   files: string[] = [];
   posts: FakePost[];
@@ -83,6 +86,7 @@ export class FakeX {
     this.delegateView = !!opts.menuOpenedBefore;
     this.hasSwitcher = opts.hasSwitcher ?? true;
     this.ignoresPageClicks = opts.ignoresPageClicks ?? false;
+    this.deadSwitcherLoads = opts.deadSwitcherLoads ?? 0;
     this.credentials = opts.credentials ?? {};
     this.vaultLocked = opts.vaultLocked ?? false;
     this.posts = opts.posts ?? [];
@@ -155,6 +159,7 @@ export class FakeX {
           { tag: "button", role: "button", name: "Account menu", text: `${this.account} @${this.account}`, testId: "SideNav_AccountSwitcher_Button" },
           {
             onClick: () => {
+              if (this.pageLoads <= this.deadSwitcherLoads) return;
               this.menuOpen = !this.menuOpen;
               this.callsSinceOpen = 0;
             },

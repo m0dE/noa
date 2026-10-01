@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChromeFake } from "./chrome-fake.js";
 import { DRAWN, driverHarness, runInUserTab } from "./driver-harness.js";
-import type { AgentTab } from "../src/agent-tab.js";
+import { keptChatTabs, type AgentTab } from "../src/agent-tab.js";
 import { DEBUGGER_CANCELED, type Cdp } from "../src/cdp.js";
 import type { Driver } from "../src/driver.js";
 import { createBrowserCaller } from "../src/engine/browser-caller.js";
@@ -268,6 +268,18 @@ describe("Driver with several tabs", () => {
     // A's next turn has them again, with the same ids.
     await agent.prepare("current-tab", { tabId: mainTab, owner: "A" });
     expect((await agent.list()).map((t) => [t.id, t.tabId])).toEqual([["t1", mainTab], ["t2", left[0]], ["t3", left[1]]]);
+  });
+
+  it("keptChatTabs: the tabs a chat's agent opened, while no turn of it runs (the side panel shows its job there)", async () => {
+    await agent.prepare("current-tab", { tabId: mainTab, owner: "A" });
+    await driver.openTabs({ urls: urls(2) });
+    const opened = await Promise.all(["t2", "t3"].map((t) => agent.resolve(t)));
+    expect(await keptChatTabs()).toEqual({});
+    await agent.park("A");
+    expect(await keptChatTabs()).toEqual({ A: opened });
+    // Its next turn takes them back.
+    await agent.prepare("current-tab", { tabId: mainTab, owner: "A" });
+    expect(await keptChatTabs()).toEqual({});
   });
 
   it("the next run closes tabs no chat owns that an interrupted run left open", async () => {

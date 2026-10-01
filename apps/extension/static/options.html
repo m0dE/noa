@@ -73,53 +73,28 @@
                   <p id="acct-msg" class="msg" role="status"></p>
                 </div>
               </div>
+              <div class="box" id="bookmark-sync-box" hidden>
+                <div class="srow">
+                  <label class="srow-label" for="f-bookmarkSync"><b>Sync bookmarks with your Noa account</b><small id="bookmark-sync-note">Your bookmarks on every computer where you use Noa Browser with this account.</small></label>
+                  <div class="srow-control"><span class="switch"><input id="f-bookmarkSync" type="checkbox" role="switch" /></span></div>
+                </div>
+              </div>
             </div>
           </div>
         </section>
 
-        <!-- API keys -->
-        <section class="panel" id="panel-keys" role="tabpanel" aria-labelledby="tab-keys" tabindex="-1" hidden>
-          <div class="group" id="keys-card">
-            <p class="group-hint">For your own scripts (Add tasks) or another browser that works through them (Run tasks). Fair use: <span id="keys-rate"></span> requests a minute per key.</p>
-            <div class="box pad">
-              <div id="keys-out" class="keys-gate" hidden>
-                <p class="hint">Log in with Google to create API keys for your account.</p>
-                <div class="row">
-                  <button id="keys-signin" type="button" class="primary">Log in with Google</button>
-                  <span id="keys-signin-msg" class="msg"></span>
-                </div>
-              </div>
-              <div id="keys-locked" class="keys-gate" hidden>
-                <p id="keys-locked-text" class="hint"></p>
-                <div id="keys-billing" class="keys-gate">
-                  <button id="keys-billing-open" type="button" class="primary billing-open">Choose a plan</button>
-                  <p class="hint">Plans, top-ups and invoices are on your Noa dashboard.</p>
-                </div>
-              </div>
-              <div id="keys-body" class="keys-body" hidden>
-                <ul id="keys-list" class="keys-list"></ul>
-                <div class="key-new-form">
-                  <input id="key-name" type="text" placeholder="Key name, e.g. laptop scheduler" aria-label="Key name" autocomplete="off" spellcheck="false" />
-                  <select id="key-role" aria-label="What the key may do"></select>
-                  <button id="key-create" type="button" class="small">Create key</button>
-                </div>
-                <div id="key-new" class="key-new" hidden>
-                  <p class="hint">Copy this key now. It is not shown again.</p>
-                  <div class="secret-row">
-                    <code id="key-value" class="key-value"></code>
-                    <button id="key-copy" type="button" class="small">Copy</button>
-                  </div>
-                </div>
-              </div>
-              <p id="keys-msg" class="msg"></p>
-            </div>
-          </div>
-        </section>
-
-        <!-- AI -->
+        <!-- AI: its groups under tabs of their own (ai-tabs.ts). -->
         <section class="panel" id="panel-ai" role="tabpanel" aria-labelledby="tab-ai" tabindex="-1" hidden>
-          <div class="group">
-            <h3 class="group-title" id="h-brain">Brain</h3>
+          <div id="ai-tabs" class="subtabs" role="tablist" aria-label="AI settings">
+            <button type="button" role="tab" id="ai-tab-source" aria-controls="ai-source" aria-selected="true">Source</button>
+            <button type="button" role="tab" id="ai-tab-speed" aria-controls="ai-speed" aria-selected="false" tabindex="-1">Speed</button>
+            <button type="button" role="tab" id="ai-tab-voice" aria-controls="ai-voice" aria-selected="false" tabindex="-1">Voice</button>
+            <button type="button" role="tab" id="ai-tab-images" aria-controls="ai-images" aria-selected="false" tabindex="-1">Images</button>
+          </div>
+
+          <div class="subpanel" id="ai-source" role="tabpanel" aria-labelledby="ai-tab-source">
+          <div class="group" id="source-group">
+            <h3 class="group-title" id="h-brain">Source</h3>
             <p class="group-hint">Which Claude runs your tasks.</p>
             <div class="box options" role="radiogroup" aria-labelledby="h-brain">
               <div class="opt" data-brain="auto">
@@ -153,7 +128,7 @@
               <div class="opt" data-brain="claude-code">
                 <label class="opt-head">
                   <input type="radio" name="brain" value="claude-code" />
-                  <span class="opt-text"><b>Local Claude Code</b><small class="opt-detail"></small></span>
+                  <span class="opt-text"><b>Local Claude Code (Recommended)</b><small class="opt-detail"></small></span>
                 </label>
                 <div class="reveal"><div class="reveal-inner">
                   <div class="helper">
@@ -166,9 +141,16 @@
                     <ul id="helper-details" class="helper-details"></ul>
                     <p id="helper-msg" class="msg" role="status"></p>
                     <ol id="helper-install" class="steps" hidden>
-                      <li>Install Claude Code and sign in to it once.</li>
-                      <li>Install the helper: in the repo, run <code>pnpm build</code>, then <code>node apps/helper/dist/install.js</code></li>
-                      <li>Click <b>Connect</b>.</li>
+                      <li>Install <a href="https://claude.com/claude-code" target="_blank" rel="noopener">Claude Code</a> and sign in to it once.</li>
+                      <li id="helper-step-terminal"><span id="helper-open-terminal">Open Terminal: press <b>⌘ Space</b>, type <b>Terminal</b>, press <b>Return</b>.</span></li>
+                      <li id="helper-step-command">Click <b>Copy</b>, paste it into Terminal (<b id="helper-paste-key">⌘ V</b>) and press <b>Return</b>. It takes about a minute and ends with “Done”.
+                        <div class="cmd-row">
+                          <code id="helper-command" class="cmd"></code>
+                          <button id="helper-copy" type="button" class="small primary">Copy</button>
+                        </div>
+                      </li>
+                      <li id="helper-step-repo" hidden><span id="helper-repo-why"></span> From a copy of the Noa repository, run <code>pnpm install</code>, <code>pnpm build</code>, then <code>node apps/helper/dist/install.js</code>.</li>
+                      <li>Come back to this page. It connects by itself; if not, click <b>Connect</b>.</li>
                     </ol>
                   </div>
                 </div></div>
@@ -216,6 +198,9 @@
             </div>
           </div>
 
+          </div>
+
+          <div class="subpanel" id="ai-speed" role="tabpanel" aria-labelledby="ai-tab-speed" hidden>
           <div class="group" id="jev-group">
             <h3 class="group-title">Speed (Jev)</h3>
             <p class="group-hint">Optional. Jev handles simple clicks and typing faster than Claude. Without it, Claude does every step.</p>
@@ -241,6 +226,9 @@
             </div>
           </div>
 
+          </div>
+
+          <div class="subpanel" id="ai-voice" role="tabpanel" aria-labelledby="ai-tab-voice" hidden>
           <div class="group" id="voice-group">
             <h3 class="group-title" id="h-voice">Voice</h3>
             <p class="group-hint">Hands-free voice (<span id="voice-group-key">the voice shortcut</span>): talk to Noa while it works; it answers with short spoken summaries.</p>
@@ -248,6 +236,18 @@
               <div class="opt" data-voice="realtime">
                 <label class="opt-head">
                   <input type="radio" name="voiceEngine" value="realtime" />
+                  <span class="opt-text"><b class="voice-name"></b><small class="opt-detail voice-detail"></small><small class="voice-cost"></small></span>
+                </label>
+              </div>
+              <div class="opt" data-voice="realtime-mini">
+                <label class="opt-head">
+                  <input type="radio" name="voiceEngine" value="realtime-mini" />
+                  <span class="opt-text"><b class="voice-name"></b><small class="opt-detail voice-detail"></small><small class="voice-cost"></small></span>
+                </label>
+              </div>
+              <div class="opt" data-voice="deepgram">
+                <label class="opt-head">
+                  <input type="radio" name="voiceEngine" value="deepgram" />
                   <span class="opt-text"><b class="voice-name"></b><small class="opt-detail voice-detail"></small><small class="voice-cost"></small></span>
                 </label>
               </div>
@@ -259,6 +259,13 @@
               </div>
             </div>
             <p id="voice-note" class="note" data-tone="warn" role="status" hidden></p>
+            <div class="box">
+              <!-- The language Noa talks in (language.ts; voice-view.ts languageOptions). -->
+              <div class="srow">
+                <label class="srow-label" for="voice-language"><b>Language</b><small id="voice-language-hint"></small></label>
+                <div class="srow-control wide"><select id="voice-language"></select></div>
+              </div>
+            </div>
             <div class="box" id="speech-box">
               <!-- The voice and speed follow the engine selected above (voice-view.ts voicePicker). -->
               <div class="srow">
@@ -279,7 +286,41 @@
                 <label class="srow-label" for="voice-sounds"><b>Sounds</b><small>A short, soft sound when the microphone turns on and when it turns off.</small></label>
                 <div class="srow-control"><span class="switch"><input id="voice-sounds" type="checkbox" role="switch" /></span></div>
               </div>
+              <div class="srow">
+                <label class="srow-label" for="notification-voice"><b>Notifications</b><small>How you hear Noa's notifications (a scheduled job started, paused, or needs your OK) from any tab: said in a voice (its speed is the one above), a chime, or nothing. Silent while hands-free voice is on.</small></label>
+                <div class="srow-control wide"><select id="notification-voice"></select></div>
+              </div>
+              <div class="srow" id="notification-speaker-row" hidden>
+                <label class="srow-label" for="notification-speaker"><b>Notification voice</b><small id="notification-speaker-hint">The voice notifications are said in, just for them; hands-free voice keeps its own.</small></label>
+                <div class="srow-control wide"><select id="notification-speaker"></select></div>
+              </div>
+              <div class="srow">
+                <div class="srow-label"><b>Hear a notification</b><small>Plays a sample notification the way you chose.</small></div>
+                <div class="srow-control"><div class="row"><button id="notification-test" type="button" class="small">Test</button><span id="notification-test-msg" class="msg" role="status"></span></div></div>
+              </div>
             </div>
+          </div>
+
+          </div>
+
+          <div class="subpanel" id="ai-images" role="tabpanel" aria-labelledby="ai-tab-images" hidden>
+          <div class="group" id="images-group">
+            <h3 class="group-title" id="h-images">Image generation</h3>
+            <p class="group-hint">Noa can make pictures you ask for: icons, banners, illustrations. They are saved in your Noa folder (Downloads/Noa/images) and paid from your Noa account's usage credit, whichever source runs the chat.</p>
+            <div class="box">
+              <div class="srow">
+                <label class="srow-label" for="images-on"><b>Make images</b><small>Off: Noa is not given the tool, and never makes or pays for a picture.</small></label>
+                <div class="srow-control"><span class="switch"><input id="images-on" type="checkbox" role="switch" /></span></div>
+              </div>
+              <div class="reveal" id="images-fields"><div class="reveal-inner">
+                <div class="srow">
+                  <label class="srow-label" for="images-model"><b>Image model</b><small id="images-model-hint"></small></label>
+                  <div class="srow-control wide"><select id="images-model" aria-describedby="images-model-hint"></select><span id="images-msg" class="msg" role="status"></span></div>
+                </div>
+              </div></div>
+            </div>
+            <p id="images-note" class="note" data-tone="warn" role="status" hidden></p>
+          </div>
           </div>
         </section>
 

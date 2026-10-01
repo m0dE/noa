@@ -87,6 +87,11 @@ for local Claude Code runs on Windows, macOS and Linux.
    node apps/helper/dist/install.js
    ```
 
+   On macOS and Linux you can skip the build for this step: the extension's
+   settings (AI, Local Claude Code) show a one-line Terminal command,
+   `curl -fsSL https://noa.bot/helper/install.sh | sh`, that downloads a
+   built helper and registers it for your extension's id.
+
    Then click "Connect" under the helper status. The first connection runs a
    short Claude Code self-test. `--uninstall` removes the registration.
    Signing in to Claude Code alone is not enough: Chrome reaches Claude Code

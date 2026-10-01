@@ -3,6 +3,8 @@ import type { AgentEvent } from "@noa/shared";
 import {
   ackResponse,
   ALREADY_SENT_OUTPUT,
+  lineResponse,
+  progressResponse,
   MUTED_NOTE,
   NARRATOR_INSTRUCTIONS,
   NARRATOR_TOOLS,
@@ -11,7 +13,7 @@ import {
   UNMUTED_NOTE,
   WORKING_SMALL_TALK_RESPONSE,
 } from "../../src/voice/realtime-client.js";
-import { NarratorFeed } from "../../src/voice/realtime-feed.js";
+import { ANSWER_HOLD_MS, NarratorFeed, type FeedOutput } from "../../src/voice/realtime-feed.js";
 import { lookingElsewhereNote, lookingHomeNote, useThisTabAnswer } from "../../src/voice/hands-free-tab.js";
 
 /**
@@ -32,36 +34,39 @@ function texts(value: unknown): string[] {
 const call = (name: string, args: unknown = {}): AgentEvent => ({ type: "tool_call", id: "1", name, args });
 const approval: AgentEvent = { type: "approval_request", request: { id: "ap1", action: 'Click "Post"', site: "x.com", why: "publishes", kind: "publish", expiresAt: new Date(0).toISOString() } };
 
-/** One of each note the feed makes. */
-function feedNotes(): string[] {
-  const out: string[] = [];
+/** One of each line and status the feed makes, with the kinds of lines. */
+function feedOutput(): { strings: string[]; kinds: string[] } {
+  const out: FeedOutput[] = [];
   const feed = new NarratorFeed();
-  out.push(...feed.push({ type: "user_message", text: "use the second draft" }, 0).map((n) => n.text));
-  feed.request(0);
+  out.push(...feed.push({ type: "user_message", text: "use the second draft" }, 0));
+  out.push(...feed.sent("check my calendar", false, 0));
+  feed.push({ type: "user_message", text: "check my calendar", voice: true }, 0);
+  // Into the turn the typed message started: the model reads it at its next step.
+  feed.push({ type: "trace", trace: { t: 0, cat: "user", name: "interjection", src: "engine" } }, 1);
   feed.push(call("navigate", { url: "https://mail.google.com/" }), 5);
   feed.push({ type: "assistant_text", text: "Switching to the admin account." }, 10);
-  out.push(...feed.push(call("navigate", { url: "https://calendar.google.com/" }), 60_000).map((n) => n.text));
-  out.push(...feed.push({ type: "error", text: "Claude API rate limit (HTTP 429)" }, 60_001).map((n) => n.text));
-  out.push(...feed.push(approval, 60_002).map((n) => n.text));
-  out.push(...feed.push({ type: "task_end", outcome: "paused", reason: "Which account should I post from?" }, 60_003).map((n) => n.text));
-  feed.question();
-  out.push(...feed.push({ type: "assistant_text", text: "Not yet: I'm still signed in as Rooftop Chat." }, 60_004).map((n) => n.text));
-  feed.request(70_000);
-  out.push(...feed.push({ type: "task_end", outcome: "done", summary: "Posted", spoken: "Posted your thread on X." }, 70_001).map((n) => n.text));
-  return out;
+  out.push(...feed.push(call("navigate", { url: "https://calendar.google.com/" }), 60_000));
+  out.push(...feed.push({ type: "error", text: "Claude API rate limit (HTTP 429)" }, 60_001));
+  out.push(...feed.push(approval, 60_002));
+  out.push(...feed.push({ type: "task_end", outcome: "paused", reason: "Which account should I post from?" }, 60_003));
+  out.push(...feed.sent("which account are you on?", true, 60_004, false));
+  feed.push({ type: "user_message", text: "which account are you on?", voice: true }, 60_004);
+  feed.push({ type: "assistant_text", text: "Not yet: I'm still signed in as Rooftop Chat." }, 60_005);
+  out.push(...feed.tick(60_005 + ANSWER_HOLD_MS));
+  out.push(...feed.sent("post it", false, 70_000));
+  feed.push({ type: "user_message", text: "post it", voice: true }, 70_000);
+  out.push(...feed.push({ type: "task_end", outcome: "done", summary: "Posted", spoken: "Posted your thread on X." }, 70_001));
+  return {
+    strings: out.map((o) => ("say" in o ? o.say.line : o.status)),
+    kinds: out.flatMap((o) => ("say" in o ? [o.say.kind] : [])),
+  };
 }
 
 describe("the voice is Noa doing the work: no third-person agent in what the narrator speaks from", () => {
-  it("the feed makes every kind of note (so the check below covers them)", () => {
-    expect(feedNotes().map((n) => n.match(/^Your update(?: \(([^)]+)\))?/)?.[1] ?? "context")).toEqual([
-      "context",
-      "progress",
-      "problem",
-      "you need the user's OK",
-      "you need the user",
-      "answer",
-      "finished",
-    ]);
+  it("the feed makes every kind of line, and statuses (so the check below covers them)", () => {
+    const { strings, kinds } = feedOutput();
+    expect(kinds).toEqual(["milestone", "error", "question", "question", "result", "result"]);
+    expect(strings.filter((s) => s.startsWith("Status")).length).toBeGreaterThan(3);
   });
 
   it.each([
@@ -71,7 +76,8 @@ describe("the voice is Noa doing the work: no third-person agent in what the nar
     ["tool descriptions", () => texts(NARRATOR_TOOLS)],
     ["tool outputs", () => [SENT_OUTPUT, ALREADY_SENT_OUTPUT, ...Object.values(NOT_A_REQUEST_OUTPUT)]],
     ["microphone notes", () => [MUTED_NOTE, UNMUTED_NOTE]],
-    ["feed notes", feedNotes],
+    ["feed lines and statuses", () => feedOutput().strings],
+    ["how lines and progress are asked for", () => [lineResponse("Posted your thread on X.", "post it").instructions, progressResponse("Opening x.com", "post it").instructions]],
     [
       "tab notes and answers",
       () => [

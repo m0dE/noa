@@ -70,8 +70,9 @@ describe("Test voice for Realtime", () => {
     expect(t.relay().sent[0]!.session.audio.output).toMatchObject({ voice: "cedar", speed: 1.2 });
     t.relay().event({ type: "session.created", session: {} });
     const asked = t.relay().sent.slice(1);
-    expect(asked.map((e) => e.type)).toEqual(["conversation.item.create", "response.create"]);
-    expect(asked[0]!.item.content[0].text).toBe('Say exactly: "Opening Gmail."');
+    // The line itself, word for word (lineResponse), with nothing in the conversation.
+    expect(asked.map((e) => e.type)).toEqual(["response.create"]);
+    expect(asked[0]!.response.instructions).toContain("«Opening Gmail.»");
     t.relay().event({ type: "response.created", response: { id: "r1" } });
     t.relay().event({ type: "response.output_audio.delta", item_id: "a1", delta: "AAAA" });
     t.relay().event({ type: "response.done", response: { id: "r1" } });

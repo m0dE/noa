@@ -110,14 +110,15 @@ export function spokenEchoes(events: readonly AgentEvent[], index: number): bool
  * A turn's end card. A failure is shown once: when the turn already showed
  * its error, the end card does not repeat it (it keeps the outcome and
  * Continue); otherwise a reason that is a known error becomes the error card.
- * Other reasons (e.g. the agent's own "the site asked for a captcha") read as
- * a summary, as before.
+ * The agent's own reason (byAgent: its task_pause, task_fail) is never read as
+ * an error: "@rooftopchat is not signed in" (in X) is not Noa's sign-in. Other
+ * reasons read as a summary, as before.
  */
 function describeEnd(ev: Extract<AgentEvent, { type: "task_end" }>, turn: TurnContext): EventView {
   const reason = (ev.summary || ev.reason || "").trim();
   const failed = ev.outcome !== "done";
   const shown = failed && turn.error !== undefined ? errorHelp(turn.error) : undefined;
-  const fromReason = failed && !shown && reason ? errorHelp(reason) : undefined;
+  const fromReason = failed && !shown && reason && !ev.byAgent ? errorHelp(reason) : undefined;
   const error = fromReason?.known ? fromReason : undefined;
   const text = shown || error ? "" : reason;
   return {
@@ -231,6 +232,7 @@ export function describeEvent(ev: AgentEvent, turn: TurnContext = {}): EventView
     case "memory":
       return memoryNoteView(ev, !!turn.memoryUndone);
     case "memory_undone":
+    case "memory_redone":
       // It changes its memory note (see turn.memoryUndone); nothing of its own.
       return { kind: "status", text: "" };
     case "trace":

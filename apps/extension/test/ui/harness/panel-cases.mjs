@@ -847,7 +847,7 @@ export const PANEL_CASES = [
     },
   },
   // An action waiting for the user's OK (automation level "Ask before posting, sending or paying"): the approval card
-  // with what, where, why and the exact text, answered by a click (Allow once) or a key (Alt+N denies); an earlier
+  // with what, where, why and the exact text, answered by a click (Allow) or a key (Alt+N denies); an earlier
   // allowed one keeps one quiet line.
   {
     names: ["panel-approval", "panel-approval-allowed", "panel-approval-denied", "panel-autonomy-full"],
@@ -870,13 +870,13 @@ export const PANEL_CASES = [
       if (want("panel-approval", size, scheme) || want("panel-approval-allowed", size, scheme)) {
         const p = await openPanel(ctx, "approval", "#chat-log .ev-approval[data-state=pending]");
         const [earlier, now] = await card(p);
-        if (earlier?.state !== "allowed" || earlier.head !== "Allowed once" || earlier.buttons.length) fail(`earlier card ${JSON.stringify(earlier)}`);
+        if (earlier?.state !== "allowed" || earlier.head !== "Allowed" || earlier.buttons.length) fail(`earlier card ${JSON.stringify(earlier)}`);
         if (now?.state !== "pending" || now.head !== "Waiting for your OK" || now.action !== 'Click "Post" on x.com · publishes') fail(`card ${JSON.stringify(now)}`);
         if (!now?.text?.startsWith("We just shipped Noa 0.3") || !now.text.includes("\n\nhttps://")) fail(`card text ${JSON.stringify(now?.text)}`);
-        if (now?.buttons.join(" | ") !== "Allow once | Allow for this task | Deny") fail(`buttons ${now?.buttons.join(" | ")}`);
+        if (now?.buttons.join(" | ") !== "Allow | Allow all until done | Deny") fail(`buttons ${now?.buttons.join(" | ")}`);
         if (!now?.inside || !now.buttonsOneRow) fail(`card layout ${JSON.stringify(now)}`);
         const titles = await p.evaluate(() => [...document.querySelectorAll("#chat-log .ev-approval[data-state=pending] button")].map((b) => b.title));
-        if (titles.join(" | ") !== "Allow once (Alt+Y) | Allow for this task (Alt+T) | Deny (Alt+N)") fail(`shortcut titles ${titles.join(" | ")}`);
+        if (!/\(Alt\+Y\) \| .*\(Alt\+T\) \| .*\(Alt\+N\)$/.test(titles.join(" | ")) || !titles[1].includes("without asking again")) fail(`shortcut titles ${titles.join(" | ")}`);
         if (await p.isVisible("#autonomy-warning")) fail("the Full autonomy warning shows at the default level");
         await checkLayout(p, `approval ${label}`);
         await shoot(p, "panel-approval", size, scheme);
@@ -885,7 +885,7 @@ export const PANEL_CASES = [
         const got = await sent(p);
         if (got.length !== 1 || got[0].sessionId !== "s-appr" || got[0].id !== "ap-2" || got[0].answer !== "allow_once") fail(`answer sent ${JSON.stringify(got)}`);
         const after = (await card(p))[1];
-        if (after?.head !== "Allowed once" || after.buttons.length) fail(`allowed card ${JSON.stringify(after)}`);
+        if (after?.head !== "Allowed" || after.buttons.length) fail(`allowed card ${JSON.stringify(after)}`);
         await checkLayout(p, `approval-allowed ${label}`);
         await shoot(p, "panel-approval-allowed", size, scheme);
         reportErrors(p, `approval ${label}`);
@@ -1883,7 +1883,7 @@ export const PANEL_CASES = [
         const want2 = (ok, what) => ok || fail(`${name} ${label}: ${what} ${JSON.stringify(look)}`);
         want2(look.label === "Voice on · Inbox (1) - ada.lovelace@ex…" && look.status === "Hearing you" && look.live === "Voice on: Listening", "state word / announcement");
         want2(/^0:0\d$/.test(look.time), "time on");
-        want2(look.hint === "Nova-3 voice · Just talk · say “stop” to end", "tooltip");
+        want2(look.hint === "Browser voice · Just talk · say “stop” to end", "tooltip");
         want2(look.region[0] === "region" && look.region[1] === "Voice status", "strip region");
         want2(look.buttons === 0 && look.height <= 30, "a slim strip without buttons");
         want2(look.meter, "meter");
@@ -2100,7 +2100,7 @@ export const PANEL_CASES = [
         await waitPhase(p, "listening");
         await p.waitForSelector("#now-notice:not([hidden])");
         const tip = await p.textContent("#now-notice:not([hidden])");
-        if (!/^Realtime voice uses about 6¢ of usage credit a minute\. Nova-3 voice costs much less.Voice settings×$/.test(tip)) fail(`cost notice "${tip}"`);
+        if (!/^Realtime voice uses about 6\.1¢ of usage credit a minute\. Deepgram and the browser voice cost much less\.Voice settings×$/.test(tip)) fail(`cost notice "${tip}"`);
         if (!(await p.evaluate(() => window.__requests.some((r) => r.type === "settings.save" && r.settings.realtimeCostNoticed === true)))) fail("the cost notice is not remembered");
         const rt = await p.evaluate(() => ({ protocols: window.__rt.protocols, sent: window.__rt.sent.map((e) => e.type), first: window.__rt.sent[0] }));
         if (JSON.stringify(rt.protocols) !== JSON.stringify(["noa", "bt.tok"])) fail(`subprotocols ${JSON.stringify(rt.protocols)}`);
@@ -2168,7 +2168,7 @@ export const PANEL_CASES = [
         const sent = req.text;
         await p.waitForFunction(() => window.__rt.sent.some((e) => e.item?.type === "function_call_output"));
         const output = await p.evaluate(() => window.__rt.sent.find((e) => e.item?.type === "function_call_output")?.item.output);
-        if (output !== "Started. Your updates on it will follow.") fail(`tool output "${output}"`);
+        if (output !== "Started. What comes of it is said for you: say nothing more.") fail(`tool output "${output}"`);
         // One short acknowledgement once that reply is done (it said nothing), and no other reply.
         const replies = () => p.evaluate(() => window.__rt.sent.filter((e) => e.type === "response.create"));
         if ((await replies()).length) fail("a reply was asked for while the narrator's reply was still being made");
@@ -2374,7 +2374,7 @@ export const PANEL_CASES = [
           live: document.body.classList.contains("voice-live"),
           placeholder: document.getElementById("now-text").placeholder,
         }));
-        if (remote.detail !== "Nova-3 voice · Listening in another window" || remote.meter || !remote.go || !remote.use || !remote.stop || remote.mic !== "idle" || remote.live || /Listening/i.test(remote.placeholder))
+        if (remote.detail !== "Browser voice · Listening in another window" || remote.meter || !remote.go || !remote.use || !remote.stop || remote.mic !== "idle" || remote.live || /Listening/i.test(remote.placeholder))
           fail(`another tab's session ${JSON.stringify(remote)}`);
         await checkLayout(p, `handsfree-remote ${label}`);
         await shoot(p, "panel-handsfree-remote", size, scheme);
@@ -2411,14 +2411,14 @@ export const PANEL_CASES = [
           transcribed: window.__requests.some((r) => r.type === "voice.transcribe"),
           saved: window.__requests.some((r) => r.type === "settings.save" && "voiceEngine" in r.settings),
         }));
-        if (note.text !== "Realtime voice is unavailable on the server right now." || note.level !== "error" || JSON.stringify(note.actions) !== JSON.stringify(["Use Nova-3 voice"]) || note.transcribed || note.saved)
+        if (note.text !== "Realtime voice is unavailable on the server right now." || note.level !== "error" || JSON.stringify(note.actions) !== JSON.stringify(["Use browser voice"]) || note.transcribed || note.saved)
           fail(`unavailable note ${JSON.stringify(note)}`);
         await checkLayout(p, `handsfree-unavailable ${label}`);
         await shoot(p, "panel-handsfree-unavailable", size, scheme);
         // The user's choice: Standard, this once (Settings unchanged).
         await p.click("#now-notice .notice-action");
         await waitPhase(p, "listening");
-        if (await p.evaluate(() => window.__requests.some((r) => r.type === "settings.save" && "voiceEngine" in r.settings))) fail("Use Nova-3 voice changed Settings");
+        if (await p.evaluate(() => window.__requests.some((r) => r.type === "settings.save" && "voiceEngine" in r.settings))) fail("Use browser voice changed Settings");
         await p.evaluate(() => window.__push({ type: "panel.voice" }));
         await p.waitForFunction(() => document.querySelector("#voice-bar").hidden);
         reportErrors(p, `handsfree-unavailable ${label}`);

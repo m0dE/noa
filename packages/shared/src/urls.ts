@@ -8,6 +8,12 @@ export const X_HOME_URL = "https://x.com/home";
 /** The website's terms (apps/web/public/terms.html): the no-warranty wording the app's disclaimers point to. */
 export const TERMS_URL = "https://noa.bot/terms";
 
+/**
+ * The helper's installer for macOS and Linux (apps/web/public/helper/install.sh): it downloads the helper
+ * the homepage build bundled beside it and registers it for Chrome, so no checkout of the repo is needed.
+ */
+export const HELPER_INSTALL_URL = "https://noa.bot/helper/install.sh";
+
 /** "@name" from "name", "@name" or " @@name ". */
 export function normalizeHandle(handle: string): string {
   return `@${handle.trim().replace(/^@+/, "").trim()}`;

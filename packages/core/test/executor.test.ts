@@ -155,6 +155,19 @@ describe("createToolExecutor: plain tools", () => {
     expect(x.calls.find((c) => c.method === "browser.upload")!.params).toEqual({ index: 3, paths: [listed] });
   });
 
+  it("upload says how the files were given; a drop or paste asks the agent to check they arrived", async () => {
+    const answers: Record<string, unknown>[] = [{ ok: true }, { ok: true, via: "drop" }, { ok: true, via: "paste" }];
+    const browser: BrowserCaller = async () => answers.shift() as never;
+    const { exec } = setup(new FakeX(), { mediaPaths: ["/m/a.png"], browser });
+    const texts = [];
+    for (let i = 0; i < 3; i++) texts.push((await exec.call("upload", { index: 4, paths: ["/m/a.png"] })).text);
+    expect(texts).toEqual([
+      "Attached 1 file(s) to [4].",
+      "Dropped 1 file(s) on [4]; check that the page shows them.",
+      "Pasted 1 file(s) on [4]; check that the page shows them.",
+    ]);
+  });
+
   it("switch_x_account switches through the account menu", async () => {
     const x = new FakeX({ account: "alice" });
     const { exec } = setup(x);
@@ -164,7 +177,7 @@ describe("createToolExecutor: plain tools", () => {
     expect((await exec.call("switch_x_account", { handle: "bob" })).text).toBe("Already on @bob.");
     const missing = await exec.call("switch_x_account", { handle: "dave" });
     expect(missing.isError).toBe(true);
-    expect(missing.text).toMatch(/@dave is not signed in in this browser.*Add an existing account.*task_pause/);
+    expect(missing.text).toMatch(/@dave is not signed in in this browser.*Add an existing account.*Only the user can sign in/);
   });
 
   it("task_* tools call onTaskEnd", async () => {
@@ -175,8 +188,8 @@ describe("createToolExecutor: plain tools", () => {
     await exec.call("task_pause", { reason: "2FA" });
     expect(ended).toEqual([
       { outcome: "done", summary: "posted", url: "https://x.com/a/status/1" },
-      { outcome: "failed", reason: "nope" },
-      { outcome: "paused", reason: "2FA" },
+      { outcome: "failed", reason: "nope", byAgent: true },
+      { outcome: "paused", reason: "2FA", byAgent: true },
     ]);
   });
 
@@ -187,8 +200,8 @@ describe("createToolExecutor: plain tools", () => {
     await exec.call("task_pause", { reason: "2FA", suggestion: "I've entered the code, go on" });
     expect(ended).toEqual([
       { outcome: "done", summary: "Summarized 4 unread emails", suggestion: "Reply to Jordan and say I'll sign by Thursday" },
-      { outcome: "failed", reason: "signed out", suggestion: "Try again after I sign in" },
-      { outcome: "paused", reason: "2FA", suggestion: "I've entered the code, go on" },
+      { outcome: "failed", reason: "signed out", byAgent: true, suggestion: "Try again after I sign in" },
+      { outcome: "paused", reason: "2FA", byAgent: true, suggestion: "I've entered the code, go on" },
     ]);
     const long = await exec.call("task_complete", { summary: "done", suggestion: "x".repeat(81) });
     expect(long.isError).toBe(true);
@@ -202,7 +215,7 @@ describe("createToolExecutor: plain tools", () => {
     await exec.call("task_pause", { reason: "2FA", spoken: "What's the code X sent you?" });
     expect(ended).toEqual([
       { outcome: "done", summary: "Summarized 4 unread emails", spoken: "You have four unread emails." },
-      { outcome: "paused", reason: "2FA", spoken: "What's the code X sent you?" },
+      { outcome: "paused", reason: "2FA", byAgent: true, spoken: "What's the code X sent you?" },
     ]);
   });
 
@@ -213,7 +226,7 @@ describe("createToolExecutor: plain tools", () => {
     await exec.call("task_pause", { reason: "Send it?", draft });
     expect(ended).toEqual([
       { outcome: "done", summary: "Drafted the refund email", draft },
-      { outcome: "paused", reason: "Send it?", draft },
+      { outcome: "paused", reason: "Send it?", byAgent: true, draft },
     ]);
   });
 
@@ -782,5 +795,50 @@ describe("createToolExecutor: the TODO tools", () => {
       expect(r.isError).toBe(true);
       expect(r.text).toMatch(/the TODO list belongs to a Noa chat/);
     }
+  });
+});
+
+describe("createToolExecutor: generate_image", () => {
+  const made = { path: "C:\\Users\\me\\Downloads\\Noa\\images\\store-icon.png", preview: { base64: FAKE_JPEG_B64, mimeType: "image/jpeg" }, size: "1024x1024", quality: "medium", chargedCents: 6.86 };
+  const imageBrowser = (x: FakeX, calls: unknown[]): BrowserCaller => ({
+    call: async (method, params) => {
+      if (method !== "media.generateImage") return x.caller().call(method, params);
+      calls.push(params);
+      return made as never;
+    },
+  });
+
+  it("asks the extension for the picture, shows it, and lets upload take its path", async () => {
+    const x = new FakeX();
+    const calls: unknown[] = [];
+    const { exec, events } = setup(x, { browser: imageBrowser(x, calls) });
+    const r = await exec.call("generate_image", { prompt: "A violet icon with the letter N", name: "store-icon", transparent: true });
+    expect(calls).toEqual([{ prompt: "A violet icon with the letter N", name: "store-icon", transparent: true }]);
+    expect(r.isError).toBeUndefined();
+    expect(r.text).toContain(made.path);
+    expect(r.text).toContain("$0.07");
+    expect(r.image).toEqual(made.preview);
+    // The chat shows the picture.
+    const result = events.find((e) => e.type === "tool_result" && e.name === "generate_image");
+    expect(result).toMatchObject({ thumbnail: FAKE_JPEG_B64 });
+    // Its file is one the agent may upload, though the task listed no media.
+    await exec.call("read_page", {});
+    const up = await exec.call("upload", { index: 3, paths: [made.path.toLowerCase()] });
+    expect(up.isError).toBeUndefined();
+    expect(x.calls.find((c) => c.method === "browser.upload")!.params).toEqual({ index: 3, paths: [made.path] });
+  });
+
+  it("says why when no picture could be made", async () => {
+    const x = new FakeX();
+    const browser: BrowserCaller = {
+      call: async (method, params) => {
+        if (method === "media.generateImage") throw new Error("You are out of Noa usage credit.");
+        return x.caller().call(method, params);
+      },
+    };
+    const { exec } = setup(x, { browser });
+    const r = await exec.call("generate_image", { prompt: "a cat" });
+    expect(r).toEqual({ text: "generate_image failed: You are out of Noa usage credit.", isError: true });
+    expect((await exec.call("generate_image", { prompt: "a cat", size: "auto" })).text).toMatch(/Invalid arguments for generate_image: size/);
   });
 });

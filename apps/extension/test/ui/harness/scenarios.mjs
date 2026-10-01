@@ -126,7 +126,7 @@ export function scenario(kind) {
     maxConsecutiveFailures: 3, retryAfterMinutes: 10, intervalMinutes: 15,
     delayMinSec: 60, delayMaxSec: 180, maxToolCalls: 60, maxTaskMinutes: 10, maxParallelTasks: 2, jevEnabled: true, jevThreshold: 0.8,
     pauseRetryMinutes: 15, accountApiBase: "https://app.noa.bot",
-    voiceEngine: "realtime", speechVoice: "", speechRate: 1, realtimeVoice: "marin", realtimeSpeed: 1, realtimeCostNoticed: true, voiceSounds: true, showControlOverlay: true,
+    voiceEngine: "realtime", speechVoice: "", speechRate: 1, realtimeVoice: "marin", realtimeSpeed: 1, realtimeCostNoticed: true, voiceSounds: true, notificationVoice: "same", deepgramVoice: "thalia", deepgramSpeed: 1, showControlOverlay: true, imageGeneration: true, imageModel: "gpt-image-2",
     automationLevel: "ask_consequential", scheduledAutomation: "full_within_task",
     memoryPaused: false, memoryKindsOff: [], reasoning: "fast", reasoningAutoRaise: true,
   };
@@ -157,7 +157,6 @@ export function scenario(kind) {
   let tasksSource;
   /** The account's list came back locked (a plan without the TODO list). */
   let tasksLocked = false;
-  let keys = [];
   if (kind === "loggedout" || kind === "loggedout-noclient") {
     state.account = { signedIn: false, signInConfigured: kind === "loggedout", apiBase: API, dashboardUrl: `${API}/`, billingUrl: `${API}/billing` };
     state.running = null;
@@ -183,10 +182,6 @@ export function scenario(kind) {
   }
   if (kind === "opt-paid") {
     state.account = { ...state.account, plan: PLUS, credit: money(1540, 1000, 2000) };
-    keys = [
-      { id: "k1", name: "laptop chrome", role: "runner", createdAt: iso(-60 * 24 * 12), revokedAt: null },
-      { id: "k2", name: "weekly scheduler script", role: "creator", createdAt: iso(-60 * 24 * 3), revokedAt: null },
-    ];
   }
   if (kind === "opt-out") state.account = { ...state.account, plan: FREE, credit: money(0, 0), outOfCredit: true };
   // A paid plan whose usage credit ran out (runs paused on a 402).
@@ -836,5 +831,5 @@ No hashtags, no emoji.`;
   // Log In in the stub signs in as a subscriber (the TODO tab then shows the list).
   // The Raw view: a two-turn voice conversation with its timing trace (raw-scenario.mjs).
   const traces = kind === "raw" ? { [rawSessionId]: rawScenario({ state, sessions, eventsBySession }) } : {};
-  return { state, tasks, seriesRows, tasksSource, tasksLocked, signInPlan: PLUS, keys, events, sessions, eventsBySession, traces, shortcut, voiceShortcut, pastEvents: events.slice(0, 6).map((e) => ({ ...e, sessionId: "s-2" })) };
+  return { state, tasks, seriesRows, tasksSource, tasksLocked, signInPlan: PLUS, events, sessions, eventsBySession, traces, shortcut, voiceShortcut, pastEvents: events.slice(0, 6).map((e) => ({ ...e, sessionId: "s-2" })) };
 }

@@ -39,6 +39,24 @@ export interface DialogAnswerSeen {
 export type DialogChange = { tabId: number; dialog: JsDialog } & ({ state: "open" } | { state: "closed"; answer: DialogAnswerSeen | null });
 
 /**
+ * How Cdp reaches a tab's DevTools protocol: chrome.debugger in Chrome (chromeDebugger), or the
+ * browser's own CDP pipe inside Noa Browser (noa-browser/host-debugger.ts). Errors read like
+ * chrome.debugger's, so restricted.ts classifies both the same way. Events (the dialog events handleEvent
+ * reads) come from chrome.debugger.onEvent, or from the tab bridge inside Noa Browser.
+ */
+export interface DebuggerTransport {
+  attach(tabId: number): Promise<void>;
+  detach(tabId: number): Promise<void>;
+  sendCommand(tabId: number, method: string, params?: Record<string, unknown>): Promise<unknown>;
+}
+
+export const chromeDebugger: DebuggerTransport = {
+  attach: (tabId) => chrome.debugger.attach({ tabId }, "1.3"),
+  detach: (tabId) => chrome.debugger.detach({ tabId }),
+  sendCommand: (tabId, method, params) => chrome.debugger.sendCommand({ tabId }, method, params),
+};
+
+/**
  * chrome.debugger wrapper for the agent's tabs. Several tabs can be attached at
  * once (a run may read many tabs without activating them); `send` targets the
  * current tab (the last one passed to attach()), `sendTo` any tab. A tab is
@@ -64,6 +82,8 @@ export class Cdp {
   private readonly dialogListeners = new Set<(change: DialogChange) => void>();
   /** Called when the user cancels debugging from Chrome's infobar. */
   onUserCancel: (() => void) | null = null;
+
+  constructor(private readonly transport: DebuggerTransport = chromeDebugger) {}
 
   /** The current tab, when the debugger is attached to it. */
   get attachedTabId(): number | null {
@@ -95,18 +115,18 @@ export class Cdp {
 
   private async attachRaw(tabId: number): Promise<void> {
     try {
-      await chrome.debugger.attach({ tabId }, "1.3");
+      await this.transport.attach(tabId);
     } catch (err) {
       // Left over from a previous service worker lifetime: detach and retry once.
       if (!/already attached/i.test(errorMessage(err))) throw err;
-      await chrome.debugger.detach({ tabId }).catch(() => {});
-      await chrome.debugger.attach({ tabId }, "1.3");
+      await this.transport.detach(tabId).catch(() => {});
+      await this.transport.attach(tabId);
     }
     this.attached.add(tabId);
     // Let pages behave as focused even when the tab is in the background.
-    await chrome.debugger.sendCommand({ tabId }, "Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => {});
+    await this.transport.sendCommand(tabId, "Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => {});
     // Its JavaScript dialogs (Page.javascriptDialogOpening / Closed, see handleEvent).
-    await chrome.debugger.sendCommand({ tabId }, "Page.enable").catch(() => {});
+    await this.transport.sendCommand(tabId, "Page.enable").catch(() => {});
   }
 
   /** A command on the current tab. */
@@ -126,12 +146,12 @@ export class Cdp {
       await this.ensure(tabId);
       if (!duringDialog) this.assertNoDialog(tabId);
       try {
-        const sent = chrome.debugger.sendCommand({ tabId }, method, params) as Promise<T>;
+        const sent = this.transport.sendCommand(tabId, method, params) as Promise<T>;
         return duringDialog ? await sent : await this.failOnDialog([tabId], sent);
       } catch (err) {
         if (attempt >= NOT_ACTIVE_RETRIES.tries || !NOT_ACTIVE_PAGE.test(errorMessage(err))) throw err;
         this.attached.delete(tabId);
-        await chrome.debugger.detach({ tabId }).catch(() => {});
+        await this.transport.detach(tabId).catch(() => {});
         await delay(NOT_ACTIVE_RETRIES.waitMs);
       }
     }
@@ -178,7 +198,7 @@ export class Cdp {
     return () => void this.dialogListeners.delete(listener);
   }
 
-  /** chrome.debugger.onEvent handler: keeps each tab's open dialog. */
+  /** chrome.debugger.onEvent handler (and the tab bridge's events in Noa Browser): keeps each tab's open dialog. */
   handleEvent(source: { tabId?: number }, method: string, params?: unknown): void {
     const tabId = source.tabId;
     if (tabId === undefined) return;
@@ -200,7 +220,7 @@ export class Cdp {
     if (tabId === null) return;
     const was = this.attached.delete(tabId);
     this.closeDialog(tabId, null);
-    if (was || tabId === this.tabId) await chrome.debugger.detach({ tabId }).catch(() => {});
+    if (was || tabId === this.tabId) await this.transport.detach(tabId).catch(() => {});
   }
 
   /** chrome.debugger.onDetach handler. */

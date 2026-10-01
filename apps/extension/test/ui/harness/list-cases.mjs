@@ -344,7 +344,7 @@ export const LIST_CASES = [
       const sent = await p.evaluate(() => window.__requests.filter((r) => r.type === "approval.answer"));
       if (sent.length !== 1 || sent[0].sessionId !== "s-paused" || sent[0].id !== "ap-p" || sent[0].answer !== "allow_once") fail(`paused: Alt+Y sent ${JSON.stringify(sent)}`);
       const after = await p.evaluate(() => ({ head: document.querySelector("#chat-log .ev-approval .appr-head").textContent, buttons: document.querySelectorAll("#chat-log .ev-approval button").length }));
-      if (after.head !== "Allowed once" || after.buttons) fail(`paused: after Allow ${JSON.stringify(after)}`);
+      if (after.head !== "Allowed" || after.buttons) fail(`paused: after Allow ${JSON.stringify(after)}`);
       await checkLayout(p, `paused allowed ${label}`);
       await shoot(p, "panel-approval-paused-allowed", size, scheme);
       reportErrors(p, `paused ${label}`);
@@ -418,7 +418,9 @@ export const LIST_CASES = [
   },
   // The two views: Home (Needs you, Running, Upcoming cut to its soonest 3 with "All scheduled (N) →", Recent) and
   // Scheduled (every scheduled job, soonest first, paused last, each with Pause or Resume), switched by a segmented
-  // control beside the search (a tablist: Left and Right); the search filters the view shown; the panel keeps the view.
+  // control in the header beside "Noa" (a tablist: Left and Right), with the Noa folder button before the avatar; the
+  // search under it, the whole width, filters the view shown; the panel keeps the view, and a tab picked on a job's
+  // page goes back to the list in that view.
   {
     names: ["panel-home", "panel-scheduled", "panel-scheduled-search"],
     async run({ ctx, size, scheme, label, fail, groups, openPanel, openJob, backToList, shoot, checkLayout, reportErrors }) {
@@ -427,16 +429,23 @@ export const LIST_CASES = [
         const tabs = [...document.querySelectorAll("#job-views [role=tab]")];
         const search = document.getElementById("job-search").getBoundingClientRect();
         const seg = document.getElementById("job-views").getBoundingClientRect();
+        const brand = document.getElementById("brand").getBoundingClientRect();
+        const folder = document.getElementById("open-folder").getBoundingClientRect();
+        const acct = document.querySelector("#list-head #acct").getBoundingClientRect();
+        const mid = (r) => (r.top + r.bottom) / 2;
         return {
+          inHead: !!document.querySelector("#list-head #job-views") && !!document.querySelector("#list-head #open-folder"),
+          headLine: [seg, folder, acct].every((r) => Math.abs(mid(r) - mid(brand)) <= 2),
+          order: brand.right <= seg.left && seg.right <= folder.left && folder.right <= acct.left,
           role: document.getElementById("job-views").getAttribute("role"),
           tabs: tabs.map((t) => [t.textContent, t.getAttribute("aria-selected"), t.tabIndex]),
           panel: document.getElementById("job-groups").getAttribute("aria-labelledby"),
           searchWidth: Math.round(search.width),
-          sameLine: Math.abs((search.top + search.bottom) / 2 - (seg.top + seg.bottom) / 2) <= 2,
+          searchBelow: search.top >= seg.bottom,
         };
       });
       if (bar.role !== "tablist" || JSON.stringify(bar.tabs) !== JSON.stringify([["Home", "true", 0], ["Scheduled", "false", -1]]) || bar.panel !== "view-home") fail(`views: the switch ${JSON.stringify(bar)}`);
-      if (!bar.sameLine || bar.searchWidth < (size.w <= 360 ? 150 : 250)) fail(`views: the bar ${JSON.stringify(bar)}`);
+      if (!bar.inHead || !bar.headLine || !bar.order || !bar.searchBelow || bar.searchWidth < size.w - 40) fail(`views: the header ${JSON.stringify(bar)}`);
 
       // Home: every group; Upcoming its soonest 3 and the way to the rest; the job paused by the user is not here, the
       // one paused after failures needs the user.
@@ -501,6 +510,17 @@ export const LIST_CASES = [
       await backToList(p);
       const kept = await p.evaluate(() => ({ sel: document.getElementById("view-scheduled").getAttribute("aria-selected"), stored: sessionStorage.getItem("noa.jobs.view") }));
       if (kept.sel !== "true" || kept.stored !== "scheduled") fail(`views: kept ${JSON.stringify(kept)}`);
+
+      // On a job's page the header's tabs go back to the list, in the view picked.
+      await openJob(p, "task:t9");
+      await p.click("#view-home");
+      await p.waitForSelector("#view-list:not([hidden])");
+      const picked = await p.evaluate(() => ({ job: !document.getElementById("view-job").hidden, home: document.getElementById("view-home").getAttribute("aria-selected") }));
+      if (picked.job || picked.home !== "true") fail(`views: a tab on a job's page ${JSON.stringify(picked)}`);
+
+      // The folder button asks the background to open the Noa folder.
+      await p.click("#open-folder");
+      await p.waitForFunction(() => window.__requests.some((r) => r.type === "folder.open"));
       reportErrors(p, `views ${label}`);
       await p.close();
     },

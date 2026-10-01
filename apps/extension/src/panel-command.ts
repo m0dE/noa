@@ -43,7 +43,7 @@
  * side panel cannot open without a focused Chrome window anyway.
  */
 
-import type { VoiceEngineId } from "@noa/shared";
+import { VoiceEngineId } from "@noa/shared";
 import { OPEN_CHAT_COMMAND, VOICE_COMMAND } from "./shortcut.js";
 import type { VoiceSessionInfo } from "./voice-session.js";
 
@@ -152,7 +152,7 @@ export class PanelCommands {
       } else if (msg?.type === "panel.listening" && typeof msg.listening === "boolean") {
         if (msg.listening && !info.listening) info.since = ++this.reports;
         info.listening = msg.listening;
-        info.engine = msg.listening && (msg.engine === "realtime" || msg.engine === "standard") ? msg.engine : null;
+        info.engine = msg.listening && VoiceEngineId.safeParse(msg.engine).success ? (msg.engine as VoiceEngineId) : null;
         info.muted = msg.listening && msg.muted === true;
         this.setVoiceTab(info, msg.listening && typeof msg.tabId === "number" ? msg.tabId : null);
       } else if (msg?.type === "panel.voiceStop") {

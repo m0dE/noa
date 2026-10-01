@@ -23,11 +23,12 @@ import type {
 import type { TraceBook } from "./trace/trace-book.js";
 import type { MemorySyncStatus } from "./memory/sync.js";
 import type { RealtimeTicketResult, VoiceEnginesResult } from "./voice/realtime-access.js";
+import type { VoiceSpeakResult } from "./voice/deepgram-speaker.js";
 import type { VoiceClipRequest, VoiceTranscribeResult } from "./voice/transcribe.js";
 import type { VoiceSessionView } from "./voice-session.js";
-import type { ApiKeyInfo, CreatedApiKey, CreditInfo, KeyRole, PlanId, PlanInfo } from "./account/types.js";
+import type { CreditInfo, PlanId, PlanInfo } from "./account/types.js";
 
-export type { ApiKeyInfo, CreatedApiKey, CreditInfo, KeyRole, PlanId, PlanInfo };
+export type { CreditInfo, PlanId, PlanInfo };
 
 export const UI_PORT_NAME = "noa-ui";
 /** The options page's port: state pushes only (it is not a side panel). */
@@ -167,6 +168,8 @@ export interface UiState {
   tabChats?: Record<string, string>;
   /** The tabs each running session acts in right now (session id -> tab ids, the one it acts on now first). */
   runningTabs?: Record<string, number[]>;
+  /** The tabs each chat's agent opened and keeps open while no turn of it runs (session id -> tab ids). */
+  chatTabs?: Record<string, number[]>;
   /** Conversations with an action waiting for the user's OK (an approval card): listed under Needs you. Absent: none. */
   awaitingApproval?: string[];
   /** What the user cleared from the jobs list (job key -> dismissal; job-dismissals.ts). Absent: nothing. */
@@ -254,6 +257,8 @@ export type UiRequest =
   | { type: "chat.undoTaskChange"; sessionId: string; changeId: string }
   /** Undo on a "Remembered" note: that memory change is undone (the entry is as it was before), and the note says so. */
   | { type: "memory.undo"; sessionId: string; changeId: string }
+  /** Redo on an undone memory note: the change is made again (the entry is as it was after it), and the note says so. */
+  | { type: "memory.redo"; sessionId: string; changeId: string }
   /** Memory on or off for one conversation (the composer's menu). */
   | { type: "chat.setMemory"; sessionId: string; on: boolean }
   /** Settings > Memory: every entry the agent keeps. */
@@ -280,6 +285,8 @@ export type UiRequest =
   | { type: "tab.focus"; tabId: number }
   /** Bring the agent's tab to the front: the session's, or the first agent tab. */
   | { type: "agent.show"; sessionId?: string }
+  /** Open the user's Noa folder (Downloads/Noa) in the system's file manager, creating it first. */
+  | { type: "folder.open" }
   /** Type into a running agent session (default: the one started last). */
   | { type: "run.say"; text: string; sessionId?: string }
   /** Try again to pause the account's jobs for the old pause of every scheduled run (UiState.pauseMigration). */
@@ -315,9 +322,6 @@ export type UiRequest =
   | { type: "account.migrate" }
   /** "Not now" on the offer to move local tasks. */
   | { type: "account.dismissMigration" }
-  | { type: "account.keys.list" }
-  | { type: "account.keys.create"; name: string; role: KeyRole }
-  | { type: "account.keys.revoke"; id: string }
   /** Newest first; taskId: only that task's runs. Chats still titled with their request get a title in the background. */
   | { type: "sessions.list"; limit?: number; taskId?: string }
   /** The user's name for a chat (the job's Rename): kept, never replaced by the title model. */
@@ -338,7 +342,12 @@ export type UiRequest =
   /** Hands-free voice: the engines and what a minute of each costs (the account server's list). */
   | { type: "voice.engines" }
   /** Realtime voice: where to connect and the token to offer (sessionId: the chat, recorded with the usage). */
-  | { type: "voice.realtime"; sessionId?: string }
+  /** tier "mini": the realtime-mini engine (the server's smaller model). */
+  | { type: "voice.realtime"; sessionId?: string; tier?: "mini" }
+  /** A sample notification, heard as Settings say (notify.ts). */
+  | { type: "notify.test" }
+  /** Deepgram's voice: `text` said in `voice` (MP3, base64), with the signed-in account. */
+  | { type: "voice.speak"; text: string; voice: string; sessionId?: string }
   /** Hands-free voice said a line in this conversation: kept in its thread (a "spoken" event). */
   | { type: "voice.spoken"; sessionId: string; text: string }
   /** What the user said in Realtime hands-free voice that led to no request, word for word: kept for the record (a "heard" event). */
@@ -378,6 +387,7 @@ export interface UiResults {
   "chat.undoScheduled": { ok: boolean };
   "chat.undoTaskChange": { ok: boolean };
   "memory.undo": { ok: boolean };
+  "memory.redo": { ok: boolean };
   "chat.setMemory": { session: SessionInfo };
   /** sync: whether memory syncs with the account (absent: this build has no sync). */
   "memory.list": { entries: MemoryEntry[]; sync?: MemorySyncStatus };
@@ -396,6 +406,8 @@ export interface UiResults {
   "approval.answer": { ok: boolean };
   "tab.focus": { ok: boolean };
   "agent.show": { ok: boolean };
+  /** path: the folder's absolute path. */
+  "folder.open": { path: string };
   "run.say": { ok: boolean };
   "pause.migrate": UiState;
   /** source: the signed-in account's tasks, or this browser's (signed out). */
@@ -416,10 +428,6 @@ export interface UiResults {
   "account.refresh": UiState;
   "account.migrate": { moved: number; failed: number; errors: string[]; state: UiState };
   "account.dismissMigration": UiState;
-  "account.keys.list": { keys: ApiKeyInfo[] };
-  /** key: the new key, shown once. */
-  "account.keys.create": CreatedApiKey;
-  "account.keys.revoke": { ok: boolean };
   "sessions.list": { sessions: SessionInfo[] };
   "session.rename": { session: SessionInfo };
   "session.delete": { ok: boolean };
@@ -436,6 +444,8 @@ export interface UiResults {
   "voice.transcribe": VoiceTranscribeResult;
   "voice.engines": VoiceEnginesResult;
   "voice.realtime": RealtimeTicketResult;
+  "voice.speak": VoiceSpeakResult;
+  "notify.test": { ok: true };
   "voice.spoken": { ok: boolean };
   "voice.heard": { ok: boolean };
   "trace.add": { ok: boolean };

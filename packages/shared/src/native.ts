@@ -27,6 +27,8 @@ export interface RunConfig {
   reasoning?: ReasoningLevel;
   /** Fast: raise reasoning when the run gets stuck (absent: true). */
   reasoningAutoRaise?: boolean;
+  /** Offer generate_image (the imageGeneration setting; absent: true). */
+  imageGeneration?: boolean;
   /**
    * True when an earlier attempt of this task may have crashed after acting.
    * The agent must first check whether the work was already done (for posts:
@@ -59,8 +61,9 @@ export interface AgentTask {
   timeZone?: string;
   /**
    * What the automation level asks of the agent (automationPromptLine, e.g.
-   * "Approvals: actions that publish, send, pay ... wait for the user's OK").
-   * Absent: nothing waits (full autonomy).
+   * "Approvals: actions that publish, send, pay ... wait for the user's OK"),
+   * then the language the user picked to be answered in (languagePromptLine).
+   * Absent: nothing waits (full autonomy) and no language was picked.
    */
   approvals?: string;
   /**
@@ -89,6 +92,11 @@ export interface TaskRunResult {
   summary?: string;
   url?: string;
   reason?: string;
+  /**
+   * The reason is the agent's own words (task_fail / task_pause), written for the user: shown and said
+   * as it is, never read as one of Noa's errors. Whatever puts its own reason in place of the agent's drops it.
+   */
+  byAgent?: true;
   /** The agent's proposed next request for the user (task_* `suggestion`), offered faded in the chat's input box. */
   suggestion?: string;
   /** The outcome in one or two spoken sentences (task_* `spoken`), read aloud in hands-free voice. */

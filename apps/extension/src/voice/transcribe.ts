@@ -68,6 +68,8 @@ export interface VoiceClipRequest {
   context?: string;
   /** The chat the dictation is for (ties the usage to it). */
   sessionId?: string;
+  /** The language picked in Settings (ISO 639-1); absent: the model detects it. */
+  language?: string;
 }
 
 /** The background's answer: the text, or the failure as data. */
@@ -75,7 +77,7 @@ export type VoiceTranscribeResult = { text: string } | { error: VoiceErrorInfo }
 
 /** What the background needs of the account (AccountService.transcribe). */
 export interface VoiceAccount {
-  transcribe(wav: Uint8Array, opts: { speechMs?: number; context?: string; sessionId?: string }): Promise<{ text: string }>;
+  transcribe(wav: Uint8Array, opts: { speechMs?: number; context?: string; sessionId?: string; language?: string }): Promise<{ text: string }>;
 }
 
 /** Background: transcribes one clip with the signed-in account. */
@@ -86,6 +88,7 @@ export async function transcribeForPanel(account: VoiceAccount | undefined, req:
       speechMs: req.speechMs,
       ...(req.context ? { context: req.context } : {}),
       ...(req.sessionId ? { sessionId: req.sessionId } : {}),
+      ...(req.language ? { language: req.language } : {}),
     });
     return { text };
   } catch (err) {
@@ -93,16 +96,24 @@ export async function transcribeForPanel(account: VoiceAccount | undefined, req:
   }
 }
 
-/** Panel: a TranscribeClip for Dictation that asks the background. Rejects with VoiceError. */
+/** Panel: a TranscribeClip for Dictation that asks the background. Rejects with VoiceError. `language`: the one picked in Settings. */
 export function panelTranscriber(
   send: (req: VoiceClipRequest) => Promise<VoiceTranscribeResult>,
   sessionId: () => string | undefined = () => undefined,
+  language: () => string | null | undefined = () => undefined,
 ): TranscribeClip {
   return async (wav, req) => {
     const id = sessionId();
+    const lang = language();
     let res: VoiceTranscribeResult;
     try {
-      res = await send({ wav: bytesToBase64(wav), speechMs: req.speechMs, ...(req.context ? { context: req.context } : {}), ...(id ? { sessionId: id } : {}) });
+      res = await send({
+        wav: bytesToBase64(wav),
+        speechMs: req.speechMs,
+        ...(req.context ? { context: req.context } : {}),
+        ...(id ? { sessionId: id } : {}),
+        ...(lang ? { language: lang } : {}),
+      });
     } catch (err) {
       throw toVoiceError(err); // the background is restarting: like a network blip
     }

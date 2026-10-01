@@ -357,9 +357,6 @@ describe("UiRouter: account", () => {
       refresh: vi.fn(async (_force?: boolean) => {}),
       migrateLocalTasks: vi.fn(async () => ({ moved: 2, failed: 0, errors: [] })),
       dismissMigration: vi.fn(async () => {}),
-      listKeys: vi.fn(async () => []),
-      createKey: vi.fn(async (name: string, role: string) => ({ id: "k1", name, role, key: "bt_new" })),
-      revokeKey: vi.fn(async (_id: string) => {}),
       transcribe: vi.fn(async (wav: Uint8Array, _opts: unknown) => ({ text: `heard ${wav.length} bytes` })),
       voiceEngines: vi.fn(async () => ({ engines: [], default: "standard" as const })),
       realtimeSession: vi.fn(async () => {
@@ -432,14 +429,11 @@ describe("UiRouter: account", () => {
     expect((await t.sessions.eventsOf("S1")).map((e) => (e.type === "error" ? e.text : e.type))).toEqual([SCHEDULE_PLAN_REQUIRED, SCHEDULE_SIGN_IN]);
   });
 
-  it("migrate and keys; no billing request (plans are bought on the dashboard)", async () => {
+  it("migrate; no billing request (plans are bought on the dashboard)", async () => {
     const t = withAccount(true);
     const m = await t.req({ type: "account.migrate" });
     expect(m).toMatchObject({ moved: 2, failed: 0, state: { account: { signedIn: true } } });
     expect(await t.router.handle({ type: "account.billing", action: "topup", amountCents: 1000, returnUrl: "chrome-extension://x/options.html" } as never)).toMatchObject({ ok: false });
-    expect(await t.req({ type: "account.keys.create", name: " cli ", role: "creator" })).toEqual({ id: "k1", name: "cli", role: "creator", key: "bt_new" });
-    expect(await t.router.handle({ type: "account.keys.create", name: "", role: "creator" })).toEqual({ ok: false, error: "Give the key a name" });
-    expect(await t.req({ type: "account.keys.revoke", id: "k1" })).toEqual({ ok: true });
   });
 
   it("without accounts wired in, account requests fail plainly", async () => {

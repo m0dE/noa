@@ -85,6 +85,18 @@ describe("a failed turn shows its error once", () => {
     expect(end).toMatchObject({ kind: "end", text: "", retry: true, error: { message: "Local Claude Code isn't connected." } });
   });
 
+  it("the agent's own pause reason reads as it wrote it, even when its words sound like one of Noa's errors (Sep 30)", () => {
+    // task_pause after switch_x_account: this was shown as "You're not logged in." with a Log in button.
+    const reason =
+      "@rooftopchat is not signed in on this browser's X account menu (it currently shows @indiedotfun, @mecharoyalecom, @arrrfun, @strafefun), so switch_x_account cannot switch to it.";
+    const end = describeEvent({ type: "task_end", outcome: "paused", reason, byAgent: true });
+    expect(end).toMatchObject({ kind: "end", text: reason });
+    expect(end).not.toHaveProperty("error");
+    expect(end).not.toHaveProperty("fixable");
+    // The same words from Noa itself are still its sign-in error.
+    expect(describeEvent({ type: "task_end", outcome: "failed", reason: "Not signed in: sign in to use Noa AI" })).toMatchObject({ error: { message: "You're not logged in." } });
+  });
+
   it("the agent's own reason, or an earlier turn's error, reads as before", () => {
     expect(describeEvent({ type: "task_end", outcome: "failed", reason: "LinkedIn asked for a captcha" })).toMatchObject({ text: "LinkedIn asked for a captcha" });
     const events: AgentEvent[] = [...failedTurn, { type: "user_message", text: "again" }, { type: "task_end", outcome: "done", summary: "Summarized" }];

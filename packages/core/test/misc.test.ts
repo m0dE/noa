@@ -201,7 +201,7 @@ describe("switchXAccount", () => {
     expect(x.calls[1]).toEqual({ method: "browser.navigate", params: { url: "https://x.com/home" } });
     const r = await switchXAccount(new FakeX({ hasSwitcher: false }).caller(), "bob", { sleep: noSleep });
     expect(r.isError).toBe(true);
-    expect(r.text).toMatch(/step 1 failed.*SideNav_AccountSwitcher_Button/);
+    expect(r.text).toMatch(/did not switch to @bob: the account switcher button.*SideNav_AccountSwitcher_Button/);
   });
 
   it("lets the page wait for the account menu to show its accounts, and reads nothing in between", async () => {

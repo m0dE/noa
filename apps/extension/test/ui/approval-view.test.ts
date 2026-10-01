@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent, ApprovalRequest } from "@noa/shared";
-import { approvalEnding, approvalView, PAUSED_BUTTONS } from "../../src/sidepanel/approval-view.js";
+import { APPROVAL_ALLOW_ALL_NOTE, APPROVAL_BUTTONS, approvalEnding, approvalView, PAUSED_BUTTONS } from "../../src/sidepanel/approval-view.js";
 
 const request: ApprovalRequest = { id: "a1", action: 'Click "Post" as @acme', site: "x.com", why: "publishes", kind: "publish", text: "Shipped", expiresAt: "2026-09-28T09:00:00.000Z" };
 const ask: Extract<AgentEvent, { type: "approval_request" }> = { type: "approval_request", request };
@@ -23,5 +23,17 @@ describe("approval card view", () => {
       ["allow_once", "Allow & continue"],
       ["deny", "Don't"],
     ]);
+  });
+
+  it("the buttons say in plain words what each one allows", () => {
+    expect(APPROVAL_BUTTONS.map((b) => [b.answer, b.label])).toEqual([
+      ["allow_once", "Allow"],
+      ["allow_task", "Allow all until done"],
+      ["deny", "Deny"],
+    ]);
+    expect(APPROVAL_BUTTONS.every((b) => b.hint)).toBe(true);
+    expect(APPROVAL_ALLOW_ALL_NOTE).toMatch(/won't ask again until it finishes/);
+    expect(approvalView(ask, { outcome: "allow_task" })).toMatchObject({ outcome: "Allowed all until done" });
+    expect(approvalView(ask, { outcome: "allow_once" })).toMatchObject({ outcome: "Allowed" });
   });
 });

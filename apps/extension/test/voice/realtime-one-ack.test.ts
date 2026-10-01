@@ -8,6 +8,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { ExtensionSettings, StampedAgentEvent, VoiceEnginesResponse } from "@noa/shared";
 import { initHandsFree, type HandsFreeDeps } from "../../src/sidepanel/hands-free.js";
 import type { RealtimeSocketLike } from "../../src/voice/realtime-client.js";
+import { SENT_OUTPUT } from "../../src/voice/realtime-client.js";
 import { RealtimeEngine } from "../../src/voice/realtime-engine.js";
 import type { AudioSource } from "../../src/voice/dictation.js";
 import { installMiniDom, MiniElement } from "../ui/mini-dom.js";
@@ -114,7 +115,7 @@ async function panel() {
           });
           return socket;
         },
-        player: { play: () => {}, stop: () => null, close: () => {}, playing: false },
+        player: { play: () => {}, stop: () => null, close: () => {}, playing: false, pause: () => false, resume: () => {}, level: () => 0 },
       }),
     stopTask: async () => "",
     answerApproval: async () => true,
@@ -221,7 +222,7 @@ describe("the acknowledgement cannot start more work, and a request passed on tw
     expect(t.deps.send).toHaveBeenCalledTimes(1);
     expect(t.socket.creates()).toHaveLength(1);
     const [first, second] = t.socket.outputs();
-    expect(first).toBe("Started. Your updates on it will follow.");
+    expect(first).toBe(SENT_OUTPUT);
     expect(second).toMatch(/already/i);
   });
 
@@ -263,8 +264,9 @@ describe("a reply cut off is never kept as said (the trace's stray 'Said aloud: 
     s.event({ type: "response.done", response: { id: "r_noise", status: "cancelled", output: [] } });
     t.hf.onEvent(stamped({ type: "task_end", outcome: "done", summary: "x", spoken: "The second email asks you to add a privacy policy." }));
     await settle(50);
-    // The result is asked for once, and is what is shown; the cut reply never was.
-    expect(s.creates()).toEqual([{ type: "response.create" }]);
+    // The result is asked for once, word for word, and is what is shown; the cut reply never was.
+    expect(s.creates()).toHaveLength(1);
+    expect(s.creates()[0]!.response.instructions).toContain("«The second email asks you to add a privacy policy.»");
     expect([...shown, ...kept].filter((l) => l.includes("I don't have"))).toEqual([]);
     expect(shown.at(-1)).toBe("The second email asks for a privacy policy.");
   });
@@ -287,10 +289,10 @@ describe("a result waiting for the floor while the user's next request goes out 
   it("the earlier turn's result is let go once the reply holding the floor passed a new request on: only the new turn's answer is said", async () => {
     const t = await panel();
     const said: string[] = [];
-    // The narrator says the result of the latest update it was given.
+    // The narrator says the line it was asked to say (lineResponse).
     t.socket.ourReply = (s, id, n) => {
-      const notes = s.sent.filter((e) => e.item?.role === "system").map((e) => String(e.item.content[0].text));
-      speaks(notes.at(-1)?.includes(TURN5) ? TURN5 : TURN4)(s, id, n);
+      const asked = String(s.creates().at(-1)?.response?.instructions ?? "");
+      speaks(asked.includes(TURN5) ? TURN5 : TURN4)(s, id, n);
     };
     // Each line as it is said (shown playing in the chat).
     t.deps.onSpeaking = (line) => void (line && !said.includes(line.text) && said.push(line.text));
@@ -329,7 +331,7 @@ describe("a result waiting for the floor while the user's next request goes out 
     expect({ replies: s.creates().length, said }).toEqual({ replies: 1, said: [TURN5] });
   });
 
-  it("a question for the user waiting then (an approval) is still asked: only news is let go", async () => {
+  it("an approval waiting then is let go too: the user's new message ends it (the runner's interruptApprovals), so it is not asked", async () => {
     const t = await panel();
     t.hf.setRunning(["s-old"]);
     await settle();
@@ -346,6 +348,6 @@ describe("a result waiting for the floor while the user's next request goes out 
     await settle();
     s.event({ type: "response.done", response: { id: "r_B", status: "completed", output: [] } });
     await settle(50);
-    expect(s.creates()).toEqual([{ type: "response.create" }]);
+    expect(s.creates()).toEqual([]);
   });
 });

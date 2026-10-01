@@ -1,19 +1,22 @@
 /**
  * Options page: the Account tab (sign-in, plan and credit, the one billing
- * button, sign out) and the API keys tab. Buying happens on the dashboard's
+ * button, sign out). API keys are managed on the dashboard. Buying happens on the dashboard's
  * Billing page only: the billing buttons open it in a new tab (ui/billing.ts),
  * and coming back refreshes the plan and credit. When the server has no
  * billing, a plain note replaces the button.
  */
-import { API_KEY_LIMITS, API_KEY_ROLE_LABELS, apiKeyRoleLabel, OUT_OF_CREDIT } from "@noa/shared";
+import { OUT_OF_CREDIT } from "@noa/shared";
 import { SIGN_IN_NOT_SET_UP } from "../account/google-auth.js";
-import type { KeyRole } from "../account/types.js";
 import { showAvatar } from "../ui/avatar.js";
 import { openBilling, openDashboard, refreshOnReturn } from "../ui/billing.js";
-import { $, busy, flash, h, showError } from "../ui/dom.js";
+import { $, busy, showError } from "../ui/dom.js";
 import { signIn, SIGNED_OUT } from "../ui/sign-in.js";
-import { uiRequest, type AccountView, type ApiKeyInfo, type UiState } from "../ui-protocol.js";
-import { accountSummary, dateLabel, keysLockedText } from "./account-view.js";
+import { uiRequest, type AccountView, type UiState } from "../ui-protocol.js";
+import { accountSummary, dateLabel } from "./account-view.js";
+import { bookmarkSyncNote } from "./bookmark-sync-view.js";
+
+/** chrome.storage.local key of the bookmark sync state (bookmarks/sync.ts BOOKMARK_SYNC_KEY). */
+const BOOKMARK_SYNC_KEY = "bookmarkSync";
 
 export const BILLING_NOT_SET_UP_NOTE = "Billing isn't set up on this server yet, so plans and top-ups can't be bought here.";
 
@@ -28,7 +31,6 @@ export interface AccountSection {
 export function initAccountSection(opts: { onState(state: UiState): void }): AccountSection {
   let account: AccountView = SIGNED_OUT;
   const msg = $("acct-msg");
-  const keysMsg = $("keys-msg");
 
   async function refresh(force = false): Promise<void> {
     try {
@@ -42,25 +44,43 @@ export function initAccountSection(opts: { onState(state: UiState): void }): Acc
   // Back from the dashboard: the plan and credit may have changed.
   refreshOnReturn(() => void refresh(true));
 
-  // Sign in / out (also from the AI tab's "Log in to use Noa AI" and the API keys tab).
+  // Sign in / out (also from the AI tab's "Log in to use Noa AI").
   const signInWith = (button: HTMLButtonElement, note: HTMLElement): void => signIn(button, note, account, opts.onState);
   const signInBtn = $<HTMLButtonElement>("acct-signin");
   signInBtn.addEventListener("click", () => signInWith(signInBtn, $("acct-signin-msg")));
-  const keysSignIn = $<HTMLButtonElement>("keys-signin");
-  keysSignIn.addEventListener("click", () => signInWith(keysSignIn, $("keys-signin-msg")));
   const signOut = $<HTMLButtonElement>("acct-signout");
   signOut.addEventListener("click", () => void busy(signOut, async () => opts.onState(await uiRequest({ type: "account.signOut" })), msg));
   const reload = $<HTMLButtonElement>("acct-reload");
   reload.addEventListener("click", () => void busy(reload, () => refresh(true), msg));
-  const billingButtons = [$<HTMLButtonElement>("acct-billing-open"), $<HTMLButtonElement>("keys-billing-open")];
-  for (const b of billingButtons) b.addEventListener("click", billing);
+  const billingButton = $<HTMLButtonElement>("acct-billing-open");
+  billingButton.addEventListener("click", billing);
   $("acct-dashboard").addEventListener("click", () => void openDashboard(account).catch((err: unknown) => showError(msg, err)));
+
+  // Noa Browser only (its copy of Noa has chrome.bookmarks): the bookmark sync switch, and how the last sync went.
+  const bookmarkSwitch = $<HTMLInputElement>("f-bookmarkSync");
+  let bookmarkSyncOn = false;
+  const drawBookmarkNote = async (): Promise<void> => {
+    const stored = (await chrome.storage.local.get(BOOKMARK_SYNC_KEY))[BOOKMARK_SYNC_KEY] as { lastSyncAt?: string; lastError?: string } | undefined;
+    $("bookmark-sync-note").textContent = bookmarkSyncNote(bookmarkSyncOn, stored);
+  };
+  if (chrome.bookmarks) {
+    $("bookmark-sync-box").hidden = false;
+    bookmarkSwitch.addEventListener("change", () => {
+      void uiRequest({ type: "settings.save", settings: { bookmarkSync: bookmarkSwitch.checked } }).then(opts.onState, (err: unknown) => {
+        bookmarkSwitch.checked = !bookmarkSwitch.checked;
+        showError(msg, err);
+      });
+    });
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "local" && changes[BOOKMARK_SYNC_KEY]) void drawBookmarkNote();
+    });
+  }
 
   function renderAccount(a: AccountView): void {
     $("acct-out").hidden = a.signedIn;
     $("acct-in").hidden = !a.signedIn;
     signOut.hidden = !a.signedIn;
-    for (const b of [signInBtn, keysSignIn]) b.title = a.signInConfigured ? "" : SIGN_IN_NOT_SET_UP;
+    signInBtn.title = a.signInConfigured ? "" : SIGN_IN_NOT_SET_UP;
     if (!a.signedIn || !a.user) return;
     const u = a.user;
     $("acct-name").textContent = u.name || u.email;
@@ -88,94 +108,10 @@ export function initAccountSection(opts: { onState(state: UiState): void }): Acc
     note.dataset.tone = a.error || sum.outOfCredit ? "warn" : "";
 
     // The billing button only when the server can take payments (unknown: shown).
-    $("acct-billing").hidden = $("keys-billing").hidden = sum.billing === "not-set-up";
-    for (const b of billingButtons) b.textContent = sum.billingLabel;
+    $("acct-billing").hidden = sum.billing === "not-set-up";
+    billingButton.textContent = sum.billingLabel;
     $("acct-dashboard").hidden = !a.dashboardUrl;
     if (a.fetchedAt) reload.title = `Loaded ${dateLabel(a.fetchedAt)}; load plan and credit again`;
-  }
-
-  // API keys
-  const keysList = $("keys-list");
-  const keyName = $<HTMLInputElement>("key-name");
-  const keyRole = $<HTMLSelectElement>("key-role");
-  const create = $<HTMLButtonElement>("key-create");
-  let keysLoadedFor = "";
-  keyRole.replaceChildren(...Object.entries(API_KEY_ROLE_LABELS).map(([role, r]) => h("option", { value: role, title: r.hint }, r.label)));
-  $("keys-rate").textContent = String(API_KEY_LIMITS.requestsPerMinute);
-  $("keys-locked-text").textContent = keysLockedText();
-
-  async function loadKeys(): Promise<void> {
-    try {
-      const { keys } = await uiRequest({ type: "account.keys.list" });
-      renderKeys(keys);
-    } catch (err) {
-      showError(keysMsg, err);
-    }
-  }
-
-  function renderKeys(keys: ApiKeyInfo[]): void {
-    const live = keys.filter((k) => !k.revokedAt);
-    keysList.replaceChildren(
-      ...(live.length
-        ? live.map((k) => {
-            const revoke = h("button.small.danger", { type: "button" }, "Revoke");
-            revoke.addEventListener("click", () =>
-              void busy(
-                revoke,
-                async () => {
-                  await uiRequest({ type: "account.keys.revoke", id: k.id });
-                  flash(keysMsg, `Revoked ${k.name}.`, "ok");
-                  await loadKeys();
-                },
-                keysMsg,
-              ),
-            );
-            return h("li", null, h("span.key-name", { title: k.name }, k.name), h("span.chip", null, apiKeyRoleLabel(k.role)), h("span.muted", null, dateLabel(k.createdAt)), revoke);
-          })
-        : [h("li.empty", null, "No keys yet.")]),
-    );
-  }
-
-  create.addEventListener("click", () =>
-    void busy(
-      create,
-      async () => {
-        const name = keyName.value.trim();
-        if (!name) return flash(keysMsg, "Give the key a name.", "bad");
-        const k = await uiRequest({ type: "account.keys.create", name, role: keyRole.value as KeyRole });
-        keyName.value = "";
-        $("key-value").textContent = k.key;
-        $("key-new").hidden = false;
-        flash(keysMsg, "");
-        await loadKeys();
-      },
-      keysMsg,
-    ),
-  );
-  const copy = $<HTMLButtonElement>("key-copy");
-  copy.addEventListener("click", () =>
-    void navigator.clipboard.writeText($("key-value").textContent ?? "").then(
-      () => flash(keysMsg, "Copied.", "ok"),
-      () => flash(keysMsg, "Could not copy; select the key and copy it by hand.", "bad"),
-    ),
-  );
-
-  /** Signed out: Log in. A plan without keys: what they come with, and the billing button. Else the keys. */
-  function renderKeysTab(a: AccountView): void {
-    const allowed = a.signedIn && accountSummary(a).keysAllowed;
-    $("keys-out").hidden = a.signedIn;
-    $("keys-locked").hidden = !a.signedIn || allowed;
-    $("keys-body").hidden = !allowed;
-    if (!allowed) {
-      keysLoadedFor = "";
-      $("key-new").hidden = true;
-      return;
-    }
-    const who = a.user?.email ?? "";
-    if (keysLoadedFor !== who) {
-      keysLoadedFor = who;
-      void loadKeys();
-    }
   }
 
   return {
@@ -183,8 +119,12 @@ export function initAccountSection(opts: { onState(state: UiState): void }): Acc
     openBilling: billing,
     render(state) {
       account = state.account ?? SIGNED_OUT;
+      if (chrome.bookmarks) {
+        bookmarkSyncOn = state.settings.bookmarkSync;
+        bookmarkSwitch.checked = bookmarkSyncOn;
+        void drawBookmarkNote();
+      }
       renderAccount(account);
-      renderKeysTab(account);
     },
   };
 }

@@ -1,7 +1,7 @@
 /**
  * The Noa account in the background: the Google sign-in, the
  * session token (chrome.storage.local), the cached profile, plan and credit,
- * the out-of-credit flag, API keys, and moving local tasks into the account
+ * the out-of-credit flag, and moving local tasks into the account
  * after the first sign-in. Plans and top-ups are bought on the dashboard
  * (see dashboard.ts), never from here.
  *
@@ -9,7 +9,7 @@
  * URL setting changes, the extension is signed out of it. An earlier default
  * address of the same server (currentAccountApiBase) is not a change.
  */
-import { currentAccountApiBase, errorMessage, type ExtensionSettings, type MeBillingResponse, type TranscribeResponse, type VoiceEnginesResponse } from "@noa/shared";
+import { type CloudFolder, currentAccountApiBase, errorMessage, type ExtensionSettings, type GenerateImageRequest, type GenerateImageResponse, type MeBillingResponse, type SignInCodeResponse, type SpeakRequest, type TranscribeResponse, type VoiceEnginesResponse } from "@noa/shared";
 import { ApiClient } from "../api-client.js";
 import type { StorageLike } from "../engine/kv.js";
 import type { StoredLocalTask } from "../engine/local-task-rules.js";
@@ -17,10 +17,10 @@ import { ApiRequestError, NotSignedInError } from "../http-client.js";
 import { callSafely } from "../listeners.js";
 import type { AccountView } from "../ui-protocol.js";
 import { AccountApi } from "./account-api.js";
-import { dashboardUrl } from "./dashboard.js";
+import { dashboardUrl, isAccountServerOrigin } from "./dashboard.js";
 import { googleIdToken, SIGN_IN_NOT_SET_UP, SignInError } from "./google-auth.js";
 import { accountTaskInput } from "./todo-source.js";
-import { isPaidActive, todoAllowed, type ApiKeyInfo, type CreatedApiKey, type CreditInfo, type KeyRole, type Me, type PlanInfo } from "./types.js";
+import { isPaidActive, todoAllowed, type CreditInfo, type Me, type PlanInfo } from "./types.js";
 
 export const ACCOUNT_KEY = "account";
 /** Profile and credit are refetched when older than this (or on demand). */
@@ -83,6 +83,8 @@ export interface AccountServiceDeps {
   now?(): Date;
   /** The IANA time zone repeats run in (default: the browser's). */
   timeZone?(): string;
+  /** This browser's runner id: the tasks moved in run here (Task.runnerId). */
+  runnerId?(): Promise<string>;
   onChange?(): void;
   log?(message: string): void;
 }
@@ -206,8 +208,29 @@ export class AccountService {
   }
 
   /** Voice input: a WAV clip to text (POST /v1/ai/transcribe). Throws NotSignedInError or ApiRequestError. */
-  async transcribe(wav: Uint8Array, opts: { speechMs?: number; context?: string; sessionId?: string } = {}): Promise<TranscribeResponse> {
+  async transcribe(wav: Uint8Array, opts: { speechMs?: number; context?: string; sessionId?: string; language?: string } = {}): Promise<TranscribeResponse> {
     return (await this.api()).transcribe(wav, opts);
+  }
+
+  /** Deepgram's voice: `text` said in `voice`, MP3 bytes (POST /v1/ai/speak). Throws NotSignedInError or ApiRequestError. */
+  async speak(req: SpeakRequest, opts: { sessionId?: string } = {}): Promise<Uint8Array> {
+    return (await this.api()).speak(req, opts);
+  }
+
+  /** A picture from a description (POST /v1/ai/images). Throws NotSignedInError or ApiRequestError. */
+  async generateImage(req: GenerateImageRequest, opts: { sessionId?: string } = {}): Promise<GenerateImageResponse> {
+    return (await this.api()).generateImage(req, opts);
+  }
+
+  /**
+   * Keeps a copy of a file in the account's cloud files (POST /v1/files). False, sending nothing, when signed out or
+   * the plan has no cloud files. Throws ApiRequestError (e.g. 413 when they are full).
+   */
+  async keepInCloud(blob: Blob, filename: string, folder: CloudFolder = ""): Promise<boolean> {
+    await this.load();
+    if (!this.todoAllowed()) return false;
+    await (await this.api()).uploadFile(blob, filename, folder);
+    return true;
   }
 
   /** Hands-free voice: the engines and their prices (public; the account server's answer). */
@@ -294,6 +317,23 @@ export class AccountService {
     await this.store({});
   }
 
+  /**
+   * A one-time code that signs the account server's dashboard in to this account (dashboard-sign-in.ts), or null:
+   * signed out (a session the server no longer accepts signs out here too), or `pageOrigin` is not the origin of the
+   * server that issued the session (only that server's dashboard may have a code for it).
+   */
+  async dashboardSignInCode(pageOrigin: string): Promise<SignInCodeResponse | null> {
+    await this.load();
+    const s = this.session();
+    if (!s || !isAccountServerOrigin(pageOrigin, s.apiBase)) return null;
+    try {
+      return await this.apiFor(s).signInCode();
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.status === 401) return null;
+      throw err;
+    }
+  }
+
   /** Refetches profile, plan, credit and billing (at most once a minute unless forced). */
   async refresh(force = false): Promise<void> {
     await this.load();
@@ -351,18 +391,6 @@ export class AccountService {
     await this.store(next);
   }
 
-  async listKeys(): Promise<ApiKeyInfo[]> {
-    return (await this.api()).listKeys();
-  }
-
-  async createKey(name: string, role: KeyRole): Promise<CreatedApiKey> {
-    return (await this.api()).createKey(name, role);
-  }
-
-  async revokeKey(id: string): Promise<void> {
-    await (await this.api()).revokeKey(id);
-  }
-
   /** "Not now" on moving local tasks. Asked again after the next sign-in. */
   async dismissMigration(): Promise<void> {
     await this.load();
@@ -376,12 +404,13 @@ export class AccountService {
   async migrateLocalTasks(): Promise<MigrationResult> {
     const api = await this.api();
     const tz = this.deps.timeZone?.() ?? browserTimeZone();
+    const runnerId = await this.deps.runnerId?.();
     const tasks = (await this.deps.localTasks.list()).filter(movable);
     const result: MigrationResult = { moved: 0, failed: 0, errors: [] };
     for (const t of tasks) {
       try {
         const files = await this.deps.localTasks.getMedia(t.mediaIds);
-        await api.createTask(await accountTaskInput(api, t, files, tz));
+        await api.createTask(await accountTaskInput(api, t, files, tz, runnerId));
         await this.deps.localTasks.delete(t.id);
         result.moved++;
       } catch (err) {

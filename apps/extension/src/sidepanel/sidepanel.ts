@@ -13,7 +13,7 @@
  * the list when the job on screen was the tab's that was left (it belongs there, and the box would go on with it);
  * a job the user opened that belongs to no tab stays (the "Working in … · View" row says where it runs).
  */
-import { errorMessage, FILES_WHILE_RUNNING, type SessionInfo, type VoiceEngineId, type VoiceEnginesResponse } from "@noa/shared";
+import { chosenLanguage, deepgramSpeaks, DEFAULT_DEEPGRAM_VOICE, errorMessage, FILES_WHILE_RUNNING, isRealtimeEngine, type SessionInfo, type VoiceEngineId, type VoiceEnginesResponse } from "@noa/shared";
 import { SIGN_IN_NOT_SET_UP } from "../account/google-auth.js";
 import { isStale, uiRequest, type UiAttachmentUpload, type UiPush, type UiState } from "../ui-protocol.js";
 import { initChat } from "./chat.js";
@@ -45,7 +45,9 @@ import { MicSource } from "../voice/recorder.js";
 import { REALTIME_SAMPLE_RATE } from "../voice/realtime-client.js";
 import { RealtimeEngine } from "../voice/realtime-engine.js";
 import { voiceLanguages } from "../voice/voice-language.js";
+import { localizeLine } from "../voice/phrases.js";
 import { Speaker } from "../voice/speaker.js";
+import { DeepgramSpeaker } from "../voice/deepgram-speaker.js";
 import { StandardEngine } from "../voice/standard-engine.js";
 import { panelTranscriber, VoiceError } from "../voice/transcribe.js";
 import { initHandsFree, type SendExtra } from "./hands-free.js";
@@ -71,6 +73,8 @@ let activeTab: number | null = null;
 let pending: { tab: number; sessionId: string } | null = null;
 /** The active tab's own chat as last seen (undefined: no state yet); when it becomes another one, its job shows. */
 let ownSeen: string | null | undefined;
+/** The job the active tab shows that is not its own chat (a run there, an agent's tab), as last seen (see applyState). */
+let runSeen: string | null = null;
 
 const nav = new JobNav(storedView(sessionStorage));
 const data = new JobData(uiRequest, (err) => console.warn(`[noa] jobs not loaded: ${errorMessage(err)}`));
@@ -156,6 +160,7 @@ function setActive(tab: number | null, quiet = false): void {
   const s = state ?? {};
   if (state) ownSeen = ownChatOfTab(tab, state, { pending });
   const shown = chatInTab(tab, s, { pending });
+  runSeen = shown === ownSeen ? null : shown;
   if (!quiet) {
     const onJob = nav.view.kind === "job" ? page.sessionId() : null;
     if (shown) showJob(keyOfSession(shown));
@@ -198,6 +203,7 @@ const micAccess = browserMicAccessDeps();
 const transcribe = panelTranscriber(
   (clip) => uiRequest({ type: "voice.transcribe", ...clip }),
   () => composer.target()?.sessionId,
+  () => chosenLanguage(state?.settings.language)?.code,
 );
 /**
  * A hands-free session is on (in tab `tabId`, on `engine`): the voice shortcut then reaches this panel, wherever the
@@ -280,6 +286,8 @@ const handsFree = initHandsFree({
   },
   goToTab: (tabId) => void goToTab(tabId).catch((err: unknown) => composer.showError(err)),
   onSpeaking: (line) => chat.setSpeaking(line),
+  // Noa's own lines (progress, approvals) in the language picked in Settings; the agent writes its own in it.
+  localize: (text) => localizeLine(text, chosenLanguage(state?.settings.language)?.code),
   keepSpoken: (sessionId, text) =>
     void uiRequest({ type: "voice.spoken", sessionId, text }).catch((err: unknown) => console.warn(`[noa] keeping a spoken line failed: ${errorMessage(err)}`)),
   keepHeard: (sessionId, text) =>
@@ -294,30 +302,51 @@ const handsFree = initHandsFree({
   createEngine: (id, events, opts) => {
     // Standard chosen in Settings skips the engine list: its model (for the trace) is asked for here.
     if (id === "standard" && !voiceModels.standard && state?.account?.signedIn) void loadVoiceModels();
-    return id === "realtime"
+    const language = chosenLanguage(state?.settings.language);
+    const browserSpeaker = new Speaker(() => ({
+      voice: state?.settings.speechVoice ?? "",
+      rate: state?.settings.speechRate ?? 1,
+      ...(language ? { lang: language.tag } : {}),
+    }));
+    return isRealtimeEngine(id)
       ? new RealtimeEngine({
+          id,
           ticket: async () => {
             const sessionId = handsFree.chat();
-            const r = await uiRequest({ type: "voice.realtime", ...(sessionId ? { sessionId } : {}) });
+            const r = await uiRequest({ type: "voice.realtime", ...(sessionId ? { sessionId } : {}), ...(id === "realtime-mini" ? { tier: "mini" as const } : {}) });
             if ("error" in r) throw new VoiceError(r.error);
             return r;
           },
           createSource: () => new MicSource(undefined, REALTIME_SAMPLE_RATE),
           events,
           ...(state ? { voice: { voice: state.settings.realtimeVoice, speed: state.settings.realtimeSpeed } } : {}),
-          // The browser's languages (Chrome's settings): the transcription's hint, and what counts as the user's.
-          languages: voiceLanguages(navigator.languages),
+          // The language picked in Settings, then the browser's (Chrome's settings): the transcription's hint, and what counts as the user's.
+          languages: voiceLanguages(navigator.languages, language?.code),
+          ...(language ? { language: language.name } : {}),
           log: (m) => console.info(`[noa] ${m}`),
           trace: panelTrace,
           ...(opts?.takeover ? { takeover: true } : {}),
         })
       : new StandardEngine({
+          id,
           createSource: () => new MicSource(),
           transcribe,
-          speaker: new Speaker(() => ({ voice: state?.settings.speechVoice ?? "", rate: state?.settings.speechRate ?? 1 })),
+          // Deepgram's Aura voices speak English only: in another language the browser's voice says the lines.
+          speaker:
+            id === "deepgram" && deepgramSpeaks(language)
+              ? new DeepgramSpeaker({
+                  settings: () => ({ voice: state?.settings.deepgramVoice ?? DEFAULT_DEEPGRAM_VOICE, speed: state?.settings.deepgramSpeed ?? 1 }),
+                  fetch: (text, voice) => {
+                    const sessionId = handsFree.chat();
+                    return uiRequest({ type: "voice.speak", text, voice, ...(sessionId ? { sessionId } : {}) });
+                  },
+                  onError: (err) => console.warn(`[noa] Deepgram voice failed, the browser's voice says it: ${err.message}`),
+                  fallback: browserSpeaker,
+                })
+              : browserSpeaker,
           events,
           trace: panelTrace,
-          model: () => voiceModels.standard,
+          model: () => voiceModels[id],
         });
   },
   answerApproval: async (sessionId, id, answer) => (await uiRequest({ type: "approval.answer", sessionId, id, answer, by: "voice" })).ok,
@@ -369,7 +398,11 @@ const chat = initChat({
       ...(model ? { model } : {}),
       ...(voiceModels.realtime ? { realtimeModel: voiceModels.realtime } : {}),
       ...(voiceModels.standard ? { standardModel: voiceModels.standard } : {}),
-      ...(engine === "realtime" ? { voice: settings.realtimeVoice, speed: settings.realtimeSpeed } : { voice: settings.speechVoice || "browser default", speed: settings.speechRate }),
+      ...(isRealtimeEngine(engine)
+        ? { voice: settings.realtimeVoice, speed: settings.realtimeSpeed }
+        : engine === "deepgram"
+          ? { voice: settings.deepgramVoice, speed: settings.deepgramSpeed }
+          : { voice: settings.speechVoice || "browser default", speed: settings.speechRate }),
     };
   },
 });
@@ -422,6 +455,9 @@ const list = initJobList(listView, {
     }
   },
   onView: (view) => storeView(sessionStorage, view),
+  onTab: () => {
+    if (nav.view.kind === "job") back(false);
+  },
   onShortcuts: () => void openShortcutSettings(),
 });
 const page = initJobPage({
@@ -604,6 +640,13 @@ function applyState(s: UiState): void {
     ownSeen = own;
     if (own && (!first || s.runningSessions.some((r) => r.sessionId === own))) showJob(keyOfSession(own));
   }
+  // A job came to the active tab that has no chat of its own (the agent opened it and the user switched there before
+  // the state said so): its job shows, unless the user left the list for another job.
+  const run = own ? null : chatInTab(activeTab, s, { pending });
+  if (run !== runSeen) {
+    runSeen = run;
+    if (run && nav.view.kind === "list") showJob(keyOfSession(run));
+  }
   if (nav.view.kind === "job") page.render();
 }
 
@@ -613,7 +656,8 @@ function onPush(msg: UiPush): void {
       applyState(msg.state);
       break;
     case "event":
-      chat.onEvent(msg.event);
+      // A trace event is for hands-free voice only (isMessageRead); it is never shown.
+      if (msg.event.type !== "trace") chat.onEvent(msg.event);
       handsFree.onEvent(msg.event);
       break;
     case "session":

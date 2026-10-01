@@ -1,23 +1,24 @@
 /**
- * Options page: a sidebar of sections for the account, API keys, the AI (brain, key, model,
- * helper, Jev, hands-free voice), permission and scheduling, tasks, site logins, memory and self-hosting. Settings save by
+ * Options page: a sidebar of sections for the account, the AI under its own tabs (source, key, model,
+ * helper, Jev, hands-free voice, image generation), permission and scheduling, tasks, site logins, memory and self-hosting. Settings save by
  * themselves as they change; keys save with their own Save button.
  * What shows when comes from settingsView() (settings-view.ts).
  */
 import { OPEN_CHAT_COMMAND, openShortcutSettings, readShortcut, VOICE_COMMAND, type ShortcutCommand } from "../shortcut.js";
-import { errorMessage, LONGEST_RUN_HINT, type BrainMode, type ExtensionSettings } from "@noa/shared";
+import { errorMessage, HELPER_INSTALL_URL, LONGEST_RUN_HINT, type BrainMode, type ExtensionSettings } from "@noa/shared";
 import { isStale, OPTIONS_PORT_NAME, uiRequest, type UiState } from "../ui-protocol.js";
 import { connectBackground } from "../sidepanel/port.js";
 import { createAccountMenu } from "../ui/account-menu.js";
 import { $, busy, closeMenusOnOutsideClick, find, flash, h } from "../ui/dom.js";
 import { initAccountSection } from "./account-section.js";
 import { initAutomationSection } from "./automation-section.js";
+import { initImagesSection } from "./images-section.js";
 import { initMemorySection } from "./memory-section.js";
 import { SaveQueue } from "./autosave.js";
 import { initSecretFields } from "./secret-field.js";
 import { initVaultSection } from "./vault-section.js";
 import { initVoiceSection } from "./voice-section.js";
-import { adjustedFields, buildSettingsPatch, helperStatus } from "./settings-patch.js";
+import { adjustedFields, buildSettingsPatch, helperInstallCommand, helperStatus } from "./settings-patch.js";
 import {
   BOOL_FIELDS,
   CUSTOM_MODEL,
@@ -35,6 +36,7 @@ import {
   type Tone,
 } from "./settings-view.js";
 import { initSidebar } from "./sidebar.js";
+import { initAiTabs } from "./ai-tabs.js";
 
 const LABELS: Partial<Record<keyof ExtensionSettings, string>> = {
   jevThreshold: "Jev threshold",
@@ -58,6 +60,7 @@ const saveMsg = $("save-msg");
 const modelSelect = $<HTMLSelectElement>("model-select");
 const reasoningSelect = $<HTMLSelectElement>("f-reasoning");
 const input = (key: string) => $<HTMLInputElement>(`f-${key}`);
+initAiTabs();
 initSidebar();
 
 let state: UiState | null = null;
@@ -261,6 +264,7 @@ function renderState(s: UiState): void {
   state = s;
   accountSection.render(s);
   voiceSection.render(s);
+  imagesSection.render(s);
   automationSection.render(s);
   memorySection.render(s);
   accountMenu.render(s.account);
@@ -307,6 +311,7 @@ const accountMenu = createAccountMenu({
 $("head-acct").replaceWith(accountMenu.el);
 closeMenusOnOutsideClick("details.menu");
 const voiceSection = initVoiceSection({ onState: (s) => applyState(s) });
+const imagesSection = initImagesSection({ onState: (s) => applyState(s) });
 const automationSection = initAutomationSection({ onState: (s) => applyState(s) });
 const memorySection = initMemorySection({ onState: (s) => applyState(s) });
 const hostedSignIn = $<HTMLButtonElement>("hosted-signin");
@@ -339,18 +344,58 @@ testButton("test-jev", "settings.testJev");
 
 const connectBtn = $<HTMLButtonElement>("helper-connect");
 const helperMsg = $("helper-msg");
-connectBtn.addEventListener("click", () =>
+function connectHelper(): void {
   void busy(
     connectBtn,
     async () => {
       flash(helperMsg, "Connecting… (the self-test can take up to a minute)");
       const s = await uiRequest({ type: "helper.connect" });
       renderState(s);
-      flash(helperMsg, s.brain.helper ? "" : s.brain.helperError || "Helper not found.", s.brain.helper ? "" : "bad");
+      // The headline already names the error; the message only adds what it does not say.
+      const error = s.brain.helper ? "" : s.brain.helperError || "Helper not found.";
+      flash(helperMsg, error === $("helper-headline").textContent ? "" : error, error ? "bad" : "");
     },
     helperMsg,
+  );
+}
+connectBtn.addEventListener("click", connectHelper);
+
+// Installing the helper: one Terminal command on macOS and Linux (it downloads the helper), the repo's
+// installer on Windows (the command is a shell script) or while the installer is not online (a 404 in
+// Terminal leaves people stuck, so the command shows only once the site answers for it).
+const onWindows = /Windows/.test(navigator.userAgent);
+const onMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
+if (!onMac) {
+  $("helper-open-terminal").textContent = "Open a terminal.";
+  $("helper-paste-key").textContent = "Ctrl+Shift+V";
+}
+$("helper-command").textContent = helperInstallCommand(chrome.runtime.id);
+function showInstallSteps(installerOnline: boolean): void {
+  const command = installerOnline && !onWindows;
+  $("helper-step-terminal").hidden = !command;
+  $("helper-step-command").hidden = !command;
+  $("helper-step-repo").hidden = command;
+  $("helper-repo-why").textContent = onWindows ? "" : "The one-step installer is not online yet.";
+}
+showInstallSteps(false);
+if (!onWindows) {
+  void fetch(HELPER_INSTALL_URL, { method: "HEAD", cache: "no-store" }).then(
+    (res) => showInstallSteps(res.ok),
+    () => showInstallSteps(false),
+  );
+}
+$("helper-copy").addEventListener("click", () =>
+  void navigator.clipboard.writeText($("helper-command").textContent ?? "").then(
+    () => {
+      flash(helperMsg, "Copied. Now paste it into Terminal and press Return.", "ok", { keep: true });
+    },
+    () => flash(helperMsg, "Could not copy; select the command and copy it by hand.", "bad"),
   ),
 );
+window.addEventListener("focus", () => {
+  // Back from Terminal: the install steps are showing, so try the helper again.
+  if (!$("helper-install").hidden && state && !state.brain.helper && !connectBtn.disabled) connectHelper();
+});
 
 async function main(): Promise<void> {
   try {

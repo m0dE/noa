@@ -1,7 +1,7 @@
 /**
  * The approval card in the chat: an action waiting for the user's OK (what,
- * where, why it waits, and the exact text it posts or sends) with Allow once,
- * Allow for this task and Deny, also on Alt+Y / Alt+T / Alt+N. A card its run
+ * where, why it waits, and the exact text it posts or sends) with Allow (just
+ * this one), Allow all until done (no more asking this turn) and Deny, also on Alt+Y / Alt+T / Alt+N. A card its run
  * paused at (nobody was there to answer) is decided in one click: Allow &
  * continue (Alt+Y) or Don't (Alt+N). Once answered (or timed out, or its turn
  * ended) it keeps one line saying how it ended. The view model is
@@ -10,7 +10,7 @@
 import { type ApprovalAnswer } from "@noa/shared";
 import { h } from "../ui/dom.js";
 import { clockLabel } from "./format.js";
-import { APPROVAL_BUTTONS, APPROVAL_KEYS, approvalKeyOf, PAUSED_BUTTONS, type ApprovalView } from "./approval-view.js";
+import { APPROVAL_ALLOW_ALL_NOTE, APPROVAL_BUTTONS, APPROVAL_KEYS, approvalKeyOf, PAUSED_BUTTONS, type ApprovalView } from "./approval-view.js";
 
 export interface ApprovalCardActions {
   /** Sends the answer (by: a button, or its key); false when the request no longer waits. */
@@ -52,9 +52,10 @@ export function renderApproval(v: ApprovalView, actions?: ApprovalCardActions): 
   );
   if (!pending || !actions) return card;
   const note = h("div.appr-note", { role: "status" }, v.decidable ? "The run stopped here: nobody was there to answer." : `No answer by ${clockLabel(v.expiresAt)} counts as Deny.`);
-  const buttons = (v.decidable ? PAUSED_BUTTONS : APPROVAL_BUTTONS).map(({ answer, label }) => {
+  const explain = v.decidable ? null : h("div.appr-note.appr-explain", null, APPROVAL_ALLOW_ALL_NOTE);
+  const buttons = (v.decidable ? PAUSED_BUTTONS : APPROVAL_BUTTONS).map(({ answer, label, hint }) => {
     const cls = answer === "allow_once" ? "button.small.primary" : answer === "deny" ? "button.small.danger" : "button.small";
-    const b = h(cls as "button", { type: "button", "data-answer": answer, title: `${label} (${APPROVAL_KEYS[answer].label})`, "aria-keyshortcuts": APPROVAL_KEYS[answer].label }, label);
+    const b = h(cls as "button", { type: "button", "data-answer": answer, title: `${hint ?? label} (${APPROVAL_KEYS[answer].label})`, "aria-keyshortcuts": APPROVAL_KEYS[answer].label }, label);
     b.addEventListener("click", () => {
       // bindApprovalKeys marks the click it makes for a key press.
       const by = b.dataset.by === "keyboard" ? "keyboard" : "card";
@@ -78,7 +79,7 @@ export function renderApproval(v: ApprovalView, actions?: ApprovalCardActions): 
       note.classList.add("bad");
     }
   }
-  card.append(h("div.appr-actions", null, ...buttons), note);
+  card.append(h("div.appr-actions", null, ...buttons), ...(explain ? [explain] : []), note);
   return card;
 }
 

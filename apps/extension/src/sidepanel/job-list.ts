@@ -38,6 +38,8 @@ export interface JobListDeps {
   onToggle(job: Job, to: "pause" | "resume"): Promise<void>;
   /** The view changed (the panel keeps it). */
   onView?(view: JobView): void;
+  /** A view's tab was picked (in the header, so also on a job's page: the panel goes back to the list first). */
+  onTab?(): void;
   /** "Set a keyboard shortcut" (chrome://extensions/shortcuts), when none is set. */
   onShortcuts(): void;
 }
@@ -130,7 +132,8 @@ function scheduleRowOf(job: Job, now: number): HTMLLIElement {
 export function initJobList(root: HTMLElement, deps: JobListDeps): JobList {
   const search = root.querySelector<HTMLInputElement>("#job-search")!;
   const groupsEl = root.querySelector<HTMLElement>("#job-groups")!;
-  const tabs = [...root.querySelectorAll<HTMLButtonElement>("#job-views [role=tab]")];
+  // In the header, outside the list.
+  const tabs = [...document.querySelectorAll<HTMLButtonElement>("#job-views [role=tab]")];
   let view: JobView = "home";
   let recentShown = RECENT_PAGE;
   let shortcuts: Shortcuts | undefined;
@@ -301,11 +304,15 @@ export function initJobList(root: HTMLElement, deps: JobListDeps): JobList {
     if (to === null) return;
     e.preventDefault();
     e.stopPropagation();
+    deps.onTab?.();
     setView(tabs[to]!.dataset.view as JobView, true);
   }
 
   for (const t of tabs) {
-    t.addEventListener("click", () => setView(t.dataset.view as JobView));
+    t.addEventListener("click", () => {
+      deps.onTab?.();
+      setView(t.dataset.view as JobView);
+    });
     t.addEventListener("keydown", tabKeys);
   }
   root.addEventListener("keydown", moveFocus);

@@ -94,6 +94,19 @@ describe("Runner: scheduling", () => {
     expect(h.notifications).toEqual([]);
   });
 
+  it("tells the user when a scheduled job starts in the background; not for runs they start themselves", async () => {
+    const h = harness();
+    const started: { title: string; seriesId: string }[] = [];
+    h.deps.onScheduledStart = (job) => void started.push({ title: job.title, seriesId: job.seriesId });
+    h.runner = new Runner(h.deps);
+    const tip = await h.store.add({ instructions: "post a tip\nsecond line", notBefore: new Date(env.clock).toISOString() });
+    await runAll(h);
+    expect(started).toEqual([{ title: "post a tip", seriesId: tip.id }]);
+    await h.runner.runAdhoc({ instructions: "x" });
+    await h.runner.idle();
+    expect(started).toHaveLength(1);
+  });
+
   it("starts nothing on the hosted AI while the account is out of usage credit, and runs again once it has credit", async () => {
     const h = harness();
     let noCredit = true;

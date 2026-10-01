@@ -13,6 +13,7 @@ import {
   dialogAnswerLabel,
   dialogLabel,
   errorMessage,
+  formatCents,
   isXSite,
   picksText,
   siteHost,
@@ -280,7 +281,11 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
           return err(`upload refused: ${bad.join(", ")} ${bad.length === 1 ? "is" : "are"} not in the task's media list. Allowed files:\n${allowed}`);
         }
         // The files exactly as the task listed them: the check above ignores case and slashes, a file system may not.
-        await browser("browser.upload", { index, paths: paths.map((p) => allowedMedia.get(pathKey(p))!) });
+        const r = await browser("browser.upload", { index, paths: paths.map((p) => allowedMedia.get(pathKey(p))!) });
+        // A drop or paste the page accepted may still have gone elsewhere (a page that takes drops anywhere).
+        if (r?.via === "drop" || r?.via === "paste") {
+          return { text: `${r.via === "drop" ? "Dropped" : "Pasted"} ${paths.length} file(s) on [${index}]; check that the page shows them.` };
+        }
         return { text: `Attached ${paths.length} file(s) to [${index}].` };
       }
       case "get_credential": {
@@ -299,6 +304,15 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
         }
         secrets.add(r.password);
         return { text: `username: ${r.username}\npassword: ${r.password}` };
+      }
+      case "generate_image": {
+        const r = await browser("media.generateImage", a as ToolArgsOf<"generate_image">);
+        // The new file is the agent's to upload, like the task's own media.
+        allowedMedia.set(pathKey(r.path), r.path);
+        return {
+          text: `Created the image (${r.size}, ${r.quality} quality, ${formatCents(r.chargedCents)}) and saved it in the user's Noa folder: ${r.path}\nThis is a smaller preview of it. To put it on a page, upload this path. Tell the user where it is saved.`,
+          image: r.preview,
+        };
       }
       case "wait_for": {
         const w = await runWaitFor(a as ToolArgsOf<"wait_for">, {
@@ -360,11 +374,11 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
       }
       case "task_fail": {
         const { reason, ...extras } = a as ToolArgsOf<"task_fail">;
-        return endTask(withExtras({ outcome: "failed", reason }, extras), "Task recorded as failed. Stop now.");
+        return endTask(withExtras({ outcome: "failed", reason, byAgent: true }, extras), "Task recorded as failed. Stop now.");
       }
       case "task_pause": {
         const { reason, ...extras } = a as ToolArgsOf<"task_pause">;
-        return endTask(withExtras({ outcome: "paused", reason }, extras), "Task paused for the human. Stop now.");
+        return endTask(withExtras({ outcome: "paused", reason, byAgent: true }, extras), "Task paused for the human. Stop now.");
       }
     }
   }
@@ -418,6 +432,8 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
       const text = name === "get_credential" && !result.isError ? "[credential redacted]" : (result.text ?? (result.image ? "[screenshot]" : undefined));
       if (text !== undefined) ev.text = clipEventText(text);
       if (result.isError) ev.isError = true;
+      // A picture the agent made is shown in the chat (screenshots are not: they would crowd it).
+      if (name === "generate_image" && result.image?.mimeType === "image/jpeg") ev.thumbnail = result.image.base64;
       emit(ev);
       trace?.(toolSpan(span, id, name, shownArgs, result, extra.trace));
       return result;

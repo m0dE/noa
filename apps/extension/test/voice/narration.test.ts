@@ -21,6 +21,66 @@ describe("Narration: the lines the Standard engine says while a task runs", () =
     );
   });
 
+  it("the opening text said as the plan is not said again by the turn's end (a real trace: a greeting said twice)", () => {
+    const n = new Narration();
+    n.push({ type: "user_message", text: "Hey, how are you doing?" }, 0);
+    expect(n.push({ type: "assistant_text", text: "I'm doing well, thanks for asking! Ready to help with whatever you need." }, 100)).toBe("I'm doing well, thanks for asking!");
+    expect(n.push(call("task_complete", { summary: "Replied to greeting" }), 900)).toBeNull();
+    expect(
+      n.push({ type: "task_end", outcome: "done", summary: "Replied to greeting", spoken: "I'm doing well, thanks for asking! What can I help you with?" }, 1000),
+    ).toBe("What can I help you with?");
+    // Nothing left that was not said: the end says nothing.
+    n.push({ type: "user_message", text: "hi" }, 2000);
+    expect(n.push({ type: "assistant_text", text: "Hi there!" }, 2100)).toBe("Hi there!");
+    expect(n.push({ type: "task_end", outcome: "done", spoken: "Hi there!" }, 2200)).toBeNull();
+    // The next turn says it again when asked: only this turn's lines count.
+    n.push({ type: "user_message", text: "say that one more time" }, 3000);
+    expect(n.push({ type: "task_end", outcome: "done", spoken: "Hi there! What can I help you with?" }, 3100)).toBe("Hi there! What can I help you with?");
+  });
+
+  it("real Claude Code greetings (2026-09-30): nothing said twice, in a turn or from the turn before", () => {
+    const n = new Narration();
+    const turn = (user: string, events: AgentEvent[]) => {
+      const said: string[] = [];
+      for (const ev of [{ type: "user_message", text: user } as AgentEvent, ...events]) {
+        const line = n.push(ev, 0);
+        if (line) said.push(line);
+      }
+      return said;
+    };
+    const text = (t: string): AgentEvent => ({ type: "assistant_text", text: t });
+    const end = (spoken: string): AgentEvent => ({ type: "task_end", outcome: "done", summary: "Replied", spoken });
+    expect(
+      turn("Hi! How's it going?", [
+        text("I'm doing well, thanks for asking! I'm ready to help whenever you need something from your inbox or elsewhere."),
+        end("I'm doing well, thanks for asking! Let me know what you'd like help with."),
+      ]),
+    ).toEqual(["I'm doing well, thanks for asking!", "Let me know what you'd like help with."]);
+    // The next turn opens with the last answer again: not said again (its next text is the opening).
+    expect(
+      turn("Good morning, how are you?", [
+        text("I'm doing well, thanks for asking! Let me know what you'd like help with next."),
+        text("Good morning! I'm doing great, thanks for asking — though it looks like it's actually evening for you (around 7:36 PM). Anything I can help with?"),
+        end("Good morning! I'm doing great. Just so you know, it's actually evening where you are, around 7:36 PM."),
+      ]),
+    ).toEqual(["Good morning!", "I'm doing great. Just so you know, it's actually evening where you are, around 7:36 PM."]);
+    expect(
+      turn("Hey there, you doing okay?", [
+        text("Good morning! I'm doing great, thanks for asking — though a heads up, it's actually about 7:36 PM for you right now, not morning. Anything I can help with?"),
+        text("Hey! Yes, I'm doing okay, thanks for checking in. Let me know if there's anything you'd like me to help with."),
+        end("Hey! Yes, I'm doing okay, thanks for checking in. Let me know if you need anything."),
+      ]),
+    ).toEqual(["Hey!", "Yes, I'm doing okay, thanks for checking in. Let me know if you need anything."]);
+    // The plan's words again at the start of the spoken line: only the rest.
+    expect(
+      turn("What's up?", [text("Not much! Just here, ready to help whenever you need something — whether it's checking your inbox or anything else."), end("Not much, just here and ready to help whenever you need something.")]),
+    ).toEqual(["Not much!", "Just here and ready to help whenever you need something."]);
+    // Asked to say it again: said again (the turn before does not count for its end).
+    expect(turn("Say that one more time.", [text("Not much! Just here and ready to help."), end("Not much, just here and ready to help whenever you need something.")])).toEqual([
+      "Not much, just here and ready to help whenever you need something.",
+    ]);
+  });
+
   it("a long opening text is not a plan: nothing is said for it", () => {
     const n = new Narration();
     expect(n.push({ type: "assistant_text", text: `Here is everything: ${"detail ".repeat(60)}` }, 0)).toBeNull();

@@ -1,4 +1,5 @@
 import type { JsDialog } from "./dialog.js";
+import type { ImageQuality, ImageSize } from "./images.js";
 import type { WaitCheck, WaitCheckParams } from "./wait.js";
 
 /**
@@ -160,7 +161,8 @@ export type BrowserMethods = {
     /** The report fields are missing when the driver could not measure (older drivers, fakes). */
     result: { ok: true } & Partial<ScrollReport>;
   };
-  "browser.upload": { params: { index: number; paths: string[] }; result: { ok: true } };
+  /** via: how the files were given (set on a file input, dropped on the element, pasted into it). Absent: file input. */
+  "browser.upload": { params: { index: number; paths: string[] }; result: { ok: true; via?: "input" | "drop" | "paste" } };
   /**
    * switch_x_account's pick in X's open account menu, and nothing else: the personal entry
    * ("Switch to @handle", testid UserCell) of exactly this handle, found and clicked in one synchronous
@@ -197,6 +199,15 @@ export type BrowserMethods = {
   "vault.getCredential": {
     params: { site: string };
     result: { found: false; locked?: boolean } | { found: true; username: string; password: string };
+  };
+  /**
+   * generate_image: a picture made from the description by the account's hosted AI (paid from its usage credit), saved
+   * as a PNG in the user's Noa folder (Downloads/Noa/images/<name>.png). path: that file, absolute. preview: a smaller
+   * JPEG of it for the model and the chat (the PNG itself can be larger than a native message may carry).
+   */
+  "media.generateImage": {
+    params: { prompt: string; name?: string; size?: ImageSize; quality?: ImageQuality; transparent?: boolean };
+    result: { path: string; preview: { base64: string; mimeType: string }; size: ImageSize; quality: ImageQuality; chargedCents: number };
   };
 }
 export type BrowserMethod = keyof BrowserMethods;

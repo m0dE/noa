@@ -6,7 +6,7 @@
  * (setBefore) and opens Raw (the conversation with its timings, raw-view.ts) in place of the log. Which conversation
  * that is comes from sidepanel.ts.
  */
-import { errorMessage, type SessionInfo, type StampedAgentEvent } from "@noa/shared";
+import { errorMessage, isMemoryUndone, type SessionInfo, type StampedAgentEvent } from "@noa/shared";
 import { isContinuableOutcome } from "../continue.js";
 import { uiRequest } from "../ui-protocol.js";
 import { $, h } from "../ui/dom.js";
@@ -106,15 +106,14 @@ function eventNode(
   if (e.type === "task_unscheduled" || e.type === "task_change_undone") return null;
   // An approval's ending changes its card (see refreshApprovals).
   if (e.type === "approval_resolved") return null;
-  // An undo changes its memory note (see markMemoryUndone).
-  if (e.type === "memory_undone") return null;
+  // An undo or redo changes its memory note (see markMemoryUndone).
+  if (e.type === "memory_undone" || e.type === "memory_redone") return null;
   // Words that led to no request are kept for the record (Raw), not shown.
   if (e.type === "heard") return null;
   const s = e.type === "task_end" && session?.sessionId === e.sessionId ? session : null;
   const canContinue = !!on.onContinue && e.type === "task_end" && isContinuableOutcome(e.outcome) && s?.source !== "cloud";
   const undone = (taskId: string) => events.some((x) => x.type === "task_unscheduled" && x.taskId === taskId);
   const changeUndone = (changeId: string) => events.some((x) => x.type === "task_change_undone" && x.changeId === changeId);
-  const memoryUndone = (changeId: string) => events.some((x) => x.type === "memory_undone" && x.changeId === changeId);
   const turn: TurnContext =
     e.type === "task_end"
       ? { error: turnError(events, i) }
@@ -127,7 +126,7 @@ function eventNode(
             : e.type === "approval_request"
               ? { approval: approvalEnding(events, e.request.id), decidable: !running && pausedRequest(events, e.request.id) !== null }
               : e.type === "memory"
-                ? { memoryUndone: memoryUndone(e.changeId) }
+                ? { memoryUndone: isMemoryUndone(events, e.changeId) }
                 : {};
   const view = describeEvent(e, turn);
   const el = renderEvent(view, canContinue ? () => on.onContinue?.(e.sessionId) : undefined, on.scheduled, on.approval, on.memory);
@@ -185,18 +184,21 @@ export function initChat(opts: ChatOptions = {}): ChatView {
     },
   };
 
-  /** Undo on memory notes (the note turns "undone" when its memory_undone arrives). */
+  /** Undo and Redo on memory notes (the note turns "undone" when its memory_undone arrives, and back on memory_redone). */
   const memoryActions: MemoryNoteActions = {
     undo: async (changeId) => {
       if (current) await uiRequest({ type: "memory.undo", sessionId: current.sessionId, changeId });
     },
+    redo: async (changeId) => {
+      if (current) await uiRequest({ type: "memory.redo", sessionId: current.sessionId, changeId });
+    },
   };
 
-  /** An undone memory change's note, wherever it is in the log, now says so. */
+  /** A memory change's note, wherever it is in the log, now says whether it is undone. */
   function markMemoryUndone(changeId: string): void {
     const ev = events.find((e) => e.type === "memory" && e.changeId === changeId);
     const note = [...log.querySelectorAll<HTMLElement>(".ev-memory")].find((c) => c.dataset.changeId === changeId);
-    if (ev?.type === "memory" && note) note.replaceWith(renderMemoryNote(memoryNoteView(ev, true)));
+    if (ev?.type === "memory" && note) note.replaceWith(renderMemoryNote(memoryNoteView(ev, isMemoryUndone(events, changeId)), memoryActions));
   }
 
   /** The answers of approval cards (the card changes when its approval_resolved arrives); Alt+Y / Alt+T / Alt+N too. */
@@ -434,7 +436,7 @@ export function initChat(opts: ChatOptions = {}): ChatView {
       refreshApprovals();
       return;
     }
-    if (ev.type === "memory_undone") {
+    if (ev.type === "memory_undone" || ev.type === "memory_redone") {
       markMemoryUndone(ev.changeId);
       return;
     }

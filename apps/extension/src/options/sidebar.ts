@@ -2,12 +2,13 @@
  * The options page's sidebar: one item per section (an icon tile and its
  * label), an accessible vertical tablist (arrow keys, Home / End), each
  * panel headed by its section's title. The open section is in location.hash
- * (options.html#ai opens AI; a group link such as #jev opens its section
- * scrolled to it; an old link such as #automation opens the section it moved
- * to) and, for a plain options.html, the section opened last in this browser.
+ * (options.html#ai opens AI; a group link such as #jev opens its section on
+ * the sub-tab that holds it (ai-tabs.ts), scrolled to it; an old link such as
+ * #automation opens the section it moved to) and, for a plain options.html, the section opened last in this browser.
  * On a narrow page the same list is a sideways-scrolling row (options.css).
  */
 import { $, h } from "../ui/dom.js";
+import { revealGroup } from "./ai-tabs.js";
 import { anchorFromHash, nextSection, SECTIONS, sectionFromHash, type SectionId } from "./settings-view.js";
 
 /** The stored key predates the sidebar (it was the tab row); kept so the last section is still remembered. */
@@ -18,7 +19,6 @@ type Tone = "accent" | "sky" | "violet" | "warn" | "ok" | "teal" | "pink" | "sla
 /** Each section's icon (16 × 16, stroked) and the colour of its tile (options.css .side-icon[data-tone]). */
 const ICONS: Record<SectionId, { tone: Tone; paths: string }> = {
   account: { tone: "accent", paths: '<circle cx="8" cy="5.5" r="2.75"/><path d="M2.75 13.75c.8-2.5 2.8-3.75 5.25-3.75s4.45 1.25 5.25 3.75"/>' },
-  keys: { tone: "sky", paths: '<circle cx="5.25" cy="10.75" r="2.75"/><path d="m7.2 8.8 5.8-5.8M11 5l1.75 1.75M9.5 6.5l1.25 1.25"/>' },
   ai: { tone: "violet", paths: '<path d="M8 2.25 9.3 6.7l4.45 1.3-4.45 1.3L8 13.75 6.7 9.3 2.25 8l4.45-1.3z"/>' },
   permission: { tone: "warn", paths: '<path d="M8 1.75 13 3.75v4c0 3.1-2.1 5.4-5 6.5-2.9-1.1-5-3.4-5-6.5v-4z"/><path d="m5.75 8 1.6 1.6 2.9-3.1"/>' },
   tasks: { tone: "ok", paths: '<rect x="2.25" y="2.25" width="11.5" height="11.5" rx="2.5"/><path d="m5.25 8.1 1.9 1.9 3.6-3.9"/>' },
@@ -110,13 +110,13 @@ export function initSidebar(): Sidebar {
     const anchor = anchorFromHash(location.hash);
     const id = sectionFromHash(location.hash);
     if (id && id !== current) show(id);
-    if (anchor) document.getElementById(anchor)?.scrollIntoView({ block: "start" });
+    if (anchor) revealGroup(anchor);
   }
   window.addEventListener("hashchange", showHash);
 
   const anchor = anchorFromHash(location.hash);
   current = sectionFromHash(location.hash) ?? readLast() ?? SECTIONS[0].id;
   show(current);
-  if (anchor) requestAnimationFrame(() => document.getElementById(anchor)?.scrollIntoView({ block: "start" }));
+  if (anchor) requestAnimationFrame(() => revealGroup(anchor));
   return { current: () => current, show };
 }

@@ -425,16 +425,25 @@ export const MEMORY_PANEL_CASES = [
       await checkLayout(p, `memory ${label}`);
       await shoot(p, "panel-memory", size, scheme);
 
-      // Undo: the change is undone (the background pushes memory_undone) and the note says so, without a button.
+      // Undo: the change is undone (the background pushes memory_undone) and the note says so, with Redo.
       await p.click("#chat-log .ev-memory .mem-undo");
       await p.waitForSelector("#chat-log .ev-memory.undone");
       const sent = (await requests(p, "memory.undo"))[0];
       if (sent?.sessionId !== "s-mem" || sent.changeId !== "c1") fail(`undo sent ${JSON.stringify(sent)}`);
       const [u] = await notes();
-      if (!u.undone || u.buttons.length || !u.line.startsWith("Undone:")) fail(`undone note ${JSON.stringify(u)}`);
+      if (!u.undone || u.buttons.join() !== "Redo" || !u.line.startsWith("Undone:")) fail(`undone note ${JSON.stringify(u)}`);
       if ((await p.textContent("#chat-log .ev-memory.undone .mem-note")) !== "Not kept.") fail("undone note text");
       await checkLayout(p, `memory-undone ${label}`);
       await shoot(p, "panel-memory-undone", size, scheme);
+
+      // Redo: the change is made again (memory_redone) and the note is back, with Undo.
+      await p.click("#chat-log .ev-memory .mem-redo");
+      await p.waitForFunction(() => !document.querySelector("#chat-log .ev-memory.undone"));
+      if ((await requests(p, "memory.redo"))[0]?.changeId !== "c1") fail("redo not sent");
+      const [r] = await notes();
+      if (r.undone || r.buttons.join() !== "Undo" || !r.line.startsWith("Remembered:")) fail(`redone note ${JSON.stringify(r)}`);
+      await p.click("#chat-log .ev-memory .mem-undo");
+      await p.waitForSelector("#chat-log .ev-memory.undone");
 
       // The composer's menu: Memory on for this chat; turning it off tells the background and shows the badge.
       await p.click("#now-model");
@@ -531,7 +540,7 @@ export const MEMORY_PANEL_CASES = [
       await p.waitForSelector("#chat-log .ev-memory.undone");
       if ((await requests(p, "memory.undo"))[0]?.changeId !== "c-auto") fail("auto note undo not sent");
       const u = await note();
-      if (u.buttons || u.after !== "Not kept. “Tom Kim” is back.") fail(`auto note undone ${JSON.stringify(u)}`);
+      if (u.buttons !== "Redo" || u.after !== "Not kept. “Tom Kim” is back.") fail(`auto note undone ${JSON.stringify(u)}`);
       await checkLayout(p, `memory-auto-undone ${label}`);
       await shoot(p, "panel-memory-auto-undone", size, scheme);
       reportErrors(p, `memory-auto ${label}`);

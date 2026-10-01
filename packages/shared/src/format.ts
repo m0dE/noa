@@ -34,12 +34,14 @@ export function plural(n: number, one: string, many = `${one}s`): string {
 
 const trimZero = (s: string) => s.replace(/\.0$/, "");
 
-/** 512 -> "512 B", 1536 -> "1.5 KB", 184_000 -> "180 KB", 5_300_000 -> "5.1 MB". */
+/** 512 -> "512 B", 1536 -> "1.5 KB", 184_000 -> "180 KB", 5_300_000 -> "5.1 MB", 2 * 1024 ** 3 -> "2 GB". */
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   const kb = n / 1024;
   if (kb < 1024) return `${kb < 10 ? trimZero(kb.toFixed(1)) : Math.round(kb)} KB`;
-  return `${trimZero((kb / 1024).toFixed(1))} MB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${trimZero(mb.toFixed(1))} MB`;
+  return `${trimZero((mb / 1024).toFixed(1))} GB`;
 }
 
 /** ISO -> "Oct 12, 2026" in `timeZone` (default: the viewer's); "" when missing or invalid. */

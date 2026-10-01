@@ -1,4 +1,5 @@
 /** Synthetic audio and fakes for the voice tests. */
+import { vi } from "vitest";
 import { VOICE_LIMITS, VOICE_TUNING } from "@noa/shared";
 import type { AudioSource, ClipRequest, TranscribeClip } from "../../src/voice/dictation.js";
 
@@ -104,3 +105,30 @@ declare function setImmediate(callback: () => void): unknown;
 
 /** Lets pending promise callbacks run (setImmediate: timers are clamped to ~15 ms on Windows). */
 export const flush = () => new Promise<void>((r) => setImmediate(r));
+
+/**
+ * The Realtime engine's player as the user hears it (`heard`): paused, the audio that comes is kept, and heard only on
+ * resume(); stop() drops it. `playing`: set by a test (the narrator's audio still playing here).
+ */
+export function fakePlayer() {
+  const p = {
+    heard: [] as string[],
+    kept: [] as string[],
+    paused: false,
+    playing: false,
+    play: vi.fn((b64: string, _itemId: string) => void (p.paused ? p.kept.push(b64) : p.heard.push(b64))),
+    pause: vi.fn(() => void (p.paused = true)),
+    resume: vi.fn(() => {
+      p.paused = false;
+      p.heard.push(...p.kept.splice(0));
+    }),
+    stop: vi.fn((): { itemId: string; playedMs: number } | null => {
+      p.paused = false;
+      p.kept.length = 0;
+      return null;
+    }),
+    close: vi.fn(),
+    level: () => 0,
+  };
+  return p;
+}

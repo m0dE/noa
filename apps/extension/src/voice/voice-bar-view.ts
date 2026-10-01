@@ -110,7 +110,8 @@ export function isMuteKey(e: { code: string; altKey: boolean; ctrlKey: boolean; 
 
 const muteButton = (muted: boolean) => ({ pressed: muted, label: `${muted ? "Unmute" : "Mute"} the microphone · ${MUTE_KEY.label}` });
 
-export const ENGINE_NAMES: Record<VoiceEngineId, string> = { realtime: "Realtime", standard: "Nova-3" };
+import { ENGINE_SHORT_NAMES as ENGINE_NAMES } from "./engine-choice.js";
+export { ENGINE_NAMES };
 
 /** A session's time on: "0:07", "12:34", "1:02:03". */
 export function elapsedText(ms: number): string {

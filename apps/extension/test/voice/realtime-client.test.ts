@@ -11,6 +11,8 @@ import {
   realtimeFailure,
   realtimeUrl,
   takeoverUrl,
+  TALK_OVER_WORDS_MS,
+  TOOL_ANSWER_RESPONSE,
   TRANSCRIPTION_PROMPT,
   type RealtimeHandlers,
   type RealtimeSocketLike,
@@ -139,7 +141,9 @@ describe("RealtimeClient: connecting", () => {
   it("sends nothing before the socket is open", () => {
     const { client, socket } = setup();
     client.appendAudio(new Int16Array([1]));
-    client.note("Your update: x", "result");
+    client.note("The user is looking at another tab.");
+    client.say("result", "Done.");
+    client.setStatus("Status: working.");
     expect(socket().sent).toEqual([]);
   });
 });
@@ -152,32 +156,208 @@ describe("RealtimeClient: the feed, the narrator's replies and its tools", () =>
     return s;
   };
 
-  it("a note is a system message item; a line to say asks for a reply, and news waits for the reply being made", () => {
+  it("a note is a system message item; a line is said word for word, out of band, one reply at a time, in order", () => {
     const { client, socket } = ready();
-    client.note("Your update (progress): Opening x.com.", "milestone");
+    client.note("The user is looking at another tab.");
     expect(socket().sent).toEqual([
-      { type: "conversation.item.create", item: { type: "message", role: "system", content: [{ type: "input_text", text: "Your update (progress): Opening x.com." }] } },
-      { type: "response.create" },
+      { type: "conversation.item.create", item: { type: "message", role: "system", content: [{ type: "input_text", text: "The user is looking at another tab." }] } },
     ]);
-    socket().event({ type: "response.created", response: { id: "r1" } });
-    client.note("Your update (finished): Posted.", "result");
-    client.note("Your update (problem): more", "error");
-    expect(socket().types()).toEqual(["conversation.item.create", "response.create", "conversation.item.create", "conversation.item.create"]);
-    // One reply for both, once the current one is done.
+    client.say("milestone", "Opening x.com");
+    expect(socket().sent.at(-1)).toMatchObject({ type: "response.create", response: { conversation: "none", tool_choice: "none" } });
+    expect((socket().sent.at(-1) as any).response.instructions).toContain("«Opening x.com.»");
+    // Asked for and not started: nothing else is asked for (a second one was refused and its line lost).
+    client.say("result", "Posted.");
+    expect(socket().types().filter((t) => t === "response.create")).toHaveLength(1);
+    socket().event({ type: "response.created", response: { id: "r1", metadata: { noa: "milestone" } } });
+    client.say("error", "Too many requests right now.");
+    expect(socket().types().filter((t) => t === "response.create")).toHaveLength(1);
+    // Each waits for the one before it, in order.
     socket().event({ type: "response.done", response: { id: "r1", status: "completed", output: [] } });
-    expect(socket().types().at(-1)).toBe("response.create");
-    expect(socket().types().filter((t) => t === "response.create")).toHaveLength(2);
+    expect((socket().sent.at(-1) as any).response.instructions).toContain("«Posted.»");
+    socket().event({ type: "response.created", response: { id: "r2", metadata: { noa: "line" } } });
+    socket().event({ type: "response.done", response: { id: "r2", status: "completed", output: [] } });
+    expect((socket().sent.at(-1) as any).response.instructions).toContain("«Too many requests right now.»");
   });
 
-  it("the user starting to talk drops a reply we were about to ask for (their turn gets one anyway)", () => {
+  it("the user starting to talk: progress waiting is let go; a result waits for their turn and the reply to it", () => {
     const onUserSpeech = vi.fn();
     const { client, socket } = ready({ onUserSpeech });
     socket().event({ type: "response.created", response: { id: "r1" } });
-    client.note("Your update: x", "result");
+    client.say("milestone", "Opening x.com");
+    client.say("result", "Posted.");
     socket().event({ type: "input_audio_buffer.speech_started", audio_start_ms: 100, item_id: "u1" });
     expect(onUserSpeech).toHaveBeenCalledTimes(1);
     socket().event({ type: "response.done", response: { id: "r1", status: "cancelled", output: [] } });
     expect(socket().types().filter((t) => t === "response.create")).toHaveLength(0);
+    // Their turn is in and answered (small talk): then the result, and never the progress line.
+    socket().event({ type: "input_audio_buffer.speech_stopped", audio_end_ms: 900, item_id: "u1" });
+    socket().event({ type: "input_audio_buffer.committed", item_id: "u1" });
+    socket().event({ type: "response.created", response: { id: "r2" } });
+    socket().event({ type: "conversation.item.input_audio_transcription.completed", item_id: "u1", transcript: "Thanks." });
+    socket().event({ type: "response.done", response: { id: "r2", status: "completed", output: [] } });
+    const creates = socket().sent.filter((e) => e.type === "response.create");
+    expect(creates).toHaveLength(1);
+    expect((creates[0] as any).response.instructions).toContain("«Posted.»");
+  });
+
+  it("a line the user talks over is said again after small talk; not after a request (live: 'Yes,' then 'Hello?', and the answer was lost)", async () => {
+    for (const request of [false, true]) {
+      const onTool = vi.fn(async () => "Started.");
+      const { client, socket } = ready({ onTool });
+      client.say("result", "Yes, Marco replied.");
+      socket().event({ type: "response.created", response: { id: "line", metadata: { noa: "line" } } });
+      socket().event({ type: "response.output_audio.delta", response_id: "line", item_id: "a_line", delta: "AAAA" });
+      socket().event({ type: "input_audio_buffer.speech_started", item_id: "u1", audio_start_ms: 0 });
+      socket().event({ type: "response.done", response: { id: "line", status: "cancelled" } });
+      socket().event({ type: "input_audio_buffer.speech_stopped", item_id: "u1", audio_end_ms: 1_500 });
+      socket().event({ type: "input_audio_buffer.committed", item_id: "u1" });
+      socket().event({ type: "response.created", response: { id: "r_u1" } });
+      socket().event({ type: "conversation.item.input_audio_transcription.completed", item_id: "u1", transcript: request ? "Check my calendar." : "Hello? Are you still there?" });
+      if (request) {
+        socket().event({ type: "response.output_item.added", item: { type: "function_call", name: "send_to_agent" } });
+        socket().event({ type: "response.function_call_arguments.done", call_id: "c1", name: "send_to_agent", arguments: JSON.stringify({ text: "Check my calendar.", kind: "question" }) });
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      socket().event({ type: "response.done", response: { id: "r_u1", status: "completed", output: [] } });
+      await new Promise((r) => setTimeout(r, 0));
+      const again = socket().sent.filter((e) => e.type === "response.create" && String((e as any).response?.instructions ?? "").includes("«Yes, Marco replied.»"));
+      expect(again.length, request ? "after a request" : "after small talk").toBe(request ? 1 : 2);
+    }
+  });
+
+  it("a noise turn committed as our result line starts: the line is heard, the server's reply to the noise is not (the owner's trace, session 4b99459b)", async () => {
+    vi.useFakeTimers();
+    try {
+      const heard: string[] = [];
+      const { client, socket } = ready({ onAudio: (_b64, item) => void heard.push(item), onNarratorText: (t) => void heard.push(t) });
+      client.say("result", "I'm doing well, thanks! Let me know what you'd like help with.");
+      const asked = socket().sent.at(-1) as any;
+      expect(asked.type).toBe("response.create");
+      // Short noise (the room, the speaker heard back) committed before our reply started.
+      socket().event({ type: "input_audio_buffer.speech_started", item_id: "noise", audio_start_ms: 1_000 });
+      socket().event({ type: "input_audio_buffer.speech_stopped", item_id: "noise", audio_end_ms: 1_400 });
+      socket().event({ type: "input_audio_buffer.committed", item_id: "noise" });
+      // Our line (its metadata comes back with it), then the server's own reply to the noise (create_response).
+      socket().event({ type: "response.created", response: { id: "ours", metadata: asked.response.metadata } });
+      socket().event({ type: "response.output_audio.delta", response_id: "ours", item_id: "a_result", delta: "AAAA" });
+      socket().event({ type: "response.output_audio_transcript.delta", response_id: "ours", item_id: "a_result", delta: "I'm doing well, thanks! Let me know what you'd like help with." });
+      socket().event({ type: "response.done", response: { id: "ours", status: "completed", metadata: asked.response.metadata } });
+      socket().event({ type: "response.created", response: { id: "auto", metadata: null } });
+      socket().event({ type: "response.output_audio.delta", response_id: "auto", item_id: "a_hi", delta: "AAAA" });
+      socket().event({ type: "response.output_audio_transcript.delta", response_id: "auto", item_id: "a_hi", delta: "Hi!" });
+      socket().event({ type: "conversation.item.input_audio_transcription.completed", item_id: "noise", transcript: "" });
+      socket().event({ type: "response.output_audio.delta", response_id: "auto", item_id: "a_hi", delta: "AAAA" });
+      socket().event({ type: "response.output_audio_transcript.delta", response_id: "auto", item_id: "a_hi", delta: " I'm here and listening." });
+      socket().event({ type: "response.done", response: { id: "auto", status: "cancelled", metadata: null } });
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(heard).toEqual(["a_result", "I'm doing well, thanks! Let me know what you'd like help with."]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  describe("speech over the narrator pauses it until its words say whose it was", () => {
+    /**
+     * Our result line, being heard; then speech starts over it (input `over`), and ends. lineDone: the line was all
+     * made by then (it is made faster than it plays), and the server's own reply to the speech starts (create_response).
+     */
+    const overLine = (lineDone = true, handlers: RealtimeHandlers = {}) => {
+      const calls: string[] = [];
+      const shown: string[] = [];
+      const t = ready({
+        ...handlers,
+        onUserSpeech: (paused) => void calls.push(`speech ${paused ? "paused" : "cut"}`),
+        onTalkedOver: (user) => void calls.push(user ? "cut" : "play on"),
+        onNarratorText: (text) => void shown.push(text),
+        onNoise: () => void calls.push("noise cut"),
+      });
+      const s = t.socket();
+      t.client.say("result", "I'm doing well, thanks! Let me know what you'd like help with.");
+      const asked = s.sent.at(-1) as any;
+      s.event({ type: "response.created", response: { id: "line", metadata: asked.response.metadata } });
+      s.event({ type: "response.output_audio.delta", response_id: "line", item_id: "a_line", delta: "AAAA" });
+      s.event({ type: "response.output_audio_transcript.delta", response_id: "line", item_id: "a_line", delta: "I'm doing well, thanks! " });
+      s.event({ type: "input_audio_buffer.speech_started", item_id: "over", audio_start_ms: 1_000 });
+      // The rest of the line comes while paused: kept, not shown yet.
+      s.event({ type: "response.output_audio.delta", response_id: "line", item_id: "a_line", delta: "BBBB" });
+      s.event({ type: "response.output_audio_transcript.delta", response_id: "line", item_id: "a_line", delta: "Let me know what you'd like help with." });
+      if (lineDone) s.event({ type: "response.done", response: { id: "line", status: "completed", metadata: asked.response.metadata } });
+      s.event({ type: "input_audio_buffer.speech_stopped", item_id: "over", audio_end_ms: 1_700 });
+      s.event({ type: "input_audio_buffer.committed", item_id: "over" });
+      // The server's own reply to it (create_response), held for its words.
+      if (lineDone) s.event({ type: "response.created", response: { id: "auto", metadata: null } });
+      return { ...t, s, calls, shown };
+    };
+    const lineAgain = (s: FakeSocket) => s.sent.filter((e) => e.type === "response.create" && String((e as any).response?.instructions ?? "").includes("Let me know")).length;
+
+    it("the speaker heard back ('I'm.' of the line): it plays on from where it paused; nothing is cut, cancelled, truncated or said again", async () => {
+      const t = overLine();
+      expect(t.calls).toEqual(["speech paused"]);
+      // Not cancelled at speech: the line is still being made.
+      expect(t.s.types()).not.toContain("response.cancel");
+      t.s.event({ type: "conversation.item.input_audio_transcription.completed", item_id: "over", transcript: "I'm." });
+      await flush();
+      expect(t.calls).toEqual(["speech paused", "play on"]);
+      expect(t.shown.at(-1)).toBe("I'm doing well, thanks! Let me know what you'd like help with.");
+      // Only the server's reply to the echo is cancelled (never heard), and the line is not asked for again.
+      expect(t.s.sent.filter((e) => e.type === "response.cancel")).toEqual([{ type: "response.cancel", response_id: "auto" }]);
+      expect(t.s.types()).not.toContain("conversation.item.truncate");
+      expect(lineAgain(t.s)).toBe(1);
+    });
+
+    it("noise (an empty transcript): the same, and its reply's cancel does not stop the line playing on", async () => {
+      const t = overLine();
+      t.s.event({ type: "conversation.item.input_audio_transcription.completed", item_id: "over", transcript: "" });
+      await flush();
+      expect(t.calls).toEqual(["speech paused", "play on"]);
+      expect(lineAgain(t.s)).toBe(1);
+    });
+
+    it("the speaker heard back while the line is still being made: it plays on, and the line is not cancelled", async () => {
+      const t = overLine(false);
+      t.s.event({ type: "conversation.item.input_audio_transcription.completed", item_id: "over", transcript: "I'm doing." });
+      await flush();
+      expect(t.calls).toEqual(["speech paused", "play on"]);
+      expect(t.s.types()).not.toContain("response.cancel");
+      expect(t.shown.at(-1)).toBe("I'm doing well, thanks! Let me know what you'd like help with.");
+    });
+
+    it("the user's words: it is cut off, and the rest is never shown", async () => {
+      const t = overLine();
+      t.s.event({ type: "conversation.item.input_audio_transcription.completed", item_id: "over", transcript: "What time is it in Tokyo?" });
+      await flush();
+      expect(t.calls).toEqual(["speech paused", "cut"]);
+      expect(t.shown).toEqual(["I'm doing well, thanks! "]);
+    });
+
+    it("the user's words while the line is still being made: it is cut off and the line cancelled", async () => {
+      const t = overLine(false);
+      t.s.event({ type: "conversation.item.input_audio_transcription.completed", item_id: "over", transcript: "What time is it in Tokyo?" });
+      await flush();
+      expect(t.calls).toEqual(["speech paused", "cut"]);
+      expect(t.s.sent.filter((e) => e.type === "response.cancel")).toEqual([{ type: "response.cancel", response_id: "line" }]);
+      expect(t.shown).toEqual(["I'm doing well, thanks! "]);
+    });
+
+    it("words not in within TALK_OVER_WORDS_MS of the speech's end: taken for the user", async () => {
+      vi.useFakeTimers();
+      try {
+        const t = overLine();
+        await vi.advanceTimersByTimeAsync(TALK_OVER_WORDS_MS - 1);
+        expect(t.calls).toEqual(["speech paused"]);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(t.calls).toEqual(["speech paused", "cut"]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("speech with nothing of the narrator heard: cut as before (nothing to pause)", () => {
+      const calls: string[] = [];
+      const { socket } = ready({ onUserSpeech: (paused) => void calls.push(paused ? "paused" : "cut") });
+      socket().event({ type: "input_audio_buffer.speech_started", item_id: "u1", audio_start_ms: 0 });
+      expect(calls).toEqual(["cut"]);
+    });
   });
 
   it("passes the narrator's audio and its words on", () => {
@@ -210,7 +390,7 @@ describe("RealtimeClient: the feed, the narrator's replies and its tools", () =>
     userSaid(socket(), "stop the task");
     socket().event({ type: "response.function_call_arguments.done", call_id: "c1", name: "stop_task", arguments: "{}" });
     await flush();
-    expect(socket().sent.at(-1)).toEqual({ type: "response.create" });
+    expect(socket().sent.at(-1)).toEqual({ type: "response.create", response: TOOL_ANSWER_RESPONSE });
   });
 
   it("a tool that throws answers with its error; unknown tools and bad arguments are answered, not run", async () => {
@@ -233,14 +413,14 @@ describe("RealtimeClient: the feed, the narrator's replies and its tools", () =>
     expect(onTool).toHaveBeenCalledTimes(1);
   });
 
-  it("cancelling (the user's Esc, the shortcut) stops the reply being made; truncate says how much was heard", () => {
+  it("cancelling (the user's Esc, the shortcut) stops the reply being made, by its id (an out-of-band one too); truncate says how much was heard", () => {
     const { client, socket } = ready();
     client.cancelResponse();
     expect(socket().sent).toEqual([]); // nothing to cancel
     socket().event({ type: "response.created", response: { id: "r1" } });
     client.cancelResponse();
     client.truncate("a1", 1234.6);
-    expect(socket().sent).toEqual([{ type: "response.cancel" }, { type: "conversation.item.truncate", item_id: "a1", content_index: 0, audio_end_ms: 1235 }]);
+    expect(socket().sent).toEqual([{ type: "response.cancel", response_id: "r1" }, { type: "conversation.item.truncate", item_id: "a1", content_index: 0, audio_end_ms: 1235 }]);
   });
 });
 
@@ -381,7 +561,7 @@ describe("RealtimeClient: timing trace", () => {
       const { client, socket } = setup({ onTrace: (e) => traces.push(e) });
       socket().open();
       socket().event({ type: "session.updated" });
-      client.note("The agent finished.", "result");
+      client.say("result", "Done.");
       vi.advanceTimersByTime(700);
       socket().event({ type: "response.created" });
       socket().event({ type: "response.done", response: {} });
@@ -431,13 +611,12 @@ describe("RealtimeClient: muted", () => {
     expect(socket().types()).not.toContain("input_audio_buffer.clear");
   });
 
-  it("muting mid-turn: the user no longer counts as speaking, so a waiting update may be said", () => {
+  it("muting mid-turn: the user no longer counts as speaking, so a waiting line is said", () => {
     const { client, socket } = ready();
     socket().event({ type: "input_audio_buffer.speech_started", item_id: "in1", audio_start_ms: 0 });
-    client.note("Agent result: done.", "result");
+    client.say("result", "Done.");
     expect(socket().types()).not.toContain("response.create");
     client.setMuted(true);
-    client.note("Agent result: done again.", "result");
     expect(socket().types()).toContain("response.create");
   });
 });

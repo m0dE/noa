@@ -69,9 +69,12 @@
  * closes, so the microphone is never on without the indicator in view.
  */
 import type { AccountView } from "../ui-protocol.js";
-import { errorMessage, traceStart, type AgentEvent, type ApprovalAnswer, type ExtensionSettings, type StampedAgentEvent, type VoiceEngine, type VoiceEngineId, type VoiceEnginesResponse } from "@noa/shared";
+import { errorMessage, traceStart, type AgentEvent, type ApprovalAnswer, type ExtensionSettings, type StampedAgentEvent, isRealtimeEngine, type VoiceEngine, type VoiceEngineId, type VoiceEnginesResponse } from "@noa/shared";
 import type { PanelTrace } from "../trace/panel-trace.js";
-import { checkEngine, costPerMinuteText } from "../voice/engine-choice.js";
+import { checkEngine, costPerMinuteText, ENGINE_SHORT_NAMES } from "../voice/engine-choice.js";
+
+/** The action that starts the free engine instead (the browser's voice). */
+const BROWSER_VOICE_LABEL = "Use browser voice";
 import type { EngineEvents, HandsFreeEngine } from "../voice/engine.js";
 import { HANDS_FREE, handsFree, initialHandsFree, type EndReason, type HandsFreeEffect, type HandsFreeEvent, type HandsFreePhase, type HandsFreeState } from "../voice/hands-free.js";
 import {
@@ -175,6 +178,8 @@ export interface HandsFreeDeps {
   goToTab(tabId: number): void;
   /** A line is being said in a chat (null: it is over). */
   onSpeaking(line: { sessionId: string; text: string } | null): void;
+  /** A line to say, in the language picked in Settings (phrases.ts localizeLine); absent: as it is. */
+  localize?(text: string): string;
   /** Keeps a said line in its chat. */
   keepSpoken(sessionId: string, text: string): void;
   /** Keeps what the user said (Realtime) that led to no request in its chat, for the record (not shown). */
@@ -425,9 +430,10 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
   // --- The lines said aloud: playing in their chat, then kept there.
 
   /** A new line starts (the one before it is over). */
-  function beginLine(text: string): void {
+  /** `said`: the line as decided, before it was put in the user's language (what `passing` holds). */
+  function beginLine(text: string, said = text): void {
     endLine();
-    line = { sessionId: chatNow(), text, keep: !passing.delete(text) };
+    line = { sessionId: chatNow(), text, keep: !passing.delete(said) };
     showLine();
   }
 
@@ -471,10 +477,12 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
       case "send":
         sending = send(effect.text, effect.heard);
         break;
-      case "speak":
-        beginLine(effect.text);
-        engine?.speak(effect.text);
+      case "speak": {
+        const text = deps.localize?.(effect.text) ?? effect.text;
+        beginLine(text, effect.text);
+        engine?.speak(text);
         break;
+      }
       case "hush":
         engine?.hush();
         endLine();
@@ -653,15 +661,16 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
   function onEngineFailure(err: unknown): void {
     const id = engine?.id ?? null;
     traceFailure(id, err);
-    if (id === "realtime" && state.phase !== "off" && asRealtimeFailure(err)?.transient) return void reconnect(err);
+    if (id && isRealtimeEngine(id) && state.phase !== "off" && asRealtimeFailure(err)?.transient) return void reconnect(err);
     finish(null, "error");
-    deps.notify(failureTip(err));
+    deps.notify(failureTip(err, id));
   }
 
   /** The Realtime connection dropped: a new one is made (the chat, the phase and the mute go on), or the session ends. */
   async function reconnect(err: unknown): Promise<void> {
     const gen = session;
     const dropped = engine;
+    const id = dropped?.id ?? "realtime";
     engine = null;
     dropped?.stop();
     // Not listening until the new connection's audio flows.
@@ -673,14 +682,14 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     render();
     trace?.record({ t: Date.now(), cat: "voice", name: "voice.reconnect", data: { reason: asRealtimeFailure(err)?.kind ?? "unknown", attempt: 0 } });
     // This browser held the one session: the server's end of it may still be closing, so this one takes its place.
-    const r = await connect("realtime", true, gen);
+    const r = await connect(id, true, gen);
     // Ended meanwhile (finish() reset the rest).
     if (gen !== session) return;
     if (r === "stopped") return;
     if (r !== "open") {
       reconnecting = false;
       finish(null, "error");
-      deps.notify(failureTip(r.failed));
+      deps.notify(failureTip(r.failed, id));
       return;
     }
     // "Reconnecting…" stays until its audio flows (checkReady).
@@ -693,13 +702,14 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     trace?.record({ t: Date.now(), cat: "error", name: "voice.failed", data: { engine: id, error: message.slice(0, 160) } });
   }
 
-  /** What to say when voice could not start or go on, with what the user can do about it (never done for them). */
-  function failureTip(err: unknown): VoiceTip {
+  /** What to say when voice could not start or go on (on engine `id`), with what the user can do about it (never done for them). */
+  function failureTip(err: unknown, id: VoiceEngineId | null = null): VoiceTip {
     if (err instanceof VoiceError) return errorTip(err, deps.openBilling);
     const f = asRealtimeFailure(err);
-    const standard = { label: "Use Nova-3 voice", run: () => void start("standard") };
-    if (f?.kind === "busy" || f?.kind === "replaced") return { text: f.message, level: "error", actions: [{ label: "Take over here", run: () => void start("realtime", false, true) }] };
-    if (f?.transient) return { text: f.message, level: "error", actions: [{ label: "Try again", run: () => void start("realtime") }, standard] };
+    const rt = id && isRealtimeEngine(id) ? id : "realtime";
+    const standard = { label: BROWSER_VOICE_LABEL, run: () => void start("standard") };
+    if (f?.kind === "busy" || f?.kind === "replaced") return { text: f.message, level: "error", actions: [{ label: "Take over here", run: () => void start(rt, false, true) }] };
+    if (f?.transient) return { text: f.message, level: "error", actions: [{ label: "Try again", run: () => void start(rt) }, standard] };
     if (f?.kind === "unavailable") return { text: f.message, level: "error", actions: [standard] };
     const message = f?.message ?? errorMessage(err);
     const help = errorHelp(message);
@@ -754,7 +764,7 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
       if (r === "open" || r === "stopped") return r;
       const f = asRealtimeFailure(r.failed);
       const delayMs = RECONNECT_DELAYS_MS[attempt - 1];
-      if (id !== "realtime" || !f?.transient || delayMs === undefined) return r;
+      if (!isRealtimeEngine(id) || !f?.transient || delayMs === undefined) return r;
       trace?.record({ t: Date.now(), cat: "voice", name: "voice.reconnect", data: { reason: f.kind, attempt, delayMs } });
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       if (gen !== session) return "stopped";
@@ -793,8 +803,8 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     startedAt = now();
     const settings = deps.settings();
     const id = picked ?? settings?.voiceEngine ?? "realtime";
-    // Realtime connects first; Whisper only opens the microphone.
-    notReady(id === "realtime" ? "connecting" : "microphone");
+    // Realtime connects first; the others only open the microphone.
+    notReady(isRealtimeEngine(id) ? "connecting" : "microphone");
     bind(deps.activeTab());
     render();
     report();
@@ -808,11 +818,11 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
       const check = checkEngine({ picked: id, engines, creditCents: deps.account()?.credit?.totalCents });
       if (check.blocked) {
         finish(null);
-        deps.notify({ key: ENGINE_NOTICE, text: check.blocked, level: "error", actions: [{ label: "Use Nova-3 voice", run: () => void start("standard") }] });
+        deps.notify({ key: ENGINE_NOTICE, text: check.blocked, level: "error", actions: [{ label: BROWSER_VOICE_LABEL, run: () => void start("standard") }] });
         return;
       }
       if (check.note) deps.notify({ key: ENGINE_NOTICE, text: check.note, level: "info", actions: [{ label: "Top up", run: deps.openBilling }] });
-      else if (id === "realtime" && settings && !settings.realtimeCostNoticed) costNotice(engines?.engines ?? null);
+      else if (isRealtimeEngine(id) && settings && !settings.realtimeCostNoticed) costNotice(id, engines?.engines ?? null);
       const r = await connect(id, takeover, gen);
       if (r === "stopped") return;
       if (r !== "open") {
@@ -889,15 +899,16 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     const muteAgain = muted();
     finish(null, "error");
     const actions = [{ label: "Try again", run: () => void start(id, muteAgain) }];
-    if (connecting && id === "realtime") actions.push({ label: "Use Nova-3 voice", run: () => void start("standard", muteAgain) });
+    if (connecting && isRealtimeEngine(id)) actions.push({ label: BROWSER_VOICE_LABEL, run: () => void start("standard", muteAgain) });
     deps.notify({ text, level: "error", actions });
   }
 
   /** Once: what Realtime costs; the engine is changed in Settings. */
-  function costNotice(engines: VoiceEngine[] | null): void {
-    const rt = engines?.find((e) => e.id === "realtime");
-    const cost = rt ? `Realtime voice uses ${costPerMinuteText(rt.approxCentsPerMinute)}.` : "Realtime voice uses usage credit by the minute.";
-    deps.notify({ key: ENGINE_NOTICE, text: `${cost} Nova-3 voice costs much less.`, level: "info", actions: [{ label: "Voice settings", run: deps.openVoiceSettings }] });
+  function costNotice(id: VoiceEngineId, engines: VoiceEngine[] | null): void {
+    const rt = engines?.find((e) => e.id === id);
+    const name = `${ENGINE_SHORT_NAMES[id]} voice`;
+    const cost = rt ? `${name} uses ${costPerMinuteText(rt.approxCentsPerMinute)}.` : `${name} uses usage credit by the minute.`;
+    deps.notify({ key: ENGINE_NOTICE, text: `${cost} Deepgram and the browser voice cost much less.`, level: "info", actions: [{ label: "Voice settings", run: deps.openVoiceSettings }] });
     void deps.saveSettings({ realtimeCostNoticed: true }).catch((err: unknown) => deps.log?.(`saving the cost notice failed: ${errorMessage(err)}`));
   }
 
@@ -1069,7 +1080,7 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
    * "Still …" after a long silence (Realtime's engine paces its own). Milestones are not kept in the chat.
    */
   function stillWorking(t: number): void {
-    if (engine?.id !== "standard" || !working || state.phase !== "working" || state.userSpeaking || state.queued) return;
+    if (!engine || isRealtimeEngine(engine.id) || !working || state.phase !== "working" || state.userSpeaking || state.queued) return;
     const line = narration.tick(t);
     if (!line) return;
     passing.add(line);
@@ -1081,7 +1092,7 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     const t = now();
     approvals.push(ev);
     engine?.agentEvent(ev as AgentEvent, t);
-    if (engine?.id !== "standard") return;
+    if (!engine || isRealtimeEngine(engine.id)) return;
     const said = narration.push(ev, t);
     if (!said) return;
     if (ev.type === "tool_call") passing.add(said);

@@ -97,18 +97,22 @@ export interface SwitchDeps {
 export async function switchXAccount(browser: BrowserCaller, rawHandle: string, deps: SwitchDeps): Promise<ToolResult> {
   const handle = normalizeHandle(rawHandle);
   if (handle === "@") return { text: "switch_x_account needs a handle like @name.", isError: true };
+  // What happened, as facts for the agent to decide on; what it may not do on X is enforced where it acts (wrongXAccountRefusal).
   const fail = (step: string): ToolResult => ({
-    text: `switch_x_account ${step}. X is not on ${handle}: do nothing on X as another account. Call switch_x_account once more; if it fails again, call task_pause so the user switches to ${handle} by hand.`,
+    text: `switch_x_account did not switch to ${handle}: ${step}. X is not on ${handle}, so nothing on X can be done as ${handle} yet.`,
     isError: true,
   });
   const needsUser = (s: PageSnapshot, reason: string): ToolResult => ({
-    text: `switch_x_account stopped: ${reason} (${s.url}). X is not on ${handle}: do nothing on X as another account. The user must do this: call task_pause with that reason.`,
+    text: `switch_x_account cannot switch to ${handle}: ${reason} (${s.url}). X is not on ${handle}. Only the user can sign in to X accounts or get past this.`,
     isError: true,
   });
   const readPage = () => browser.call("browser.readPage", {});
   const sleep = deps.sleep;
-  /** Why the menu, read after the page found no entry to click there, has none: the answer, or "flipped" (reload and try again). */
-  const withoutEntry = (menu: PageSnapshot): ToolResult | "flipped" => {
+  /**
+   * Why the menu, read after the page found no entry to click there, has none: the answer, or reload and try again:
+   * "flipped" (X re-rendered it to the delegate view) or "unopened" (the switcher's click did not open it).
+   */
+  const withoutEntry = (menu: PageSnapshot): ToolResult | "flipped" | "unopened" => {
     // The page saw no entry, this read shows one: X re-rendered the menu in between.
     if (entryFor(menu, handle)) return "flipped";
     const personal = personalEntries(menu);
@@ -124,8 +128,7 @@ export async function switchXAccount(browser: BrowserCaller, rawHandle: string, 
         `${handle} is a delegate account in X's menu ("Act as"), not an account signed in in this browser, and switch_x_account never acts as a delegate. Sign in to ${handle} in this browser, or switch to it by hand`,
       );
     }
-    if (!delegateView(menu)) return fail(`step 2 failed: X's account menu did not open on ${menu.url}`);
-    return "flipped";
+    return delegateView(menu) ? "flipped" : "unopened";
   };
 
   let page = await readPage();
@@ -134,6 +137,7 @@ export async function switchXAccount(browser: BrowserCaller, rawHandle: string, 
   if (shows(page, handle)) return { text: `Already on ${handle}.` };
 
   let flipped = 0;
+  let unopened = 0;
   /** The page ignored its own click on the entry once: a real mouse press from then on. */
   let press = false;
   for (let attempt = 1; attempt <= SWITCH_ATTEMPTS; attempt++) {
@@ -143,15 +147,16 @@ export async function switchXAccount(browser: BrowserCaller, rawHandle: string, 
     const blocked = pauseReasonForUrl(page.url);
     if (blocked) return needsUser(page, blocked);
     const switcher = findSwitcher(page);
-    if (!switcher) return fail(`step 1 failed: the account switcher button (testid=${X_SWITCHER_TEST_ID}) was not found on ${page.url}`);
+    if (!switcher) return fail(`the account switcher button (testid=${X_SWITCHER_TEST_ID}) was not found on ${page.url}`);
     if (shows(page, handle)) return { text: `Already on ${handle}.` };
 
     await browser.call("browser.click", { index: switcher.index });
     let pick = await browser.call("browser.clickXAccountEntry", { handle, waitMs: MENU_WAIT_MS, ...(press ? { press } : {}) });
     if (!pick.clicked) {
       const why = withoutEntry(await readPage());
-      if (why !== "flipped") return why;
-      flipped++;
+      if (why === "unopened") unopened++;
+      else if (why === "flipped") flipped++;
+      else return why;
       continue;
     }
     if (!press) {
@@ -179,10 +184,11 @@ export async function switchXAccount(browser: BrowserCaller, rawHandle: string, 
     if (stop) return needsUser(switched.value, stop);
     if (shows(switched.value, handle)) return { text: `Switched to ${handle}. Current URL: ${switched.value.url}` };
     const now = activeXAccount(switched.value);
-    return fail(`step 3 failed: chose ${handle} in X's account menu, but after ${SWITCH_POLL.timeoutMs / 1000} s the switcher still shows ${now ?? "no account"}`);
+    return fail(`chose ${handle} in X's account menu, but after ${SWITCH_POLL.timeoutMs / 1000} s the switcher still shows ${now ?? "no account"}`);
   }
+  if (unopened === SWITCH_ATTEMPTS) return fail(`X's account menu did not open on ${page.url} (${unopened} of ${SWITCH_ATTEMPTS} reloads)`);
   return fail(
-    `step 2 failed: ${flipped} of ${SWITCH_ATTEMPTS} times X switched its account menu to the delegate accounts before ${handle} could be chosen (its "Personal accounts" section is then folded with nothing to click)`,
+    `${flipped} of ${SWITCH_ATTEMPTS} times X switched its account menu to the delegate accounts before ${handle} could be chosen (its "Personal accounts" section is then folded with nothing to click)`,
   );
 }
 

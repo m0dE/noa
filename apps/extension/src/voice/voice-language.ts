@@ -2,8 +2,9 @@
  * The languages the user speaks to voice in, and whether a transcript of
  * what the microphone heard reads as the user talking in one of them.
  *
- * The languages are the browser's preferred languages (navigator.languages,
- * set in Chrome's settings): the Realtime input transcription is told them
+ * The languages are the one picked in Settings (language.ts), if any, then the
+ * browser's preferred languages (navigator.languages, set in Chrome's
+ * settings): the Realtime input transcription is told them
  * (its `languages` hint), and a transcript in a script none of them is
  * written in is not the user talking to the assistant. Two cases, told apart
  * by how much of it is words:
@@ -48,9 +49,12 @@ export const MAX_VOICE_LANGUAGES = 3;
 /** Without any from the browser: English. */
 const DEFAULT_LANGUAGES = ["en"] as const;
 
-/** The browser's preferred languages ("en-US", "ko") as ISO 639-1 codes, first ones first, without repeats. */
-export function voiceLanguages(browser: readonly string[]): string[] {
-  const codes = browser.map((tag) => tag.trim().toLowerCase().split(/[-_]/)[0] ?? "").filter((c) => /^[a-z]{2}$/.test(c));
+/**
+ * The browser's preferred languages ("en-US", "ko") as ISO 639-1 codes, first ones first, without repeats; the language
+ * picked in Settings (`chosen`) first of all. The browser's stay listed after it: what the user says in them is still theirs.
+ */
+export function voiceLanguages(browser: readonly string[], chosen?: string | null): string[] {
+  const codes = [...(chosen ? [chosen] : []), ...browser].map((tag) => tag.trim().toLowerCase().split(/[-_]/)[0] ?? "").filter((c) => /^[a-z]{2}$/.test(c));
   const unique = [...new Set(codes)].slice(0, MAX_VOICE_LANGUAGES);
   return unique.length ? unique : [...DEFAULT_LANGUAGES];
 }

@@ -20,14 +20,26 @@ describe("ownChatOfTab: the tab's own chat (its job shows; hands-free voice talk
 });
 
 describe("chatInTab: the job a panel following the active tab shows", () => {
-  it("the tab's own chat, else a run working there that belongs to no tab, else none (the list)", () => {
+  it("the tab's own chat, else a run working there, else none (the list)", () => {
     expect(chatInTab(1, state)).toBe("A");
     expect(chatInTab(9, state)).toBe("S");
-    // Tab 5 was opened by B's agent, and B belongs to tab 2.
-    expect(chatInTab(5, state)).toBeNull();
+    // Tab 5 was opened by B's agent (B belongs to tab 2): B's job shows there too while it runs.
+    expect(chatInTab(5, state)).toBe("B");
+    // A tab with a chat of its own shows that one, whatever else works in it.
+    expect(chatInTab(1, { tabChats: { "1": "A" }, runningTabs: { B: [1] } })).toBe("A");
     expect(chatInTab(3, state)).toBeNull();
     expect(chatInTab(3, state, { pending: { tab: 3, sessionId: "N" } })).toBe("N");
     expect(chatInTab(null, state)).toBeNull();
+  });
+
+  it("after the turn: the chat whose agent opened the tab and keeps it", () => {
+    const ended = { tabChats: { "2": "B" }, runningTabs: {}, chatTabs: { B: [5, 6] } };
+    expect(chatInTab(5, ended)).toBe("B");
+    expect(chatInTab(6, ended)).toBe("B");
+    expect(chatInTab(7, ended)).toBeNull();
+    // A run working there now, or the tab's own chat, comes first.
+    expect(chatInTab(5, { ...ended, runningTabs: { S: [5] } })).toBe("S");
+    expect(chatInTab(5, { ...ended, tabChats: { "2": "B", "5": "C" } })).toBe("C");
   });
 });
 

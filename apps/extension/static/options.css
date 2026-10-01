@@ -85,6 +85,18 @@ body { font-size: var(--text-lg); background: var(--surface); }
 .group-title { font-size: 15px; font-weight: 600; margin: 24px 0 4px; }
 .group > .group-title:first-child { margin-top: 0; }
 .group-hint { margin: 0 0 8px; color: var(--muted); font-size: var(--text-md); }
+/* Sub-tabs inside a section (ai-tabs.ts): an underlined row under the section's title. */
+.subtabs { display: flex; gap: 4px; margin-top: 12px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+.subtabs::-webkit-scrollbar { display: none; }
+.subtabs [role="tab"] {
+  flex: none; padding: 8px 12px; margin-bottom: -1px; border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+  background: none; color: var(--muted); font: inherit; font-weight: 500; cursor: pointer;
+}
+.subtabs [role="tab"]:hover { color: var(--text); }
+.subtabs [role="tab"][aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+.subtabs [role="tab"]:focus-visible { outline-offset: -2px; }
+.subpanel { outline: none; }
+.subpanel > .group:first-child { margin-top: 20px; padding-top: 0; border-top: 0; }
 .sub-title { font-size: var(--text-sm); font-weight: 600; margin: 4px 0 8px; color: var(--muted); }
 .hint { margin: 0; color: var(--muted); font-size: var(--text-md); }
 
@@ -95,6 +107,7 @@ body { font-size: var(--text-lg); background: var(--surface); }
 
 /* A setting: its label and description at the left, its control at the right. */
 .srow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 32px; align-items: center; padding: 14px 0; }
+.srow[hidden] { display: none; }
 .srow + .srow, .reveal .srow:first-child, .srow + .reveal .srow:first-child { border-top: 1px solid var(--border); }
 .srow-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .srow-label b { font-weight: 500; }
@@ -182,6 +195,8 @@ input[aria-invalid="true"] { border-color: var(--bad); }
 .steps { margin: 2px 0 0; padding-left: 34px; color: var(--muted); font-size: 12.5px; display: flex; flex-direction: column; gap: 3px; }
 .steps code { overflow-wrap: anywhere; color: var(--text); }
 .steps b { font-weight: 500; color: var(--text); }
+.cmd-row { display: flex; gap: 6px; align-items: center; margin: 4px 0 2px; }
+.cmd { flex: 1; min-width: 0; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--field); border: 1px solid var(--border); user-select: all; }
 
 .note { margin: 10px 0; padding: 8px 12px; border-radius: var(--radius); font-size: var(--text-md); background: color-mix(in srgb, var(--muted) 10%, transparent); color: var(--text); }
 .box-body .note { margin: 0; }
@@ -214,21 +229,8 @@ input[aria-invalid="true"] { border-color: var(--bad); }
 .fact small:empty { display: none; }
 .fact[data-tone="warn"] b { color: var(--warn); }
 /* The one billing button: it opens the dashboard's Billing page. */
-.acct-billing, .keys-gate { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.acct-billing { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .billing-open { min-width: 200px; }
-
-/* API keys */
-.keys-body { display: flex; flex-direction: column; gap: 10px; }
-.keys-list { list-style: none; margin: 0; padding: 0; }
-.keys-list li { display: flex; align-items: center; gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--border); min-width: 0; }
-.keys-list li .key-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.keys-list li .muted { font-size: var(--text-sm); white-space: nowrap; }
-.keys-list li.empty { color: var(--muted); border-bottom: 0; }
-.key-new-form { display: flex; gap: 6px; flex-wrap: wrap; }
-.key-new-form input { flex: 1 1 180px; }
-.key-new-form select { width: auto; flex: none; }
-.key-new { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: var(--radius); background: var(--ok-soft); }
-.key-value { flex: 1; min-width: 0; overflow-wrap: anywhere; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--field); border: 1px solid var(--border); }
 
 /* Site logins */
 .fields.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 14px; margin-bottom: 10px; }

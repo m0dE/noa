@@ -60,6 +60,7 @@ const ENGINES: VoiceEnginesResponse = {
   engines: [
     { id: "realtime", name: "Realtime", model: "gpt-realtime-2.1", approxCentsPerMinute: 6, assumption: "", available: true },
     { id: "standard", name: "Standard", model: "whisper", approxCentsPerMinute: 0.07, assumption: "", available: true },
+    { id: "deepgram", name: "Deepgram", model: "nova-3", approxCentsPerMinute: 0.5, assumption: "", available: true },
   ],
 };
 
@@ -605,7 +606,7 @@ describe("hands-free voice says it listens only once it does (the owner's report
       expect(t.looks.at(-1)).toBeNull();
       expect(t.engines[0]!.stopped).toBe(true);
       const tip = t.tips.at(-1)!;
-      expect([tip.level, tip.text, tip.actions?.map((a) => a.label)]).toEqual(["error", "Voice couldn't connect, so it isn't listening.", ["Try again", "Use Nova-3 voice"]]);
+      expect([tip.level, tip.text, tip.actions?.map((a) => a.label)]).toEqual(["error", "Voice couldn't connect, so it isn't listening.", ["Try again", "Use browser voice"]]);
       // Never started: no stop sound either.
       expect(t.sounds).toEqual([]);
       tip.actions![0]!.run();
@@ -727,6 +728,46 @@ describe("Whisper keeps the user informed on a long run (the owner's report: sil
         [22_797, "Looking at the page"],
         [38_045, "I don't see your edits yet."],
       ]);
+      t.hf.toggle("button");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("Deepgram said the greeting twice (the owner's trace, session d8fbe33c)", () => {
+  beforeAll(installMiniDom);
+
+  it("the opening text said as the plan is not said again by the spoken line that starts with it", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = panel(1, { engine: "deepgram" });
+      t.hf.toggle("button");
+      await vi.advanceTimersByTimeAsync(0);
+      const eng = t.engines[0]!;
+      const said: string[] = [];
+      eng.speak = (text) => {
+        said.push(text);
+        setTimeout(() => eng.events.said(), 3_700);
+      };
+      t.hf.setRunning(["s-1"]);
+      (t.deps as { chatOf: (tab: number | null) => string | null }).chatOf = () => "s-1";
+      t.hf.refresh();
+      const timeline: [number, Record<string, unknown>][] = [
+        [0, { type: "user_message", text: "Hey, how you doing?", voice: true }],
+        [1_800, { type: "assistant_text", text: "I'm doing well, thanks for asking! Ready to help with whatever you need." }],
+        [2_440, { type: "tool_call", id: "c", name: "task_complete", args: { summary: "Replied to greeting" } }],
+        [2_450, { type: "task_end", outcome: "done", summary: "Replied to greeting", spoken: "I'm doing well, thanks for asking! What can I help you with?" }],
+      ];
+      let at = 0;
+      for (const [ms, ev] of timeline) {
+        await vi.advanceTimersByTimeAsync(ms - at);
+        at = ms;
+        if (ev.type === "task_end") t.hf.setRunning([]);
+        t.hf.onEvent({ ...ev, sessionId: "s-1", ts: new Date().toISOString() } as never);
+      }
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(said).toEqual(["I'm doing well, thanks for asking!", "What can I help you with?"]);
       t.hf.toggle("button");
     } finally {
       vi.useRealTimers();

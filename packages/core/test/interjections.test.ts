@@ -154,6 +154,6 @@ describe("the tool executor with interjections", () => {
     expect((await exec.call("task_fail", { reason: "old goal" })).isError).toBe(true);
     interjections.seen(text);
     expect((await exec.call("task_fail", { reason: "stopped as asked" })).isError).toBeUndefined();
-    expect(ended).toEqual([{ outcome: "failed", reason: "stopped as asked" }]);
+    expect(ended).toEqual([{ outcome: "failed", reason: "stopped as asked", byAgent: true }]);
   });
 });

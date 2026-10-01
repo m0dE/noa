@@ -100,6 +100,7 @@ export const NOT_SET_UP = {
   jev: "Hosted Jev is not set up on this server yet",
   voice: "Voice input is not set up on this server yet",
   realtime: "Realtime voice is not set up on this server yet",
+  images: "Image generation is not set up on this server yet",
 } as const;
 
 /** The plans (decided by the owner; docs/BILLING-CONTRACT.md). The one plan table: API, dashboard, extension and the Stripe setup script read it. */
@@ -242,8 +243,10 @@ export const SESSION_COOKIE = "bt_session";
  * "realtime" = a realtime voice session (GET /v1/ai/realtime): one event per model
  * response (tokens), and one per transcribed user turn when input transcription is on
  * (model = the transcription model, billed by audio length).
+ * "image" = a generated picture (POST /v1/ai/images), billed by the image model's tokens.
+ * "speak" = a line said in Deepgram's voice (POST /v1/ai/speak), billed by characters (inputTokens).
  */
-export const UsageKind = z.enum(["ai_messages", "jev", "transcribe", "realtime"]);
+export const UsageKind = z.enum(["ai_messages", "jev", "transcribe", "realtime", "image", "speak"]);
 export type UsageKind = z.infer<typeof UsageKind>;
 
 export const UsageEvent = z.object({

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { MAX_TABS_PER_CALL } from "./browser.js";
 import { DIALOG_AUTO_DISMISS_MS } from "./dialog.js";
+import { ImageQuality, ImageSize, MAX_IMAGE_PROMPT_CHARS } from "./images.js";
 import {
   CANCEL_SCHEDULED_TASK_DESCRIPTION,
   CancelScheduledTaskArgs,
@@ -136,7 +137,7 @@ export const ToolArgs = {
     index: z.number().int().optional().describe("Scroll inside this element instead of the page"),
   }),
   upload: z.object({
-    index: z.number().int().describe("Index of an <input type=file> from read_page"),
+    index: z.number().int().describe("Index from read_page of an <input type=file>, a drop zone, or an editor that takes dropped or pasted images"),
     paths: z.array(z.string()).min(1).describe("Local file paths from the task's media list"),
   }),
   open_tabs: z.object({
@@ -157,6 +158,18 @@ export const ToolArgs = {
   wait_for: WaitForArgs,
   switch_x_account: z.object({ handle: z.string().describe("Account handle, e.g. @myhandle") }),
   get_credential: z.object({ site: z.string().describe("Hostname, e.g. example.com") }),
+  generate_image: z.object({
+    prompt: z
+      .string()
+      .trim()
+      .min(1)
+      .max(MAX_IMAGE_PROMPT_CHARS)
+      .describe("What the picture shows, in detail: subject, style, colors, composition, and any text it must contain (quoted, spelled exactly)"),
+    name: z.string().trim().min(1).max(80).optional().describe("Short file name without extension, e.g. 'store-icon'. Default: taken from the description"),
+    size: ImageSize.optional().describe("Width x height in pixels. Default 1024x1024 (square); 1536x1024 is landscape, 1024x1536 portrait"),
+    quality: ImageQuality.optional().describe("low: a quick draft (about 1 cent). medium (default): good for most uses (about 7 cents, ~30 s). high: final art (about 30 cents, 1-2 minutes)"),
+    transparent: z.boolean().optional().describe("true: a transparent background, for icons, logos and stickers"),
+  }),
   schedule_task: ScheduleTaskArgs,
   list_scheduled_tasks: ListScheduledTasksArgs,
   update_scheduled_task: UpdateScheduledTaskArgs,
@@ -211,7 +224,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   paste: "Insert text at the current keyboard focus.",
   press_key: "Press a key or key combination.",
   scroll: "Scroll the page or an element.",
-  upload: "Attach local files to a file input by index.",
+  upload: "Attach local files by index: set on a file input, else dropped on the element (drop zones, editors), else pasted into it.",
   open_tabs:
     "Open up to 8 URLs at once, each in a new tab, loading in parallel. Waits until all are loaded and returns their tab ids and titles. The current tab stays the same unless background is false.",
   switch_tab: "Make another tab the current tab: read_page, act, navigate, scroll, screenshot and the other tools then act on it.",
@@ -221,6 +234,8 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   wait_for: WAIT_FOR_DESCRIPTION,
   switch_x_account: "Switch X (Twitter) to another signed-in account using X's account switcher. It checks that the switcher shows the new account before it answers.",
   get_credential: "Get the stored username and password for a site. Never use this for X.",
+  generate_image:
+    "Create a new picture (an icon, illustration, banner, photo-like image) from a text description, with Noa AI's image model, paid from the user's Noa usage credit. It is saved as a PNG in the user's Noa folder (Downloads/Noa/images); the result gives its path, which upload takes, and shows you the picture. Use it only when the user wants an image made, not to find existing ones.",
   schedule_task: SCHEDULE_TASK_DESCRIPTION,
   list_scheduled_tasks: LIST_SCHEDULED_TASKS_DESCRIPTION,
   update_scheduled_task: UPDATE_SCHEDULED_TASK_DESCRIPTION,
@@ -320,8 +335,9 @@ export const INTERACTIVE_TOOL_NAMES: ToolName[] = TOOL_NAMES.filter((n) => !TASK
  * Tools offered to the model. act (batched steps) always replaces click and
  * type: steps that name an element index run directly; with Jev, steps may
  * instead describe the element in words. interactive: the user's own Claude
- * Code (INTERACTIVE_TOOL_NAMES, no task to end).
+ * Code (INTERACTIVE_TOOL_NAMES, no task to end). images false: no generate_image (the user turned image generation
+ * off in Settings).
  */
-export function toolsFor(opts: { interactive?: boolean } = {}): ToolName[] {
-  return (opts.interactive ? INTERACTIVE_TOOL_NAMES : TOOL_NAMES).filter((n) => n !== "click" && n !== "type");
+export function toolsFor(opts: { interactive?: boolean; images?: boolean } = {}): ToolName[] {
+  return (opts.interactive ? INTERACTIVE_TOOL_NAMES : TOOL_NAMES).filter((n) => n !== "click" && n !== "type" && (opts.images !== false || n !== "generate_image"));
 }

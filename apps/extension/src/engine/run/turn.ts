@@ -4,7 +4,7 @@
  * brain's events into the session, and the checks on the result (X post
  * verification, failure classification). Next turns: conversation.ts.
  */
-import { automationPromptLine, bareToolName, effectiveLevel, errorMessage, isXStatusUrl, localTimeZone, traceStart, TURN_WALL_MINUTES, type AgentEvent, type AgentTask, type AttachmentRef, type ExtensionSettings, type RunConfig, type SessionInfo, type Sleep, type TaskAbout, type TaskRunResult, type TraceCategory, type TraceValue, type UserTab } from "@noa/shared";
+import { automationPromptLine, bareToolName, effectiveLevel, errorMessage, isXStatusUrl, languagePromptLine, localTimeZone, traceStart, TURN_WALL_MINUTES, type AgentEvent, type AgentTask, type AttachmentRef, type ExtensionSettings, type RunConfig, type SessionInfo, type Sleep, type TaskAbout, type TaskRunResult, type TraceCategory, type TraceValue, type UserTab } from "@noa/shared";
 import type { AgentSlot } from "../../agent-slots.js";
 import { bytesToBase64 } from "../../base64.js";
 import type { AttachmentStore } from "../attachment-store.js";
@@ -76,9 +76,13 @@ export interface QueuedMessage {
   context?: string;
 }
 
-/** The automation level's line for the agent's prompt this turn (automation.ts). */
+/**
+ * The automation level's line for the agent's prompt this turn (automation.ts), and the language the user picked
+ * (language.ts languagePromptLine). The language goes with it in AgentTask.approvals, so every brain is told it,
+ * a helper installed before the setting existed too.
+ */
 export function approvalsLine(settings: ExtensionSettings, run: Pick<ActiveSession, "scheduled" | "agentAuthored">): string {
-  return automationPromptLine(effectiveLevel(settings, run));
+  return [automationPromptLine(effectiveLevel(settings, run)), languagePromptLine(settings.language)].filter(Boolean).join("\n\n");
 }
 
 export type Cleanup = () => void | Promise<void>;
@@ -120,6 +124,7 @@ export function runConfig(settings: ExtensionSettings, isRetry: boolean): RunCon
     jevThreshold: settings.jevThreshold,
     reasoning: settings.reasoning,
     reasoningAutoRaise: settings.reasoningAutoRaise,
+    imageGeneration: settings.imageGeneration,
     isRetry,
   };
   if (settings.jevApiKey) config.jevApiKey = settings.jevApiKey;
@@ -424,7 +429,7 @@ export class TurnRunner {
       if (!ok) {
         this.emit(active, { type: "status", text: `Post not verified: ${detail}` });
         // The agent's follow-up and spoken line assumed the post went out: neither is offered.
-        const { suggestion: _unverified, spoken: _unverifiedLine, ...unverified } = result;
+        const { suggestion: _unverified, spoken: _unverifiedLine, byAgent: _agents, ...unverified } = result;
         return { ...unverified, outcome: "retry", reason: `could not verify the post${detail ? `: ${detail}` : ""}` };
       }
       this.emit(active, { type: "status", text: "Post verified" });

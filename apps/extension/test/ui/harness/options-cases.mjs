@@ -67,8 +67,8 @@ const headerChecks = (p, signedIn) => [
       return acct.right <= head.right + 0.5 && acct.right >= head.right - 8;
     })],
   ["every section in the sidebar, each with an icon tile", async () =>
-    (await p.locator("#sections [role=tab]").allTextContents()).join(" | ") === "Account | API keys | AI | Permission | Tasks | Site logins | Memory | Advanced" &&
-    (await p.locator("#sections [role=tab] .side-icon svg").count()) === 8],
+    (await p.locator("#sections [role=tab]").allTextContents()).join(" | ") === "Account | AI | Permission | Tasks | Site logins | Memory | Advanced" &&
+    (await p.locator("#sections [role=tab] .side-icon svg").count()) === 7],
   ["the open section filled with the accent, its title over the content", () =>
     p.evaluate(() => {
       const on = document.querySelector("#sections [aria-selected=true]");
@@ -178,7 +178,15 @@ export const OPTION_CASES = [
     ["helper not installed", async () => /not installed/.test(await p.textContent("#helper-headline"))],
     ["says signing in is not enough", async () => /not enough/.test(await p.textContent("#helper-details"))],
     ["install steps", () => shown(p, "#helper-install")],
+    ["one Terminal command, for this extension", async () => (await shown(p, "#helper-command")) && (await p.textContent("#helper-command")) === "curl -fsSL https://noa.bot/helper/install.sh | sh -s -- --extension-id abcdefghijklmnopabcdefghijklmnop"],
+    ["no repo steps off Windows", async () => (await shown(p, "#helper-copy")) && !(await shown(p, "#helper-step-repo"))],
+    ["says how to open Terminal", () => shown(p, "#helper-step-terminal")],
     ["Connect button", async () => (await p.textContent("#helper-connect")) === "Connect"],
+  ]],
+  // The installer is not on the site (not deployed): no command that would 404 in Terminal.
+  ["options-ai-noinstaller", "nobrain", "#ai", (d) => ((d.state.settings.brain = "claude-code"), (d.helperInstallerDown = true)), (p) => [
+    ["no Terminal command", async () => !(await shown(p, "#helper-command")) && !(await shown(p, "#helper-step-terminal"))],
+    ["says the installer is not online, and the repo steps", async () => (await shown(p, "#helper-step-repo")) && /not online yet/.test(await p.textContent("#helper-step-repo"))],
   ]],
   ["options-ai-claudeapi", "ok", "#ai", (d) => (d.state.settings.brain = "claude-api"), (p) => [
     ["API key shown", () => shown(p, "[data-secret=anthropicApiKey]")],
@@ -191,24 +199,17 @@ export const OPTION_CASES = [
     ["missing key hint", () => shown(p, "#api-key-missing")],
     ["Save disabled until typed", async () => !(await p.isEnabled("[data-secret=anthropicApiKey] button.primary"))],
   ]],
-  // Jev (it had its own Speed tab): #jev and #speed open the AI section scrolled to it.
+  // Jev (it had its own Speed section): #jev and #speed open the AI section on its Speed tab.
   ["options-speed-on", "ok", "#jev", () => {}, (p) => [
     ["on the AI section", async () => (await p.getAttribute("#tab-ai", "aria-selected")) === "true"],
-    ["no Speed tab", async () => (await p.locator("#tab-speed").count()) === 0],
+    ["no Speed section in the sidebar", async () => (await p.locator("#tab-speed").count()) === 0],
     ["hash normalised", async () => (await p.evaluate(() => location.hash)) === "#ai"],
-    // Near the top of the window (below the sticky section row when narrow, never behind it), or as far as a short page scrolls.
-    ["scrolled to Jev", () =>
-      eventually(() =>
-        p.evaluate(() => {
-          const top = document.getElementById("jev-group").getBoundingClientRect().top;
-          const below = document.querySelector(".side").getBoundingClientRect();
-          const clear = innerWidth > 720 ? 0 : below.bottom;
-          const atEnd = Math.ceil(window.scrollY + window.innerHeight) >= document.documentElement.scrollHeight;
-          return window.scrollY > 0 && top >= clear && (top - clear < 48 || atEnd);
-        }),
-      )],
-    ["order: Brain, Model, Jev, Voice (automation is on Permission)", async () =>
-      (await p.evaluate(() => [...document.querySelectorAll("#panel-ai > .group > h3")].map((e) => e.textContent).join(" | "))) === "Brain | Model | Speed (Jev) | Voice"],
+    ["AI tabs: Source, Speed, Voice, Images (automation is on Permission)", async () =>
+      (await p.locator("#ai-tabs [role=tab]").allTextContents()).join(" | ") === "Source | Speed | Voice | Images"],
+    ["on the Speed tab, only its panel shown", async () =>
+      (await p.getAttribute("#ai-tab-speed", "aria-selected")) === "true" && (await shown(p, "#jev-group")) && !(await shown(p, "#source-group")) && !(await shown(p, "#voice-group"))],
+    ["groups per tab: Source and Model | Jev | Voice | Image generation", async () =>
+      (await p.evaluate(() => [...document.querySelectorAll("#panel-ai > .subpanel")].map((sp) => [...sp.querySelectorAll(":scope > .group > h3")].map((e) => e.textContent).join(", ")).join(" | "))) === "Source, Model | Speed (Jev) | Voice | Image generation"],
     ["Jev key shown", () => shown(p, "[data-secret=jevApiKey]")],
     ["threshold shown", () => shown(p, "#f-jevThreshold")],
   ]],
@@ -221,12 +222,13 @@ export const OPTION_CASES = [
   // and what a test costs.
   ["options-voice", "opt-paid", "#voice", () => {}, (p) => [
     ["on the AI section", async () => (await p.getAttribute("#tab-ai", "aria-selected")) === "true"],
+    ["on the Voice tab", async () => (await p.getAttribute("#ai-tab-voice", "aria-selected")) === "true"],
     ["Realtime checked by default", () => p.isChecked("input[name=voiceEngine][value=realtime]")],
-    ["names", async () => (await p.locator(".opt[data-voice] .voice-name").allTextContents()).join(" | ") === "OpenAI Realtime (recommended) | Deepgram Nova-3 + browser voice"],
+    ["names", async () => (await p.locator(".opt[data-voice] .voice-name").allTextContents()).join(" | ") === "OpenAI Realtime (recommended) | OpenAI Realtime mini | Deepgram | Browser voice"],
     ["costs from the server", () =>
-      eventually(async () => (await p.locator(".opt[data-voice] .voice-cost").allTextContents()).join(" | ") === "about 6¢ of usage credit a minute | about 0.067¢ of usage credit a minute")],
+      eventually(async () => (await p.locator(".opt[data-voice] .voice-cost").allTextContents()).join(" | ") === "about 6.1¢ of usage credit a minute | about 2.3¢ of usage credit a minute | about 1.7¢ of usage credit a minute | about 0.067¢ of usage credit a minute")],
     ["cost assumption and model as tooltip", async () => /speaks for 18 seconds.*Model: gpt-realtime-2\.1\.$/.test(await p.getAttribute(".opt[data-voice=realtime] .voice-cost", "title"))],
-    ["Standard names no vendor", async () => (await p.textContent(".opt[data-voice=standard] .voice-detail")) === "Your words become text on our server; short summaries are read aloud by your browser."],
+    ["the browser voice says it is free", async () => (await p.textContent(".opt[data-voice=standard] .voice-detail")) === "Deepgram hears you (Nova-3); short summaries are read aloud by your browser's own voice, at no charge."],
     ["no plan note on Plus", async () => !(await shown(p, "#voice-note"))],
     ["Realtime voice title", async () => (await p.textContent("#speech-voice-title")) === "Realtime voice"],
     ["OpenAI's voices", async () => (await p.locator("#speech-voice option").allTextContents()).join(", ") === "Marin (recommended), Cedar (recommended), Alloy, Ash, Ballad, Coral, Echo, Sage, Shimmer, Verse"],
@@ -235,6 +237,52 @@ export const OPTION_CASES = [
     ["speed shown", async () => (await p.textContent("#speech-rate-value")) === "1.0×" && (await p.textContent("#speech-rate-hint")) === "0.25× to 1.5×; 1.0× is normal."],
     ["test cost", () => eventually(async () => (await p.textContent("#speech-test-hint")) === "Says a sample line with this voice and speed (uses about 1¢ of usage credit).")],
     ["Sounds on by default", () => p.isChecked("#voice-sounds")],
+    ["notifications follow the hands-free voice by default", async () => (await p.inputValue("#notification-voice")) === "same"],
+    ["notification choices", async () =>
+      (await p.locator("#notification-voice option").allTextContents()).join(" | ") ===
+      "Same as hands-free voice (OpenAI Realtime) | OpenAI Realtime (Marin) | OpenAI Realtime mini (Marin) | Deepgram (Thalia) | Browser voice (browser default) | Chime only | Off (silent)"],
+    ["notification voice row: the hands-free voice first, then OpenAI's voices", async () =>
+      (await shown(p, "#notification-speaker-row")) &&
+      (await p.locator("#notification-speaker option").first().textContent()) === "Same as hands-free voice (Marin)" &&
+      (await p.locator("#notification-speaker option").count()) === 11],
+    ["notifications in Deepgram: its voices, just for them", async () => {
+      await p.selectOption("#notification-voice", "deepgram");
+      return eventually(async () =>
+        (await p.textContent("#notification-speaker-hint")) === "Deepgram voices, just for notifications; hands-free voice keeps its own." &&
+        (await p.locator("#notification-speaker option").first().textContent()) === "Default (Thalia)");
+    }],
+    ["a notification voice saves, the hands-free voice untouched", async () => {
+      await p.selectOption("#notification-speaker", "apollo");
+      return eventually(async () =>
+        (await p.evaluate(() => window.__requests.some((r) => r.type === "settings.save" && r.settings.notificationSpeaker === "apollo"))) &&
+        (await p.inputValue("#notification-speaker")) === "apollo" &&
+        (await p.inputValue("#speech-voice")) === "marin");
+    }],
+    ["chime saves", async () => {
+      await p.selectOption("#notification-voice", "chime");
+      return eventually(() => p.evaluate(() => window.__requests.some((r) => r.type === "settings.save" && r.settings.notificationVoice === "chime")));
+    }],
+    ["a chime has no voice row", () => eventually(async () => !(await shown(p, "#notification-speaker-row")))],
+    ["notification test asks the background", async () => {
+      await p.click("#notification-test");
+      return eventually(() => p.evaluate(() => window.__requests.some((r) => r.type === "notify.test")));
+    }],
+  ]],
+  // Voice with Deepgram selected: Aura's voices and its own speed range; Test asks the background for the line.
+  ["options-voice-deepgram", "opt-paid", "#voice", (d) => (d.state.settings = { ...d.state.settings, voiceEngine: "deepgram", deepgramVoice: "apollo" }), (p) => [
+    ["Deepgram checked", () => p.isChecked("input[name=voiceEngine][value=deepgram]")],
+    ["Deepgram voice title", async () => (await p.textContent("#speech-voice-title")) === "Deepgram voice"],
+    ["Aura's voices, its picks first", async () => (await p.locator("#speech-voice option").first().textContent()) === "Thalia (recommended)" && (await p.locator("#speech-voice option").count()) === 40],
+    ["Apollo selected", async () => (await p.inputValue("#speech-voice")) === "apollo"],
+    ["Deepgram speed range", async () => JSON.stringify(await p.evaluate(() => { const r = document.getElementById("speech-rate"); return [r.min, r.max, r.step, r.value]; })) === JSON.stringify(["0.5", "2", "0.05", "1"])],
+    ["test asks for Apollo's line", async () => {
+      await p.click("#speech-test");
+      return eventually(() => p.evaluate(() => window.__requests.some((r) => r.type === "voice.speak" && r.voice === "apollo")));
+    }],
+    ["picking a voice saves it", async () => {
+      await p.selectOption("#speech-voice", "zeus");
+      return eventually(() => p.evaluate(() => window.__requests.some((r) => r.type === "settings.save" && r.settings.deepgramVoice === "zeus")));
+    }],
   ]],
   // Voice with Standard selected: the browser's voices and speed range.
   ["options-voice-standard", "opt-paid", "#voice", (d) => (d.state.settings = { ...d.state.settings, voiceEngine: "standard", speechRate: 1.4 }), (p) => [
@@ -251,7 +299,7 @@ export const OPTION_CASES = [
   ["options-permission", "ok", "#automation", () => {}, (p) => [
     ["on the Permission section", async () => (await p.getAttribute("#tab-permission", "aria-selected")) === "true" && (await p.textContent("#tab-permission")) === "Permission"],
     ["hash normalised", async () => (await p.evaluate(() => location.hash)) === "#permission"],
-    ["sidebar order: AI, Permission, Tasks", async () => (await p.locator("#sections [role=tab]").allTextContents()).slice(2, 5).join(" | ") === "AI | Permission | Tasks"],
+    ["sidebar order: AI, Permission, Tasks", async () => (await p.locator("#sections [role=tab]").allTextContents()).slice(1, 4).join(" | ") === "AI | Permission | Tasks"],
     ["groups: Chat, then Scheduled jobs", async () =>
       (await p.evaluate(() => [...document.querySelectorAll("#panel-permission > .group > h3")].map((e) => e.textContent).join(" | "))) === "Chat | Scheduled jobs"],
     ["three levels, the middle one checked", async () =>
@@ -357,7 +405,7 @@ export const OPTION_CASES = [
     ["one billing button: Choose a plan", async () => (await billingButtons(p)).join() === "Choose a plan"],
     ["says where plans are", async () => /Plans, top-ups and invoices are on your Noa dashboard\./.test(await p.textContent("#acct-billing"))],
     ["no subscribe, top-up or portal buttons", async () => (await p.locator("#panel-account button").allTextContents()).every((t) => !/Subscribe|Top up \$|\$\d|Manage billing|Change plan/.test(t))],
-    ["API keys are not on the Account section", async () => (await p.locator("#panel-account #keys-card").count()) === 0],
+    ["no API keys in the extension (they are made on the dashboard)", async () => (await p.locator("#keys-card, #tab-keys").count()) === 0],
   ]],
   ["options-account-paid", "opt-paid", "#account", () => {}, (p) => [
     ["one billing button: Manage plan & billing", async () => (await billingButtons(p)).join() === "Manage plan & billing"],
@@ -383,21 +431,9 @@ export const OPTION_CASES = [
     ["log in", () => shown(p, "#acct-signin")],
     ["no account", async () => !(await shown(p, "#acct-in"))],
   ]],
-  // API keys: their own section.
-  ["options-keys-free", "opt-free", "#keys", () => {}, (p) => [
-    ["on the API keys section", async () => (await p.getAttribute("#tab-keys", "aria-selected")) === "true"],
-    ["what keys come with, from the catalog", async () => (await p.textContent("#keys-locked-text")) === "API access to add TODO tasks comes with a paid plan."],
-    ["Choose a plan", async () => (await p.textContent("#keys-billing-open")) === "Choose a plan" && (await shown(p, "#keys-billing-open"))],
-    ["no key form", async () => !(await shown(p, "#keys-body"))],
-  ]],
-  ["options-keys-paid", "opt-paid", "#keys", () => {}, (p) => [
-    ["keys listed", async () => (await p.locator("#keys-list li:not(.empty)").count()) === 2],
-    ["create form", () => shown(p, "#key-create")],
-    ["no plan button", async () => !(await shown(p, "#keys-locked"))],
-  ]],
-  ["options-keys-signedout", "opt-signedout", "#keys", () => {}, (p) => [
-    ["log in", () => shown(p, "#keys-signin")],
-    ["no key form", async () => !(await shown(p, "#keys-body")) && !(await shown(p, "#keys-locked"))],
+  // API keys had their own section; an old #keys link lands on Account.
+  ["options-keys-link", "opt-free", "#keys", () => {}, (p) => [
+    ["on the Account section", async () => (await p.getAttribute("#tab-account", "aria-selected")) === "true"],
   ]],
 ];
 
@@ -524,6 +560,33 @@ export const OPTION_FLOWS = [
       await p.ctx.close();
     },
   },
+  // Image generation: on with GPT Image 2 by default; the model and the switch save; off hides the model.
+  {
+    name: "options-images",
+    size: { w: 1280 },
+    scheme: "light",
+    async run({ openOptions, optChecks }) {
+      const p = await openOptions({ w: 1280, h: 1000 }, "light", "opt-paid", "#images");
+      const saved = () => p.evaluate(() => window.__requests.filter((r) => r.type === "settings.save").map((r) => r.settings));
+      const checks = [];
+      const check = (what, ok) => checks.push([what, async () => ok]);
+      check("on the AI section", (await p.getAttribute("#tab-ai", "aria-selected")) === "true");
+      check("on its Images tab", (await p.getAttribute("#ai-tab-images", "aria-selected")) === "true" && (await shown(p, "#images-group")) && !(await shown(p, "#voice-group")));
+      check("on by default", await p.isChecked("#images-on"));
+      check("the models", (await p.locator("#images-model option").allTextContents()).join(" | ") === "GPT Image 2 | GPT Image 1 Mini");
+      check("GPT Image 2 picked, with its cost", (await p.inputValue("#images-model")) === "gpt-image-2" && /7 cents/.test(await p.textContent("#images-model-hint")));
+      await p.screenshot({ path: "test/ui/screenshots/options-images-on.png", clip: await p.locator("#images-group").boundingBox() });
+      await p.selectOption("#images-model", "gpt-image-1-mini");
+      check("model saved", await eventually(async () => (await saved()).some((s) => s.imageModel === "gpt-image-1-mini")));
+      check("its hint follows", await eventually(async () => /2 cents/.test(await p.textContent("#images-model-hint"))));
+      await p.click("#images-on");
+      check("off saved", await eventually(async () => (await saved()).some((s) => s.imageGeneration === false)));
+      check("off hides the model", await eventually(async () => !(await shown(p, "#images-model"))));
+      await p.screenshot({ path: "test/ui/screenshots/options-images-off.png", clip: await p.locator("#images-group").boundingBox() });
+      await optChecks(p, "images", checks);
+      await p.ctx.close();
+    },
+  },
   // Test voice with Realtime: a short relay session in the chosen voice and speed says the sample, then closes; when
   // the server cannot run Realtime, it says so.
   {
@@ -540,7 +603,8 @@ export const OPTION_FLOWS = [
       await p.waitForFunction(() => window.__rt?.sent.some((e) => e.type === "response.create"));
       const sent = await p.evaluate(() => window.__rt.sent);
       check("the voice and speed from Settings", JSON.stringify(sent[0].session.audio.output) === JSON.stringify({ format: { type: "audio/pcm", rate: 24000 }, voice: "cedar", speed: 1.2 }));
-      check("asks for the sample line", /^Say exactly: "Opening Gmail\./.test(sent.find((e) => e.type === "conversation.item.create")?.item.content[0].text ?? ""));
+      // Word for word, out of band (realtime-client.ts lineResponse).
+      check("asks for the sample line", /Say exactly this.*«Opening Gmail\./.test(sent.find((e) => e.type === "response.create")?.response?.instructions ?? ""));
       check("button busy while it runs", await p.isDisabled("#speech-test"));
       await p.evaluate(() => {
         const pcm = btoa(String.fromCharCode(...new Uint8Array(24_000 * 2 * 0.3)));
@@ -589,16 +653,24 @@ export const OPTION_FLOWS = [
       check("first section by default", await selected("account"));
       await p.focus("#tab-account");
       await p.keyboard.press("ArrowDown");
-      check("ArrowDown -> API keys, focused", (await selected("keys")) && (await p.evaluate(() => document.activeElement.id)) === "tab-keys");
-      check("hash #keys", (await p.evaluate(() => location.hash)) === "#keys");
-      check("keyboard focus is visible", await p.evaluate(() => document.activeElement.matches(":focus-visible") && getComputedStyle(document.activeElement).outlineStyle !== "none"));
-      check("one tab stop in the sidebar", (await p.locator("#sections [tabindex='0']").count()) === 1);
-      await p.keyboard.press("ArrowDown");
       check("ArrowDown -> AI, focused", (await selected("ai")) && (await p.evaluate(() => document.activeElement.id)) === "tab-ai");
       check("hash #ai", (await p.evaluate(() => location.hash)) === "#ai");
+      check("keyboard focus is visible", await p.evaluate(() => document.activeElement.matches(":focus-visible") && getComputedStyle(document.activeElement).outlineStyle !== "none"));
+      check("one tab stop in the sidebar", (await p.locator("#sections [tabindex='0']").count()) === 1);
       check("only the AI panel shows", (await shown(p, "#panel-ai")) && !(await shown(p, "#panel-account")));
+      // The AI section's own tabs: Source first; the arrows move through them, one tab stop.
+      check("AI opens on Source", (await p.getAttribute("#ai-tab-source", "aria-selected")) === "true" && (await shown(p, "#source-group")) && !(await shown(p, "#jev-group")));
+      await p.focus("#ai-tab-source");
+      await p.keyboard.press("ArrowRight");
+      check("AI tabs: ArrowRight -> Speed, focused", (await p.getAttribute("#ai-tab-speed", "aria-selected")) === "true" && (await p.evaluate(() => document.activeElement.id)) === "ai-tab-speed");
+      check("Speed shows Jev only", (await shown(p, "#jev-group")) && !(await shown(p, "#source-group")));
+      await p.keyboard.press("End");
+      check("AI tabs: End -> Images", (await shown(p, "#images-group")) && (await p.locator("#ai-tabs [tabindex='0']").count()) === 1);
+      await p.keyboard.press("ArrowRight");
+      check("AI tabs: ArrowRight wraps to Source", await shown(p, "#source-group"));
+      await p.focus("#tab-ai");
       await p.keyboard.press("ArrowUp");
-      check("ArrowUp -> API keys", await selected("keys"));
+      check("ArrowUp -> Account", await selected("account"));
       await p.keyboard.press("ArrowRight");
       check("ArrowRight works too (the narrow row)", await selected("ai"));
       await p.keyboard.press("End");
@@ -671,8 +743,9 @@ export const OPTION_FLOWS = [
       check("longest pause below shortest", /at least the shortest/.test(await p.textContent("#err-delayMaxSec")));
       await optShot(p, "options-validation", size, "light");
 
-      // Jev off hides its key; on shows it again (Jev is on the AI tab).
+      // Jev off hides its key; on shows it again (Jev is on the AI section's Speed tab).
       await p.click("#tab-ai");
+      await p.click("#ai-tab-speed");
       await autoSaved(() => p.click("#f-jevEnabled"));
       check("Jev off saved", (await saves()).some((s) => s.jevEnabled === false));
       check("Jev key hidden", !(await shown(p, "[data-secret=jevApiKey]")));
@@ -687,7 +760,7 @@ export const OPTION_FLOWS = [
     },
   },
   // Free plan: every billing button opens the dashboard's Billing page in a new tab (never a Stripe page from
-  // here); coming back to the page refreshes the account. #keys deep-links to the API keys tab, remembered.
+  // here); coming back to the page refreshes the account. The section used last is remembered.
   {
     name: "options-account-free",
     size: { w: 420 },
@@ -718,15 +791,12 @@ export const OPTION_FLOWS = [
       await p.waitForFunction((u) => window.__created.filter((c) => c === u).length === 2, BILLING);
       await p.click("#acct-dashboard");
       await p.waitForFunction(() => window.__created.includes("https://app.noa.bot/"));
-      await p.click("#tab-keys");
-      await p.click("#keys-billing-open");
-      await p.waitForFunction((u) => window.__created.filter((c) => c === u).length === 3, BILLING);
       check("no Stripe page asked for", !(await p.evaluate(() => window.__requests.some((r) => /billing/.test(r.type)))));
       check("only dashboard pages opened", (await created()).every((u) => u.startsWith("https://app.noa.bot/")));
-      // A plain options.html opens the tab used last: API keys.
+      // A plain options.html opens the section used last: Account.
       await p.goto(`${base}/options.html`);
-      await p.waitForSelector("#keys-locked:not([hidden])");
-      check("last tab remembered: API keys", (await p.getAttribute("#tab-keys", "aria-selected")) === "true");
+      await p.waitForSelector("#acct-in:not([hidden])");
+      check("last section remembered: Account", (await p.getAttribute("#tab-account", "aria-selected")) === "true");
       await optChecks(p, "billing", checks);
       await p.ctx.close();
     },
@@ -758,26 +828,6 @@ export const OPTION_FLOWS = [
       check("a new passphrase opens the empty vault", (await shown(p, "#vault-open")) && (await p.textContent("#vault-sites")) === "No saved logins yet.");
       check("says so", (await p.textContent("#vault-msg")) === "Passphrase set. Add your first login.");
       await optChecks(p, "logins-recover", checks);
-      await p.ctx.close();
-    },
-  },
-  // Paid: create an API key.
-  {
-    name: "options-apikeys",
-    size: { w: 420 },
-    scheme: "light",
-    async run({ openOptions, optChecks, shots, taken }) {
-      const p = await openOptions({ w: 420, h: 900 }, "light", "opt-paid", "#keys");
-      await p.fill("#key-name", "ci pipeline");
-      await p.click("#key-create");
-      await p.waitForSelector("#key-new:not([hidden])");
-      await optChecks(p, "apikeys", [
-        ["new key shown", async () => (await p.locator("#key-value").textContent()) === "bt_EXAMPLE_not_a_real_key_0000000000000000"],
-        ["3 keys", async () => (await p.locator("#keys-list li:not(.empty)").count()) === 3],
-      ]);
-      const kf = join(shots, "options-apikeys-420-light.png");
-      await p.locator("#keys-card").screenshot({ path: kf });
-      taken.push(kf);
       await p.ctx.close();
     },
   },

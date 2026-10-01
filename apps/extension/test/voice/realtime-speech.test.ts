@@ -10,13 +10,13 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  MAKE_AGAIN_RESPONSE,
   NOT_A_REQUEST_OUTPUT,
   RealtimeClient,
   TRANSCRIPTION_PROMPT,
   WORKING_SMALL_TALK_RESPONSE,
   type RealtimeHandlers,
   type RealtimeSocketLike,
+  SENT_OUTPUT,
 } from "../../src/voice/realtime-client.js";
 import { echoesUpdate } from "../../src/voice/narrator-policy.js";
 
@@ -52,7 +52,7 @@ function client(languages = ["en"]) {
   const heard: string[][] = [];
   const traces: string[] = [];
   const handlers: RealtimeHandlers = {
-    onTool: (name, args, inputId, words) => (tools.push([name, args, inputId, words]), "Started. Your updates on it will follow."),
+    onTool: (name, args, inputId, words) => (tools.push([name, args, inputId, words]), SENT_OUTPUT),
     onAudio: (b64) => void audio.push(b64),
     onHeard: (w) => void heard.push(w),
     onTrace: (e) => void traces.push(e.name),
@@ -107,7 +107,6 @@ describe("unclear words ('Yo sup how you doin' as '有，......。')", () => {
     await flush();
     expect(t.audio).toEqual(["AAAA"]);
     expect(t.creates()).toEqual([]);
-    expect(t.creates()).not.toContainEqual({ type: "response.create", response: MAKE_AGAIN_RESPONSE });
     expect(t.tools).toEqual([]);
     expect(t.traces).toContain("voice.unclear");
     // Kept for the record only (the chat shows none of it).
@@ -169,7 +168,7 @@ describe("the narrator passing on its own update (the owner's trace, turn 5)", (
 
   it("on a turn of background speech: refused, the narrator told it was an update, nothing acknowledged", async () => {
     const t = client();
-    t.c.note(RESULT, null);
+    t.c.setStatus(RESULT);
     t.turn("bg5");
     t.words("bg5", "我这胖，我的刚刚刚。");
     t.calls("bg5", ECHO);
@@ -182,7 +181,7 @@ describe("the narrator passing on its own update (the owner's trace, turn 5)", (
 
   it("on a reply to the update itself, or on a clear turn of the user's: refused as an update (without its wording too)", async () => {
     const t = client();
-    t.c.note(RESULT, "result");
+    t.c.say("result", RESULT);
     t.s.event({ type: "response.created", response: { id: "ours" } });
     t.calls("ours", ECHO);
     await flush();
@@ -196,7 +195,7 @@ describe("the narrator passing on its own update (the owner's trace, turn 5)", (
 
   it("the user's answer made of the update's words is theirs ('post it' to 'Should I post it?')", async () => {
     const t = client();
-    t.c.note('Your update (you need the user): Your question: "Should I post it?" Ask the user, and give their answer to send_to_agent.', "question");
+    t.c.say("question", "Should I post it?");
     t.turn("in1");
     t.words("in1", "yes, post it");
     t.calls("in1", "Yes, post it");

@@ -1,9 +1,17 @@
 /** Pure helpers for the options page: building settings.save patches and status text. */
-import { SECRET_SETTING_KEYS, type ExtensionSettings, type HelperInfo } from "@noa/shared";
+import { HELPER_INSTALL_URL, SECRET_SETTING_KEYS, type ExtensionSettings, type HelperInfo } from "@noa/shared";
 import { HELPER_NOT_INSTALLED } from "../helper-link.js";
 
 /** Why the helper is needed at all: people sign in to Claude Code and expect that to be enough. */
 export const HELPER_WHY = "Signing in to Claude Code is not enough: Chrome reaches it only through this helper.";
+
+/**
+ * The Terminal command that installs the helper for this extension (macOS, Linux): the installer
+ * downloads the helper itself, so it needs no checkout of the repo.
+ */
+export function helperInstallCommand(extensionId: string): string {
+  return `curl -fsSL ${HELPER_INSTALL_URL} | sh -s -- --extension-id ${extensionId}`;
+}
 
 /** A key field: masked, saved one by one with its own buttons (secret-field.ts). */
 export type SecretKey = (typeof SECRET_SETTING_KEYS)[number];

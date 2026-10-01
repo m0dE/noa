@@ -117,12 +117,40 @@ export function initialHandsFree(): HandsFreeState {
 const bare = (text: string) =>
   text
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s']/gu, " ")
+    // Marks too: Hindi's vowel signs, Arabic's short vowels.
+    .replace(/[^\p{L}\p{M}\p{N}\s']/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 
-const STOP_PHRASES = new Set(["stop", "stop listening", "stop it", "end voice", "stop voice", "goodbye", "bye"]);
-const CANCEL_PHRASES = new Set(["cancel", "cancel that", "cancel it", "never mind", "nevermind", "don't send", "don't send it", "do not send"]);
+/** Stop and cancel words, in English and the languages of Settings > Language (language.ts). */
+const STOP_PHRASES = new Set(
+  [
+    "stop", "stop listening", "stop it", "end voice", "stop voice", "goodbye", "bye",
+    "para", "detente", "deja de escuchar", "adiós", // Spanish
+    "pare", "para de ouvir", "tchau", // Portuguese
+    "arrête", "arrête d'écouter", "au revoir", // French
+    "stopp", "hör auf", "hör auf zuzuhören", "tschüss", // German
+    "그만", "멈춰", "그만 들어", "음성 꺼", // Korean
+    "ストップ", "止めて", "聞くのをやめて", "さようなら", // Japanese
+    "停", "停止", "停止聆听", "再见", // Chinese
+    "रुको", "बंद करो", "सुनना बंद करो", "अलविदा", // Hindi
+    "توقف", "توقفي", "مع السلامة", // Arabic
+  ].map((p) => bare(p)),
+);
+const CANCEL_PHRASES = new Set(
+  [
+    "cancel", "cancel that", "cancel it", "never mind", "nevermind", "don't send", "don't send it", "do not send",
+    "cancela", "cancelar", "olvídalo", "no lo envíes", // Spanish
+    "deixa pra lá", "não envie", "não manda", // Portuguese
+    "annule", "annuler", "laisse tomber", "n'envoie pas", // French
+    "abbrechen", "vergiss es", "nicht senden", // German
+    "취소", "취소해", "됐어", "보내지 마", // Korean
+    "キャンセル", "取り消して", "やっぱりいい", "送らないで", // Japanese
+    "取消", "算了", "别发", // Chinese
+    "रद्द करो", "रहने दो", "मत भेजो", // Hindi
+    "إلغاء", "ألغ", "لا ترسل", "انس الأمر", // Arabic
+  ].map((p) => bare(p)),
+);
 
 /** The whole utterance asks to end the session ("stop", "stop listening"). */
 export const isStopPhrase = (text: string): boolean => STOP_PHRASES.has(bare(text));

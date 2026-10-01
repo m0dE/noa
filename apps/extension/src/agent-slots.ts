@@ -12,6 +12,7 @@ import type { Cdp } from "./cdp.js";
 import { closeTabsAsking, DialogWatch, type DialogEvent } from "./dialogs.js";
 import { Driver } from "./driver.js";
 import { createBrowserCaller, tracedBrowser, type BrowserCallTrace, type VaultLike } from "./engine/browser-caller.js";
+import type { GenerateImageParams, GenerateImageResult } from "./engine/image-generator.js";
 import { isRestrictedError } from "./restricted.js";
 import { ApprovalGate, type GateDeps } from "./approval/gate.js";
 
@@ -82,6 +83,8 @@ export class AgentSlots implements SlotPool {
     private readonly approvals?: SlotApprovals,
     /** A JavaScript dialog of a session's run was answered (dialogs.ts): the line its events get. */
     private readonly onDialog?: (sessionId: string, event: DialogEvent) => void,
+    /** generate_image (engine/image-generator.ts), for the session using the slot. Absent: the tool says it is not available. */
+    private readonly images?: { generate(params: GenerateImageParams, sessionId: string | null): Promise<GenerateImageResult> },
   ) {}
 
   /** Closes a run's tabs at its end without leaving a page silently: "Leave site?" is answered Cancel, and the tab stays. */
@@ -108,7 +111,8 @@ export class AgentSlots implements SlotPool {
     const cdp = this.cdp;
     const cleanedUp = () => this.cleanedUp();
     const onCall = this.onBrowserCall;
-    const plain = createBrowserCaller(driver, this.vault);
+    const images = this.images;
+    const plain = createBrowserCaller(driver, this.vault, images ? { generate: (p) => images.generate(p, slot.sessionId) } : undefined);
     // Calls made for a session are timed in its trace.
     const traced = onCall
       ? tracedBrowser(plain, () => (driver.inFallback ? "fallback" : "cdp"), (call) => {
@@ -169,7 +173,7 @@ export class AgentSlots implements SlotPool {
   take(index: number, sessionId: string): AgentSlot {
     const s = this.get(index);
     s.sessionId = sessionId;
-    // "Allow for this task" lasts one turn.
+    // "Allow all until done" lasts one turn.
     s.gate?.release();
     return s;
   }
@@ -210,7 +214,7 @@ export class AgentSlots implements SlotPool {
 
   /**
    * The user's OK for a change a session's agent makes outside the page (a TODO task changed or cancelled), at
-   * its automation level, through its slot's gate ("Allow for this task" and the turn's clock are the slot's).
+   * its automation level, through its slot's gate ("Allow all until done" and the turn's clock are the slot's).
    * Without approvals nothing waits. A session without a slot (its turn ended) is refused. True: the user allowed it on
    * its card.
    */

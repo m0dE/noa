@@ -10,6 +10,8 @@
     "alarms",
     "storage",
     "notifications",
+    "tts",
+    "offscreen",
     "tabs",
     "sidePanel",
     "downloads",

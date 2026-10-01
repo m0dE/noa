@@ -42,8 +42,15 @@ export function retryWaitMs(attempt: number, delays: number[], retryAfterMs: num
   const base = delays[attempt]!;
   return Math.round(base * (1 + RETRY_JITTER * (2 * random() - 1)));
 }
-/** Screenshots kept in the conversation; older ones are replaced by a note to save tokens. */
-export const MAX_IMAGES_IN_HISTORY = 3;
+/**
+ * Screenshots in the conversation: when there are more than MAX_IMAGES_IN_HISTORY, all but the newest
+ * IMAGES_KEPT_ON_PRUNE are replaced by a note. Pruning in batches rather than one image per step matters for
+ * prompt caching: replacing an old screenshot changes the history from that point on, so every later block is
+ * written to the cache again (1.25x the input price) instead of read (0.05-0.1x). One prune every ~9 screenshots
+ * costs far less than re-writing the last few turns on every one, and the extra images are cheap cache reads.
+ */
+export const MAX_IMAGES_IN_HISTORY = 12;
+export const IMAGES_KEPT_ON_PRUNE = 3;
 /**
  * Bytes of attached images and PDFs kept in the conversation (one message's worth): every request resends the
  * history, and the hosted AI takes at most 20 MB. Older attachments are replaced by a note.
@@ -206,7 +213,7 @@ export function startApiAgentWith(opts: ApiAgentOptions, internals: ApiAgentInte
     ...(opts.memory ? { memory: opts.memory } : {}),
   });
 
-  const tools = toolsFor();
+  const tools = toolsFor({ images: opts.config.imageGeneration !== false });
   const system = buildSystemPrompt({ tools, jev: jevOn });
   /** The whole conversation, across turns. */
   const messages: MessageParam[] = [];
@@ -214,8 +221,11 @@ export function startApiAgentWith(opts: ApiAgentOptions, internals: ApiAgentInte
   let unsent: ContentBlock[] = [];
   let turnRunning = false;
 
-  /** Keep only the newest MAX_IMAGES_IN_HISTORY images in tool results. */
+  /** Past MAX_IMAGES_IN_HISTORY images in tool results, keep only the newest IMAGES_KEPT_ON_PRUNE. */
   const pruneImages = () => {
+    let total = 0;
+    for (const m of messages) for (const block of m.content) if (block.type === "tool_result") total += (block as ToolResultBlock).content.filter((c) => c.type === "image").length;
+    if (total <= MAX_IMAGES_IN_HISTORY) return;
     let seen = 0;
     for (let i = messages.length - 1; i >= 0; i--) {
       for (const block of messages[i]!.content) {
@@ -224,7 +234,7 @@ export function startApiAgentWith(opts: ApiAgentOptions, internals: ApiAgentInte
         tr.content = tr.content.map((c) => {
           if (c.type !== "image") return c;
           seen++;
-          return seen > MAX_IMAGES_IN_HISTORY ? { type: "text" as const, text: "[older screenshot removed]" } : c;
+          return seen > IMAGES_KEPT_ON_PRUNE ? { type: "text" as const, text: "[older screenshot removed]" } : c;
         });
       }
     }

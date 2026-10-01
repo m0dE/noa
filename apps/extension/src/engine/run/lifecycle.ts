@@ -224,7 +224,12 @@ export class Lifecycle {
   private async finish(active: ActiveSession, job: Job, raw: TaskRunResult, settings: ExtensionSettings, cleanups: Cleanup[]): Promise<Ended> {
     const sessionId = active.session.sessionId;
     const stop = active.forced;
-    let result = stop ? { ...raw, outcome: stop.outcome, reason: stop.reason } : raw;
+    let result: TaskRunResult = raw;
+    if (stop) {
+      // The runner's reason, not the agent's.
+      const { byAgent: _agents, ...rest } = raw;
+      result = { ...rest, outcome: stop.outcome, reason: stop.reason };
+    }
     let keepTabs = true;
     try {
       result = await this.deps.turns.check(active, result);

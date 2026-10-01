@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { TODO_TOOLS, toolsFor, type AgentEvent, type RunConfig, type TraceDraft } from "@noa/shared";
-import { MAX_RETRY_AFTER_MS, RETRY_JITTER, retryWaitMs, startApiAgentWith } from "../src/api-agent.js";
+import { IMAGES_KEPT_ON_PRUNE, MAX_IMAGES_IN_HISTORY, MAX_RETRY_AFTER_MS, RETRY_JITTER, retryWaitMs, startApiAgentWith } from "../src/api-agent.js";
 import { retryAfterMs } from "../src/anthropic.js";
 import { ENDED_WITHOUT_RESULT } from "../src/failures.js";
 import { raiseNote, TASK_FAIL_RECHECK, THINKING_MAX_TOKENS } from "../src/reasoning.js";
@@ -188,7 +188,7 @@ describe("startApiAgent", () => {
   it("refuses a locked tool that the model calls anyway", async () => {
     const x = new FakeX({ url: "https://x.com/home" });
     const { session, server } = start(x, [msg(tool("click", { index: 1 })), msg(tool("task_fail", { reason: "gave up" }))], { jev: fakeJev([]) });
-    expect(await session.done).toEqual({ outcome: "failed", reason: "gave up" });
+    expect(await session.done).toEqual({ outcome: "failed", reason: "gave up", byAgent: true });
     expect(lastUser(server.requests[1]!).content[0]).toMatchObject({ is_error: true, content: [{ text: expect.stringMatching(/click is not available|Tool click is not available/) }] });
     expect(x.calls).toHaveLength(0);
   });
@@ -552,20 +552,22 @@ describe("startApiAgent", () => {
     expect(await r2.session.done).toEqual({ outcome: "failed", reason: "stop" });
   });
 
-  it("keeps only the newest screenshots in the history", async () => {
+  it("prunes screenshots in batches, so the history stays a cacheable prefix between prunes", async () => {
     const x = new FakeX();
-    const { session, server } = start(x, [
-      msg(tool("screenshot")),
-      msg(tool("screenshot")),
-      msg(tool("screenshot")),
-      msg(tool("screenshot")),
-      msg(tool("task_complete", { summary: "ok" })),
-    ]);
+    const shots = MAX_IMAGES_IN_HISTORY + 1;
+    const { session, server } = start(x, [...Array.from({ length: shots }, () => msg(tool("screenshot"))), msg(tool("task_complete", { summary: "ok" }))]);
     await session.done;
+    const images = (i: number) => JSON.stringify(server.requests[i]!.body.messages).match(/"type":"image"/g)?.length ?? 0;
+    // Up to the ceiling every screenshot stays, and each request's history starts with the one before it.
+    expect(images(MAX_IMAGES_IN_HISTORY)).toBe(MAX_IMAGES_IN_HISTORY);
+    for (let i = 1; i <= MAX_IMAGES_IN_HISTORY; i++) {
+      const prev = server.requests[i - 1]!.body.messages.length;
+      expect(stripCache(server.requests[i]!.body.messages.slice(0, prev))).toEqual(stripCache(server.requests[i - 1]!.body.messages.slice(0, prev)));
+    }
+    // One past it: pruned down to the newest few in one go.
     const last = server.requests.at(-1)!;
-    const images = JSON.stringify(last.body.messages).match(/"type":"image"/g) ?? [];
-    expect(images).toHaveLength(3);
-    expect(JSON.stringify(last.body.messages)).toContain("[older screenshot removed]");
+    expect(images(server.requests.length - 1)).toBe(IMAGES_KEPT_ON_PRUNE);
+    expect(JSON.stringify(last.body.messages).match(/older screenshot removed/g)).toHaveLength(shots - IMAGES_KEPT_ON_PRUNE);
   });
 
   it("uses the retry prompt when isRetry", async () => {
@@ -729,7 +731,7 @@ describe("startApiAgent: reasoning (Fast, auto-raise, Thorough)", () => {
   it("the first task_fail of a Fast turn is answered with a recheck and raised; the second one ends the turn", async () => {
     const x = new FakeX({ url: "https://x.com/home" });
     const { session, server, events } = start(x, [msg(tool("task_fail", { reason: "cannot" })), msg(tool("task_fail", { reason: "still cannot" }))]);
-    expect(await session.done).toEqual({ outcome: "failed", reason: "still cannot" });
+    expect(await session.done).toEqual({ outcome: "failed", reason: "still cannot", byAgent: true });
     const answer = lastUser(server.requests[1]!).content[0];
     expect(answer).toMatchObject({ type: "tool_result", is_error: true, content: [{ type: "text", text: TASK_FAIL_RECHECK }] });
     expect(server.requests[1]!.body.thinking).toEqual(ADAPTIVE);
@@ -748,3 +750,8 @@ describe("startApiAgent: reasoning (Fast, auto-raise, Thorough)", () => {
     expect(off.server.requests.map((r) => r.body.thinking)).toEqual([OFF, OFF, OFF, OFF]);
   });
 });
+
+/** Messages without their cache_control markers (the moving breakpoint is not a change of the prefix). */
+function stripCache(messages: any[]): any[] {
+  return JSON.parse(JSON.stringify(messages, (k, v) => (k === "cache_control" ? undefined : v)));
+}

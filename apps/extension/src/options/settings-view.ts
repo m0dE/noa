@@ -25,7 +25,6 @@ import type { AccountView, BrainStatus } from "../ui-protocol.js";
 
 export const SECTIONS = [
   { id: "account", label: "Account" },
-  { id: "keys", label: "API keys" },
   { id: "ai", label: "AI" },
   { id: "permission", label: PERMISSION_TITLE },
   { id: "tasks", label: "Tasks" },
@@ -36,10 +35,12 @@ export const SECTIONS = [
 export type SectionId = (typeof SECTIONS)[number]["id"];
 
 /**
- * Other names a link may use for a section (options.html#jev opens AI, at its Jev group). "speed" was Jev's own tab;
- * automation (with approvals) was on AI and the schedule on Tasks before they moved to Permission.
+ * Other names a link may use for a section (options.html#jev opens AI, on its Speed tab). "speed" was Jev's own tab;
+ * automation (with approvals) was on AI and the schedule on Tasks before they moved to Permission. API keys had
+ * their own section; they are made on the dashboard now, so an old link lands on Account.
  */
 const SECTION_ALIASES: Record<string, SectionId> = {
+  source: "ai",
   brain: "ai",
   model: "ai",
   helper: "ai",
@@ -50,9 +51,11 @@ const SECTION_ALIASES: Record<string, SectionId> = {
   approvals: "permission",
   permissions: "permission",
   autonomy: "permission",
-  "api-keys": "keys",
+  keys: "account",
+  "api-keys": "account",
   billing: "account",
   schedule: "permission",
+  images: "ai",
   vault: "logins",
   memories: "memory",
   cloud: "advanced",
@@ -70,9 +73,18 @@ export function sectionFromHash(hash: string | null | undefined): SectionId | nu
 }
 
 /** Links that name a group inside a section -> that group's element id. */
-const ANCHORS: Record<string, string> = { jev: "jev-group", speed: "jev-group", voice: "voice-group", schedule: "schedule-group" };
+const ANCHORS: Record<string, string> = {
+  source: "source-group",
+  brain: "source-group",
+  model: "model-group",
+  jev: "jev-group",
+  speed: "jev-group",
+  voice: "voice-group",
+  images: "images-group",
+  schedule: "schedule-group",
+};
 
-/** "#jev" -> "jev-group": the group to scroll to once its section shows; null for a section's own link. */
+/** "#jev" -> "jev-group": the group to show (its sub-tab) and scroll to once its section shows; null for a section's own link. */
 export function anchorFromHash(hash: string | null | undefined): string | null {
   return ANCHORS[hashName(hash)] ?? null;
 }
@@ -196,7 +208,7 @@ function modelChoice(draft: Draft): ModelChoice {
   const id = draft.anthropicModel.trim();
   const known = isClaudeModel(id);
   const selected = known ? id : CUSTOM_MODEL;
-  let hint = "Used by every brain. You can also switch it from the side panel.";
+  let hint = "Used by every source. You can also switch it from the side panel.";
   if (draft.brain === "noa") {
     hint = known || !id ? "Noa AI runs this model." : `Noa AI does not offer this model, so it runs ${modelLabel(DEFAULT_MODEL)}.`;
   } else if (draft.brain === "auto" && !known && id) {
@@ -234,9 +246,9 @@ export function settingsView(input: ViewInput): SettingsView {
   });
   let brainProblem: string | null = null;
   if (draft.brain === "noa" && !signedIn) {
-    brainProblem = "Logged out. Log in or pick another brain.";
+    brainProblem = "Logged out. Log in or pick another source.";
   } else if (draft.brain === "noa" && !chosen.effective) {
-    brainProblem = `${OUT_OF_CREDIT}. Top up or pick another brain.`;
+    brainProblem = `${OUT_OF_CREDIT}. Top up or pick another source.`;
   }
   // Local Claude Code and the Claude API say what is missing in their own inline sections.
 
@@ -248,7 +260,7 @@ export function settingsView(input: ViewInput): SettingsView {
       detail: signedIn ? "Hosted by Noa, paid from your usage credit. Nothing to set up." : "Hosted by Noa. Needs an account.",
       enabled: signedIn,
     },
-    { value: "claude-code", label: "Local Claude Code", detail: "Your Claude subscription, through the helper app.", enabled: true },
+    { value: "claude-code", label: "Local Claude Code (Recommended)", detail: "Runs on the Claude subscription you already pay for, through the helper app. A fraction of the cost of Noa AI or the Claude API.", enabled: true },
     { value: "claude-api", label: "Claude API", detail: "Your Anthropic API key, straight from Chrome.", enabled: true },
   ];
 

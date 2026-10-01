@@ -122,13 +122,10 @@ try {
     return url;
   });
 
-  await step("the dashboard link and the API keys tab's button use it too", async () => {
+  await step("the dashboard link uses it too", async () => {
     assert.equal(await opensTab("#acct-dashboard"), `${NEW}/`);
-    await options.click("#tab-keys");
-    await options.waitForSelector("#keys-locked:not([hidden])");
-    assert.equal(await opensTab("#keys-billing-open"), `${NEW}/billing`);
     assert.equal(requests.filter((r) => r.host === hostOf(OLD)).length, 0, "nothing went to the old address");
-    return "dashboard and keys tab: current address";
+    return "dashboard: current address";
   });
 } finally {
   await ext?.close();

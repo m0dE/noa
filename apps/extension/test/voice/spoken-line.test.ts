@@ -10,7 +10,7 @@ describe("a task the user stopped (the owner's trace: 'I need a quick response f
     expect(endLine(stopped)).toBe(STOPPED_LINE);
     expect(narrationOf(stopped, freshMemory(), 0)).toEqual({ kind: "result", line: "Stopped." });
     const feed = new NarratorFeed();
-    expect(feed.push(stopped, 0)).toEqual([{ text: 'Your update (finished): The user stopped the task. Tell the user in one to three short sentences, in the first person: "Stopped."', speak: "result" }]);
+    expect(feed.push(stopped, 0)).toContainEqual({ say: { kind: "result", line: "Stopped." } });
   });
 });
 
@@ -45,6 +45,11 @@ describe("endLine: what is said when a turn ends", () => {
     expect(endLine({ type: "task_end", outcome: "done", summary: "Posted the thread. It has 4 posts." })).toBe("Posted the thread.");
     expect(endLine({ type: "task_end", outcome: "done" })).toBe("Done.");
     expect(endLine({ type: "task_end", outcome: "paused", reason: "Which account should I post from? Alpha or beta." })).toBe("Which account should I post from?");
+  });
+
+  it("the agent's own pause reason is said as it wrote it, not as one of Noa's errors (Sep 30)", () => {
+    const reason = "@rooftopchat is not signed in on this browser's X account menu, so switch_x_account cannot switch to it.";
+    expect(endLine({ type: "task_end", outcome: "paused", reason, byAgent: true })).toMatch(/^@rooftopchat is not signed in/);
   });
 
   it("a failure is said in the error card's plain words", () => {

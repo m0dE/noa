@@ -15,10 +15,11 @@ import { spokenAllowRefusal } from "./approval-voice.js";
 import type { VoiceTracer } from "../trace/panel-trace.js";
 import type { AudioSource } from "./dictation.js";
 import type { EngineEvents, HandsFreeEngine } from "./engine.js";
+import { EchoGate } from "./echo-gate.js";
 import { PcmPlayer } from "./pcm-player.js";
 import { RealtimeClient, realtimeFailure, REALTIME_SAMPLE_RATE, SENT_OUTPUT, takeoverUrl, type NarratorTool, type OpenSocket, type RealtimeFailure } from "./realtime-client.js";
 import type { RealtimeTicket } from "./realtime-access.js";
-import { NarratorFeed } from "./realtime-feed.js";
+import { NarratorFeed, type FeedOutput } from "./realtime-feed.js";
 import { requestKind } from "./narrator-policy.js";
 import { meterLevel, rms } from "./speech.js";
 import { toInt16 } from "./wav.js";
@@ -29,6 +30,8 @@ const SEND_EVERY_MS = 100;
 const START_TIMEOUT_MS = 15_000;
 
 export interface RealtimeEngineDeps {
+  /** Which Realtime engine this is (the ticket asks for its model); default realtime. */
+  id?: "realtime" | "realtime-mini";
   /** Where to connect, with the session token. Rejects with the reason it cannot. */
   ticket(): Promise<RealtimeTicket>;
   /** The microphone at REALTIME_SAMPLE_RATE. */
@@ -38,9 +41,11 @@ export interface RealtimeEngineDeps {
   voice?: { voice: RealtimeVoiceId; speed: number };
   /** The languages the user speaks (voice-language.ts voiceLanguages). */
   languages?: readonly string[];
+  /** The language picked in Settings, by its English name: the narrator always speaks it (RealtimeClientOptions.language). */
+  language?: string;
   log?(message: string): void;
   openSocket?: OpenSocket;
-  player?: Pick<PcmPlayer, "play" | "stop" | "close" | "playing">;
+  player?: Pick<PcmPlayer, "play" | "stop" | "close" | "playing" | "pause" | "resume" | "level">;
   /** The conversation's trace: the session token (ticket), connecting, each narrator reply, its tool calls. */
   trace?: VoiceTracer;
   /**
@@ -51,12 +56,14 @@ export interface RealtimeEngineDeps {
 }
 
 export class RealtimeEngine implements HandsFreeEngine {
-  readonly id = "realtime" as const;
+  readonly id: "realtime" | "realtime-mini";
   readonly halfDuplex = false;
   private client: RealtimeClient | null = null;
   private source: AudioSource | null = null;
   private readonly feed = new NarratorFeed();
-  private readonly player: Pick<PcmPlayer, "play" | "stop" | "close" | "playing">;
+  private readonly player: Pick<PcmPlayer, "play" | "stop" | "close" | "playing" | "pause" | "resume" | "level">;
+  /** The narrator's own voice heard back is not the user (echo-gate.ts). */
+  private readonly gate = new EchoGate(REALTIME_SAMPLE_RATE);
   private chunks: Float32Array[] = [];
   private chunked = 0;
   private level = 0;
@@ -70,6 +77,7 @@ export class RealtimeEngine implements HandsFreeEngine {
   private approvalWaiting: ApprovalRequest | null = null;
 
   constructor(private readonly deps: RealtimeEngineDeps) {
+    this.id = deps.id ?? "realtime";
     const ev = deps.events;
     this.player =
       deps.player ??
@@ -114,6 +122,7 @@ export class RealtimeEngine implements HandsFreeEngine {
         token: ticket.token,
         ...(this.deps.voice ? { voice: this.deps.voice.voice, speed: this.deps.voice.speed } : {}),
         ...(this.deps.languages ? { languages: this.deps.languages } : {}),
+        ...(this.deps.language ? { language: this.deps.language } : {}),
         ...(this.deps.openSocket ? { open: this.deps.openSocket } : {}),
         handlers: {
           onReady: () => {
@@ -124,9 +133,16 @@ export class RealtimeEngine implements HandsFreeEngine {
           },
           onAudio: (b64, itemId) => this.player.play(b64, itemId),
           onNarratorText: (t) => ev.narratorText(t),
-          onUserSpeech: () => {
-            this.cutOff();
+          onUserSpeech: (paused) => {
+            // Paused, not cut off, while it may be the speaker heard back (onTalkedOver).
+            if (paused) this.player.pause();
+            else this.cutOff();
             ev.speech();
+          },
+          onTalkedOver: (user) => {
+            if (user) return this.cutOff();
+            this.player.resume();
+            trace?.record({ t: Date.now(), cat: "voice", name: "voice.played_on" });
           },
           onTool: (name, args, inputId, heard) => this.tool(name, args, inputId, heard),
           onHeard: (words) => !this.stopped && ev.userWords(words),
@@ -210,17 +226,25 @@ export class RealtimeEngine implements HandsFreeEngine {
   agentEvent(ev: AgentEvent, now: number): void {
     if (ev.type === "approval_request") this.approvalWaiting = ev.request;
     else if ((ev.type === "approval_resolved" && ev.id === this.approvalWaiting?.id) || ev.type === "task_end") this.approvalWaiting = null;
-    for (const n of this.feed.push(ev, now)) this.client?.note(n.text, n.speak, n.line);
+    this.apply(this.feed.push(ev, now));
   }
 
   note(text: string): void {
-    this.client?.note(text, null);
+    this.client?.note(text);
+  }
+
+  /** What the feed says to do: a line to say word for word, or the narrator's new status. */
+  private apply(out: FeedOutput[]): void {
+    for (const o of out) {
+      if ("say" in o) this.client?.say(o.say.kind, o.say.line);
+      else this.client?.setStatus(o.status);
+    }
   }
 
   tick(now: number): void {
     // While the agent works: "Still …" after a long silence (milestones.ts PROGRESS); news is said as it comes.
     if (!this.agentWorking) return;
-    for (const n of this.feed.tick(now)) this.client?.note(n.text, n.speak, n.line);
+    this.apply(this.feed.tick(now));
   }
 
   /** Stops local playback; the narrator's memory keeps only what was heard. */
@@ -240,12 +264,11 @@ export class RealtimeEngine implements HandsFreeEngine {
       case "send_to_agent": {
         const text = typeof args.text === "string" ? args.text.trim() : "";
         if (!text) return "Error: say what to send (text).";
+        // Asked while the agent works: its answer is its next words once it read the question (a question asked when
+        // idle starts a turn whose end says it). Otherwise its acknowledgement is the narrator's line for now: progress
+        // waits PROGRESS.stepGapMs after it (milestones.ts). Counted before it goes: its events may come back first.
+        this.apply(this.feed.sent(text, requestKind(args) === "question" && this.agentWorking, Date.now(), this.agentWorking));
         ev.forward(text, heard);
-        // Asked while the agent works: its answer is its next words (a question asked when idle starts a turn whose
-        // end says it). Otherwise its acknowledgement is the narrator's line for now: progress waits
-        // PROGRESS.stepGapMs after it (milestones.ts).
-        if (requestKind(args) === "question" && this.agentWorking) this.feed.question();
-        else this.feed.request(Date.now());
         return SENT_OUTPUT;
       }
       // The request already went out: taking it back stops its task.
@@ -287,7 +310,9 @@ export class RealtimeEngine implements HandsFreeEngine {
     this.chunks = [];
     this.chunked = 0;
     if (!this.client || this.stopped) return;
-    this.client.appendAudio(toInt16(all));
+    const { send, opened } = this.gate.push(all, this.player.level());
+    if (opened) this.deps.trace?.record({ t: Date.now(), cat: "voice", name: "voice.talk_over" });
+    for (const c of send) this.client.appendAudio(toInt16(c));
     if (this.capturing) return;
     this.capturing = true;
     this.deps.events.capturing();

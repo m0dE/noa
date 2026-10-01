@@ -58,9 +58,10 @@ describe("sidebar sections", () => {
     expect(sectionFromHash("#voice")).toBe("ai");
     expect(sectionFromHash("#vault")).toBe("logins");
     expect(sectionFromHash("#brain")).toBe("ai");
-    // API keys have their own section (deep link #keys); billing still lands on Account.
-    expect(sectionFromHash("#keys")).toBe("keys");
-    expect(sectionFromHash("#api-keys")).toBe("keys");
+    expect(sectionFromHash("#source")).toBe("ai");
+    // API keys are made on the dashboard now: an old #keys link lands on Account, as billing does.
+    expect(sectionFromHash("#keys")).toBe("account");
+    expect(sectionFromHash("#api-keys")).toBe("account");
     expect(sectionFromHash("#billing")).toBe("account");
     // Automation (approvals) moved from AI, and the schedule from Tasks, to Permission; old links land there.
     expect(sectionFromHash("#permission")).toBe("permission");
@@ -72,11 +73,10 @@ describe("sidebar sections", () => {
     expect(sectionFromHash(null)).toBeNull();
   });
   it("arrow keys (up/down in the column, left/right in the narrow row) move and wrap; Home and End go to the ends; other keys do nothing", () => {
-    expect(SECTIONS.map((t) => t.label)).toEqual(["Account", "API keys", "AI", "Permission", "Tasks", "Site logins", "Memory", "Advanced"]);
-    expect(nextSection("account", "ArrowRight")).toBe("keys");
-    expect(nextSection("keys", "ArrowRight")).toBe("ai");
-    expect(nextSection("ai", "ArrowLeft")).toBe("keys");
-    expect(nextSection("ai", "ArrowUp")).toBe("keys");
+    expect(SECTIONS.map((t) => t.label)).toEqual(["Account", "AI", "Permission", "Tasks", "Site logins", "Memory", "Advanced"]);
+    expect(nextSection("account", "ArrowRight")).toBe("ai");
+    expect(nextSection("ai", "ArrowLeft")).toBe("account");
+    expect(nextSection("ai", "ArrowUp")).toBe("account");
     expect(nextSection("ai", "ArrowDown")).toBe("permission");
     expect(nextSection("ai", "ArrowRight")).toBe("permission");
     expect(nextSection("permission", "ArrowRight")).toBe("tasks");
@@ -90,6 +90,9 @@ describe("sidebar sections", () => {
     expect(anchorFromHash("#jev")).toBe("jev-group");
     expect(anchorFromHash("#speed")).toBe("jev-group");
     expect(anchorFromHash("#voice")).toBe("voice-group");
+    expect(anchorFromHash("#source")).toBe("source-group");
+    expect(anchorFromHash("#brain")).toBe("source-group");
+    expect(anchorFromHash("#model")).toBe("model-group");
     expect(anchorFromHash("#ai")).toBeNull();
     // Automation is the Permission section's first group: its old link opens the section at the top; #schedule scrolls.
     expect(anchorFromHash("#automation")).toBeNull();

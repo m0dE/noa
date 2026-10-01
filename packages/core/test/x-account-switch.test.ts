@@ -56,7 +56,7 @@ describe("switchXAccount", () => {
     const x = new FakeX({ ...OWNER, url: "https://x.com/home", flipAfter: [0, 0, 0, 0, 0] });
     const r = await switchXAccount(x.caller(), "@getbnty", { sleep: noSleep });
     expect(r.isError).toBe(true);
-    expect(r.text).toMatch(/3 of 3 times X switched its account menu to the delegate accounts.*task_pause/s);
+    expect(r.text).toMatch(/did not switch to @getbnty: 3 of 3 times X switched its account menu to the delegate accounts/s);
     expect(x.entryClicks).toEqual([]);
     expect(x.account).toBe("bboym0dE");
     neverClicksACell(x);
@@ -71,11 +71,30 @@ describe("switchXAccount", () => {
     neverClicksACell(x);
   });
 
+  it("the menu does not open after a reload (Sep 30, @rooftopchat): X is reloaded and the switch tried again", async () => {
+    const x = new FakeX({ ...OWNER, url: "https://x.com/home", deadSwitcherLoads: 1 });
+    const r = await switchXAccount(x.caller(), "@rooftopchat", { sleep: noSleep });
+    expect(r.text).toMatch(/^Switched to @rooftopchat/);
+    expect(x.calls.filter((c) => c.method === "browser.navigate")).toHaveLength(2);
+    neverClicksACell(x);
+  });
+
+  it("the menu never opens: a clear failure after SWITCH_ATTEMPTS reloads", async () => {
+    const x = new FakeX({ ...OWNER, url: "https://x.com/home", deadSwitcherLoads: Infinity });
+    const r = await switchXAccount(x.caller(), "@rooftopchat", { sleep: noSleep });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/did not switch to @rooftopchat: X's account menu did not open.*3 of 3/s);
+    // Facts for the agent to decide on, not a script of which tools to call next.
+    expect(r.text).not.toMatch(/call (switch_x_account|task_pause)/);
+    expect(x.calls.filter((c) => c.method === "browser.navigate")).toHaveLength(3);
+    expect(x.account).toBe("bboym0dE");
+  });
+
   it("an account not signed in in this browser: stops for the user, naming the accounts X lists", async () => {
     const x = new FakeX({ ...OWNER, url: "https://x.com/home" });
     const r = await switchXAccount(x.caller(), "@nobody", { sleep: noSleep });
     expect(r.isError).toBe(true);
-    expect(r.text).toMatch(/@nobody is not signed in.*Add an existing account.*task_pause/s);
+    expect(r.text).toMatch(/cannot switch to @nobody: @nobody is not signed in.*Add an existing account.*Only the user can sign in to X accounts/s);
     expect(r.text).toContain("@getbnty");
     expect(x.account).toBe("bboym0dE");
     neverClicksACell(x);
@@ -111,7 +130,7 @@ describe("switchXAccount", () => {
     const x = new FakeX({ url: "https://x.com/account/access", account: "alice" });
     const r = await switchXAccount(x.caller(), "bob", { sleep: noSleep });
     expect(r.isError).toBe(true);
-    expect(r.text).toMatch(/X locked the account.*task_pause/);
+    expect(r.text).toMatch(/X locked the account.*Only the user/);
     expect(x.calls.map((c) => c.method)).toEqual(["browser.readPage"]);
   });
 });

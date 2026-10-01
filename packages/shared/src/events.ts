@@ -74,9 +74,10 @@ export type AgentEvent =
   /**
    * suggestion: the agent's proposed next request (TaskRunResult.suggestion);
    * spoken: the outcome as one or two sentences hands-free voice reads aloud (TaskRunResult.spoken);
-   * draft: what the agent wrote for the user to review, not sent (TaskRunResult.draft).
+   * draft: what the agent wrote for the user to review, not sent (TaskRunResult.draft);
+   * byAgent: the reason is the agent's own words (TaskRunResult.byAgent).
    */
-  | { type: "task_end"; outcome: TaskOutcome; summary?: string; url?: string; reason?: string; suggestion?: string; spoken?: string; draft?: string }
+  | { type: "task_end"; outcome: TaskOutcome; summary?: string; url?: string; reason?: string; suggestion?: string; spoken?: string; draft?: string; byAgent?: true }
   | { type: "error"; text: string }
   /**
    * A line hands-free voice said aloud in this conversation (the plan, a
@@ -112,7 +113,7 @@ export type AgentEvent =
   | { type: "task_change_undone"; changeId: string }
   /**
    * An action waits for the user's OK (the automation level, automation.ts):
-   * the chat shows it as a card with Allow once, Allow for this task and
+   * the chat shows it as a card with Allow, Allow all until done and
    * Deny. Written by the extension, never by a brain.
    */
   | { type: "approval_request"; request: ApprovalRequest }
@@ -134,12 +135,21 @@ export type AgentEvent =
   | { type: "memory"; changeId: string; before: MemoryEntry | null; after: MemoryEntry | null; replaced?: MemoryEntry; auto?: true }
   /** The user undid that memory change from its note. Written by the extension. */
   | { type: "memory_undone"; changeId: string }
+  /** The user redid that memory change after undoing it (the latest of memory_undone / memory_redone counts). Written by the extension. */
+  | { type: "memory_redone"; changeId: string }
   /**
    * Timing for the conversation's trace (trace.ts): a model call, a tool's
    * duration, Claude Code's start. Never shown in the chat or stored with the
-   * events: the extension keeps it in the conversation's trace.
+   * events: the extension keeps it in the conversation's trace. One kind also
+   * reaches the side panel live: messageRead.
    */
   | { type: "trace"; trace: TraceEvent };
+
+/**
+ * The model read what the user sent while its turn ran (the brains' "interjection" trace, both brains: Interjections
+ * in @noa/core): what the agent writes from now on knows it. Hands-free voice says nothing the agent wrote before.
+ */
+export const isMessageRead = (e: AgentEvent): boolean => e.type === "trace" && e.trace.cat === "user" && e.trace.name === "interjection";
 
 /** Element picks of act steps (clicks and typing) in a turn: by Jev, or by Claude naming an index. */
 export interface ElementPicks {
@@ -288,4 +298,14 @@ export const MAX_ASSISTANT_TEXT = 20_000;
 
 export function clipEventText(text: string, max = MAX_EVENT_TEXT): string {
   return text.length > max ? `${text.slice(0, max)}… (${text.length - max} more chars)` : text;
+}
+
+/** A memory change is undone now: its latest memory_undone is not followed by a memory_redone. */
+export function isMemoryUndone(events: readonly AgentEvent[], changeId: string): boolean {
+  let undone = false;
+  for (const e of events) {
+    if (e.type === "memory_undone" && e.changeId === changeId) undone = true;
+    else if (e.type === "memory_redone" && e.changeId === changeId) undone = false;
+  }
+  return undone;
 }

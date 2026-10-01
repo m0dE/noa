@@ -32,11 +32,13 @@ export interface DownloadsLike {
     saveAs?: boolean;
     headers?: { name: string; value: string }[];
   }): Promise<number>;
-  search(query: { id: number }): Promise<{ id: number; state?: string; filename: string; error?: string }[]>;
+  search(query: { id: number }): Promise<{ id: number; state?: string; filename: string; error?: string; exists?: boolean }[]>;
   onChanged: { addListener(fn: (d: DownloadDelta) => void): void; removeListener(fn: (d: DownloadDelta) => void): void };
   setUiOptions?(options: { enabled: boolean }): Promise<void>;
   removeFile(id: number): Promise<void>;
   erase(query: { id: number }): Promise<number[]>;
+  /** The file in its folder, in the system's file manager (noa-folder.ts). */
+  show?(id: number): void;
 }
 
 const MEDIA_DIR = "noa-media";
@@ -98,50 +100,58 @@ export class MediaFiles {
     return { paths, cleanup };
   }
 
-  /** One download; resolves with the absolute path once complete (onChanged says when it ends; one search reads the path). */
-  private async write(
-    opts: { url: string; filename: string; headers?: { name: string; value: string }[] },
-    ids: number[],
-  ): Promise<string> {
-    const dl = this.downloads;
-    // Downloads that ended, and the one being waited for (it may end before download() even resolves).
-    const ended = new Map<number, DownloadDelta>();
-    let waiting: { id: number; done(): void } | null = null;
-    const listener = (d: DownloadDelta) => {
-      if (!d.state?.current || d.state.current === "in_progress") return;
-      ended.set(d.id, d);
-      if (waiting?.id === d.id) waiting.done();
-    };
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    dl.onChanged.addListener(listener);
-    try {
-      const id = await dl.download({
-        url: opts.url,
-        filename: opts.filename,
-        conflictAction: "uniquify",
-        saveAs: false,
-        ...(opts.headers?.length ? { headers: opts.headers } : {}),
-      });
-      ids.push(id);
-      let [item] = await dl.search({ id });
-      if (item?.state === "in_progress") {
-        if (!ended.has(id)) {
-          const finished = await new Promise<boolean>((resolve) => {
-            waiting = { id, done: () => resolve(true) };
-            timer = setTimeout(() => resolve(false), this.timeoutMs);
-          });
-          if (!finished) throw new Error(`Writing ${opts.filename} timed out`);
-        }
-        [item] = await dl.search({ id });
+  private write(opts: { url: string; filename: string; headers?: { name: string; value: string }[] }, ids: number[]): Promise<string> {
+    return writeDownload(this.downloads, opts, (id) => ids.push(id), this.timeoutMs);
+  }
+}
+
+/**
+ * One download into the download folder; resolves with its absolute path once complete (onChanged says when it
+ * ends; one search reads the path). onId: its id, as soon as there is one (for cleanup, also when it fails).
+ */
+export async function writeDownload(
+  dl: DownloadsLike,
+  opts: { url: string; filename: string; headers?: { name: string; value: string }[]; conflictAction?: "uniquify" | "overwrite" },
+  onId: (id: number) => void,
+  timeoutMs: number,
+): Promise<string> {
+  // Downloads that ended, and the one being waited for (it may end before download() even resolves).
+  const ended = new Map<number, DownloadDelta>();
+  let waiting: { id: number; done(): void } | null = null;
+  const listener = (d: DownloadDelta) => {
+    if (!d.state?.current || d.state.current === "in_progress") return;
+    ended.set(d.id, d);
+    if (waiting?.id === d.id) waiting.done();
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  dl.onChanged.addListener(listener);
+  try {
+    const id = await dl.download({
+      url: opts.url,
+      filename: opts.filename,
+      conflictAction: opts.conflictAction ?? "uniquify",
+      saveAs: false,
+      ...(opts.headers?.length ? { headers: opts.headers } : {}),
+    });
+    onId(id);
+    let [item] = await dl.search({ id });
+    if (item?.state === "in_progress") {
+      if (!ended.has(id)) {
+        const finished = await new Promise<boolean>((resolve) => {
+          waiting = { id, done: () => resolve(true) };
+          timer = setTimeout(() => resolve(false), timeoutMs);
+        });
+        if (!finished) throw new Error(`Writing ${opts.filename} timed out`);
       }
-      if (item?.state === "complete") {
-        if (!item.filename) throw new Error(`Download of ${opts.filename} finished without a file path`);
-        return item.filename;
-      }
-      throw new Error(`Writing ${opts.filename} failed: ${item?.error ?? ended.get(id)?.error?.current ?? "download interrupted"}`);
-    } finally {
-      clearTimeout(timer);
-      dl.onChanged.removeListener(listener);
+      [item] = await dl.search({ id });
     }
+    if (item?.state === "complete") {
+      if (!item.filename) throw new Error(`Download of ${opts.filename} finished without a file path`);
+      return item.filename;
+    }
+    throw new Error(`Writing ${opts.filename} failed: ${item?.error ?? ended.get(id)?.error?.current ?? "download interrupted"}`);
+  } finally {
+    clearTimeout(timer);
+    dl.onChanged.removeListener(listener);
   }
 }

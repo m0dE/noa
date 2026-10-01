@@ -29,13 +29,16 @@ function accountRepeat(repeat: RepeatSchedule | LegacyRepeatRule | null | undefi
 /**
  * A task for the account from a local task's fields (a new one, or one
  * moving in): its files are uploaded first. An old { dailyAt } repeat runs
- * in timeZone; a current rule carries its own zone.
+ * in timeZone; a current rule carries its own zone. runnerId: this browser's,
+ * so the task runs here and not in another browser signed in to the account
+ * (Task.runnerId).
  */
 export async function accountTaskInput(
   api: Pick<AccountApi, "uploadMedia">,
   t: { instructions: string; account?: string | null; notBefore?: string | null; repeat?: RepeatSchedule | LegacyRepeatRule | null; agentAuthored?: boolean },
   files: { name: string; blob: Blob }[],
   timeZone: string,
+  runnerId?: string,
 ): Promise<CreateTaskInput> {
   const mediaIds: string[] = [];
   for (const f of files) mediaIds.push((await api.uploadMedia(f.blob, f.name)).id);
@@ -47,6 +50,7 @@ export async function accountTaskInput(
     ...(mediaIds.length ? { mediaIds } : {}),
     ...(t.notBefore || repeat ? { schedule: { ...(t.notBefore ? { at: t.notBefore } : {}), ...(repeat ? { repeat } : {}) } } : {}),
     ...(t.agentAuthored ? { agentAuthored: true } : {}),
+    ...(runnerId ? { runnerId } : {}),
   };
 }
 
@@ -91,11 +95,12 @@ function asLocal(t: Task): LocalTask {
 export class AccountTodo implements TodoSource {
   readonly kind = "account" as const;
 
-  /** onChange: the list as just fetched, or nothing after a change made here. */
+  /** onChange: the list as just fetched, or nothing after a change made here. runnerId: this browser's (new tasks run here). */
   constructor(
     private readonly api: AccountApi,
     private readonly timeZone: string,
     private readonly onChange: (listed?: AccountTaskList) => void = () => {},
+    private readonly runnerId?: () => Promise<string>,
   ) {}
 
   async list(): Promise<TodoList> {
@@ -106,7 +111,7 @@ export class AccountTodo implements TodoSource {
 
   async add(input: NewLocalTask): Promise<LocalTask> {
     const files = (input.media ?? []).map((m) => ({ name: m.name, blob: uploadToBlob(m) }));
-    const task = await this.api.createTask(await accountTaskInput(this.api, input, files, this.timeZone));
+    const task = await this.api.createTask(await accountTaskInput(this.api, input, files, this.timeZone, await this.runnerId?.()));
     this.onChange();
     return asLocal(task);
   }

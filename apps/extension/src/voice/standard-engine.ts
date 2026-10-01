@@ -33,6 +33,8 @@ interface UtteranceTiming {
 }
 
 export interface StandardEngineDeps {
+  /** Which engine this is: standard (the browser's voice) or deepgram (Deepgram's voice, as `speaker`); default standard. */
+  id?: "standard" | "deepgram";
   /** The microphone at VOICE_LIMITS.sampleRate. */
   createSource(): AudioSource;
   transcribe: TranscribeClip;
@@ -45,7 +47,7 @@ export interface StandardEngineDeps {
 }
 
 export class StandardEngine implements HandsFreeEngine {
-  readonly id = "standard" as const;
+  readonly id: "standard" | "deepgram";
   readonly halfDuplex = true;
   private tee: MicTee | null = null;
   private dictation: Dictation | null = null;
@@ -69,7 +71,9 @@ export class StandardEngine implements HandsFreeEngine {
   /** The first audio reached the detector (EngineEvents.capturing). */
   private capturing = false;
 
-  constructor(private readonly deps: StandardEngineDeps) {}
+  constructor(private readonly deps: StandardEngineDeps) {
+    this.id = deps.id ?? "standard";
+  }
 
   async start(): Promise<void> {
     this.tee = new MicTee(this.deps.createSource(), Math.round((VOICE_LIMITS.sampleRate * BARGE_IN_REPLAY_MS) / 1000));

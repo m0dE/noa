@@ -68,9 +68,9 @@ describe("Raw report: approval rows", () => {
       return [rows.find((r) => r.name === "approval.wait")!.label, rows.find((r) => r.name === "approval_resolved")!.label];
     });
     expect(labels).toEqual([
-      ["Approval allow_once · by the card", "Approval: Allowed once (the card)"],
+      ["Approval allow_once · by the card", "Approval: Allowed (the card)"],
       ["Approval deny · by the card's key", "Approval: Denied (the card's key)"],
-      ["Approval allow_once · by voice", "Approval: Allowed once (voice)"],
+      ["Approval allow_once · by voice", "Approval: Allowed (voice)"],
       ["Approval interrupted · by a message from the user", "Approval: You wrote to the agent first: not done"],
       ["Approval timeout · by no answer in time", "Approval: No answer in time: not done"],
       ["Approval paused · by nobody watching (the run paused)", "Approval: Paused for your OK: not done yet. Continue the task to do it"],

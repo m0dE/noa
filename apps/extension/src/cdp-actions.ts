@@ -30,6 +30,11 @@ import { DialogOpenError, type Cdp } from "./cdp.js";
 import { isDebuggerBlocked } from "./restricted.js";
 import { sameProbe, scrollProbeExpression, scrollReport, type PageResult, type ScrollProbe } from "./scroll-probe.js";
 
+/** Where dropFiles keeps the page's dragover and drop events while it drags. */
+const DRAG_PROBE_KEY = "noa.dragProbe";
+/** Input.dispatchDragEvent's dragOperationsMask for "copy". */
+const DRAG_COPY = 1;
+
 /** Extra readings after a wheel while the position still changes (smooth scrolling). */
 const SCROLL_SETTLE_POLLS = 6;
 
@@ -158,6 +163,12 @@ export class CdpActions {
     return { ok: true, ...scrollReport(direction, before, after, index !== undefined) };
   }
 
+  /**
+   * Files onto element `index`, the way a person would give them: set on an <input type=file>; otherwise dropped
+   * on it with a real drag (a drop zone, or an editor that takes dropped images); otherwise pasted into it (an
+   * editor that only takes pasted images). A drag the element does not accept is cancelled before the drop, so an
+   * element that takes no files never gets them (and the tab never opens the file).
+   */
   async upload(tabId: number, { index, paths }: P<"browser.upload">): Promise<R<"browser.upload">> {
     const selector = indexSelector(index);
     const kind = await this.evaluate<string>(
@@ -166,12 +177,74 @@ export class CdpActions {
         return el instanceof HTMLInputElement && el.type === "file" ? "file" : "notfile"; })()`,
     );
     if (kind === "missing") throw notFound(index);
-    if (kind !== "file") throw new Error(`element ${index} is not a file input`);
-    const doc = await this.send<{ root: { nodeId: number } }>(tabId, "DOM.getDocument", { depth: 0 });
-    const found = await this.send<{ nodeId: number }>(tabId, "DOM.querySelector", { nodeId: doc.root.nodeId, selector });
-    if (!found.nodeId) throw notFound(index);
-    await this.send(tabId, "DOM.setFileInputFiles", { files: paths, nodeId: found.nodeId });
-    return { ok: true };
+    if (kind === "file") {
+      const doc = await this.send<{ root: { nodeId: number } }>(tabId, "DOM.getDocument", { depth: 0 });
+      const found = await this.send<{ nodeId: number }>(tabId, "DOM.querySelector", { nodeId: doc.root.nodeId, selector });
+      if (!found.nodeId) throw notFound(index);
+      await this.send(tabId, "DOM.setFileInputFiles", { files: paths, nodeId: found.nodeId });
+      return { ok: true };
+    }
+    if (await this.dropFiles(tabId, index, paths)) return { ok: true, via: "drop" };
+    if (await this.pasteFiles(tabId, selector, paths)) return { ok: true, via: "paste" };
+    throw new Error(
+      `element ${index} took neither a drop nor a paste of the files: upload to an <input type=file>, a drop zone or an editor that accepts files`,
+    );
+  }
+
+  /** A trusted drag of the files onto the element's center; false (drag cancelled) when nothing there accepts it. */
+  private async dropFiles(tabId: number, index: number, paths: string[]): Promise<boolean> {
+    const { x, y } = await this.centerOf(tabId, index);
+    // The page's own dragover and drop events, kept to read whether a handler accepted them (preventDefault).
+    await this.evaluate(
+      tabId,
+      `(() => { const k = Symbol.for(${JSON.stringify(DRAG_PROBE_KEY)}); const seen = (window[k] = {});
+        for (const t of ["dragover", "drop"]) window.addEventListener(t, (e) => { seen[t] = e; }, { capture: true, once: true }); })()`,
+    );
+    const accepted = (type: "dragover" | "drop") =>
+      this.evaluate<boolean>(tabId, `!!window[Symbol.for(${JSON.stringify(DRAG_PROBE_KEY)})]?.${type}?.defaultPrevented`);
+    const drag = (type: string) =>
+      this.send(tabId, "Input.dispatchDragEvent", { type, x, y, data: { items: [], files: paths, dragOperationsMask: DRAG_COPY } });
+    try {
+      await drag("dragEnter");
+      await drag("dragOver");
+      if (!(await accepted("dragover"))) {
+        await drag("dragCancel");
+        return false;
+      }
+      await drag("drop");
+      return true;
+    } finally {
+      await this.evaluate(tabId, `delete window[Symbol.for(${JSON.stringify(DRAG_PROBE_KEY)})]`).catch(() => undefined);
+    }
+  }
+
+  /**
+   * The files pasted into the element: set on an input the page never sees (not in the document), then given to
+   * the element as a paste event's clipboard data. True when the page took them (preventDefault).
+   */
+  private async pasteFiles(tabId: number, selector: string, paths: string[]): Promise<boolean> {
+    const made = await this.send<{ result: { objectId?: string } }>(tabId, "Runtime.evaluate", {
+      expression: `(() => { const i = document.createElement("input"); i.type = "file"; i.multiple = true; return i; })()`,
+    });
+    const objectId = made.result.objectId;
+    if (!objectId) return false;
+    try {
+      await this.send(tabId, "DOM.setFileInputFiles", { files: paths, objectId });
+      const res = await this.send<EvaluateResult<boolean>>(tabId, "Runtime.callFunctionOn", {
+        objectId,
+        functionDeclaration: `function () {
+          const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false;
+          const data = new DataTransfer(); for (const f of this.files) data.items.add(f);
+          if (typeof el.focus === "function") el.focus();
+          const e = new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true, composed: true });
+          el.dispatchEvent(e); return e.defaultPrevented; }`,
+        returnByValue: true,
+      });
+      if (res.exceptionDetails) return false;
+      return res.result?.value === true;
+    } finally {
+      await this.send(tabId, "Runtime.releaseObject", { objectId }).catch(() => undefined);
+    }
   }
 
   /**

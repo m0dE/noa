@@ -148,6 +148,16 @@ describe("TaskRunner with ScriptedBrain", () => {
     expect(keys).toEqual(["env-key", "cfg-key"]);
   });
 
+  it("offers generate_image unless image generation is turned off (config.imageGeneration)", async () => {
+    const seen: string[][] = [];
+    const brain = () => customBrain(async (ctx) => void seen.push(ctx.allowedTools));
+    await setup(new FakeX(), { brain }).runner.run(params());
+    await setup(new FakeX(), { brain }).runner.run(params({}, { config: { ...CONFIG, imageGeneration: false } }));
+    expect(seen[0]).toContain("mcp__noa__generate_image");
+    expect(seen[1]).not.toContain("mcp__noa__generate_image");
+    expect(seen[1]).toContain("mcp__noa__upload");
+  });
+
   it("passes the extension's model (config.model) to the brain, none when unset", async () => {
     const seen: (string | undefined)[] = [];
     const brain = () => customBrain(async (ctx) => void seen.push(ctx.model));
@@ -627,16 +637,21 @@ describe("TaskRunner: kept-open sessions (persistent brain)", () => {
     await runner.run(params({}, { sessionId: "S2" }));
     expect(runs[1]!.warm).toBeUndefined();
     expect(warmed[2]!.warm.ready).toBe(false);
+    // Another image generation setting: its tools differ, so it is not offered either.
+    runner.prewarm({ ...CONFIG, imageGeneration: false });
+    await runner.run(params({}, { sessionId: "S3" }));
+    expect(runs[2]!.warm).toBeUndefined();
+    expect(warmed[3]!.warm.ready).toBe(false);
     // Unused: stopped after warmMs.
     runner.prewarm(CONFIG);
-    await vi.waitFor(() => expect(warmed[3]!.warm.ready).toBe(false));
+    await vi.waitFor(() => expect(warmed[4]!.warm.ready).toBe(false));
     // A spare whose process exited is replaced.
     runner.prewarm(CONFIG);
-    warmed[4]!.exit();
+    warmed[5]!.exit();
     runner.prewarm(CONFIG);
-    expect(warmed).toHaveLength(6);
+    expect(warmed).toHaveLength(7);
     runner.shutdown("bye");
-    expect(warmed[5]!.warm.ready).toBe(false);
+    expect(warmed[6]!.warm.ready).toBe(false);
   });
 
   it("prewarm: a brain that starts nothing ahead says so", () => {

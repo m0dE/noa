@@ -14,10 +14,10 @@ describe("approvals in hands-free voice", () => {
     expect(new Narration().push(ask, 0)).toBe(approvalLine(request));
   });
 
-  it("the Realtime narrator is asked to put the question and answer with its tool", () => {
-    const [note] = new NarratorFeed().push(ask, 0);
-    expect(note).toMatchObject({ speak: "question" });
-    expect(note!.text).toMatch(/answer_approval/);
+  it("the Realtime narrator says the question word for word, and its status says to answer with its tool", () => {
+    const out = new NarratorFeed().push(ask, 0);
+    expect(out).toContainEqual({ say: { kind: "question", line: approvalLine(request) } });
+    expect(out.flatMap((o) => ("status" in o ? [o.status] : [])).join(" ")).toMatch(/answer_approval/);
     expect(NARRATOR_TOOLS.map((t) => t.name)).toContain("answer_approval");
   });
 

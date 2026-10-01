@@ -48,8 +48,14 @@ function oneScheduleShape(t: { schedule?: unknown } & Partial<Record<(typeof LEG
   if (legacy.length) ctx.addIssue({ code: "custom", path: ["schedule"], message: `use schedule or ${legacy.join(", ")}, not both` });
 }
 
+/** A runner: one browser's runnerId (ClaimInput.runnerId). */
+const RunnerId = z.string().min(1).max(100);
+
 /** Body of POST /v1/tasks and each item of POST /v1/tasks/batch. */
-export const CreateTaskInput = TaskFields.superRefine(oneScheduleShape);
+export const CreateTaskInput = TaskFields.extend({
+  /** See Task.runnerId: the browser creating the task keeps its runs. Omitted: the first runner to claim it. */
+  runnerId: RunnerId.optional(),
+}).superRefine(oneScheduleShape);
 export type CreateTaskInput = z.infer<typeof CreateTaskInput>;
 
 export const BatchCreateInput = z.object({
@@ -134,6 +140,13 @@ export const Task = z.object({
    * the task, clears it; every repeat carries it. Optional so older producers still validate (absent: the user's).
    */
   agentAuthored: z.boolean().optional(),
+  /**
+   * The runner (one browser's runnerId) the task's runs stay on, so two browsers signed in to the account never both
+   * run a job: set by the browser that created it or by its first claim, moved by "Run" on another browser, carried by
+   * every repeat. Another runner takes it only once this one has stopped asking for work for a day. Null: any runner.
+   * Optional so older producers still validate.
+   */
+  runnerId: z.string().nullable().optional(),
 });
 export type Task = z.infer<typeof Task>;
 
@@ -156,7 +169,7 @@ export type TaskEvent = z.infer<typeof TaskEvent>;
 
 /** Body of POST /v1/runner/claim. */
 export const ClaimInput = z.object({
-  runnerId: z.string().min(1).max(100),
+  runnerId: RunnerId,
   /**
    * Claim this task now, whatever its time ("Run" on its row): pending, paused
    * or failed (it starts over). 404 when not in scope, 409 when it cannot run.
@@ -248,6 +261,24 @@ export const AuthResponse = z.object({
   expiresAt: z.string(),
 });
 export type AuthResponse = z.infer<typeof AuthResponse>;
+
+/** A one-time dashboard sign-in code (POST /v1/auth/code): `bt_c_` + 64 hex characters. */
+export const SIGN_IN_CODE_RE = /^bt_c_[0-9a-f]{64}$/;
+
+/**
+ * 200 response of POST /v1/auth/code: a code that signs the dashboard in to the calling session's account, once,
+ * until `expiresAt` (a minute). Only a session token (the extension) may ask for one.
+ */
+export const SignInCodeResponse = z.object({ code: z.string().regex(SIGN_IN_CODE_RE), expiresAt: z.string() });
+export type SignInCodeResponse = z.infer<typeof SignInCodeResponse>;
+
+/** Body of POST /v1/auth/code/redeem (the dashboard; needs the CSRF header). */
+export const RedeemSignInCodeInput = z.object({ code: z.string().regex(SIGN_IN_CODE_RE) });
+export type RedeemSignInCodeInput = z.infer<typeof RedeemSignInCodeInput>;
+
+/** 200 response of POST /v1/auth/code/redeem. The new session's token is only in the HttpOnly cookie. */
+export const RedeemSignInCodeResponse = z.object({ user: User, expiresAt: z.string() });
+export type RedeemSignInCodeResponse = z.infer<typeof RedeemSignInCodeResponse>;
 
 /** Standard error body for every non-2xx API response. */
 export const ApiError = z.object({ error: z.string(), details: z.unknown().optional() });

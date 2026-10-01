@@ -76,6 +76,14 @@ describe("AccountTodo (the signed-in TODO list)", () => {
     expect(t.api.calls[1]!.body).toEqual({ instructions: "daily", schedule: { repeat: { cron: "0 9 * * *\n30 18 * * *", tz: "Europe/Berlin" } } });
   });
 
+  it("a new task runs in this browser: it carries this browser's runner id", async () => {
+    const api = fakeApi();
+    const todo = new AccountTodo(new AccountApi({ apiBase: api.base, token: "bt_s_tok", fetch: api.fetch }), "Europe/Berlin", () => {}, async () => "runner-here");
+    api.on("POST /v1/tasks", (c) => ({ status: 201, body: task("n3", { ...(c.body as object), schedule: null }) }));
+    await todo.add({ instructions: "once" });
+    expect(api.calls[0]!.body).toEqual({ instructions: "once", runnerId: "runner-here" });
+  });
+
   it("pause and resume call their routes; holdSeries pauses the series' waiting row with the reason", async () => {
     const t = setup();
     t.api.on("POST /v1/tasks/t1/pause", (c) => ({ body: task("t1", { status: "paused", pauseReason: (c.body as { reason?: string }).reason ?? "Paused by you" }) }));

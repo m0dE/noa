@@ -45,6 +45,7 @@ export function turnEndEvents(r: TaskRunResult, picks: ElementPicks | null): Age
   if (r.suggestion !== undefined) end.suggestion = r.suggestion;
   if (r.spoken !== undefined) end.spoken = r.spoken;
   if (r.draft !== undefined) end.draft = r.draft;
+  if (r.byAgent) end.byAgent = true;
   events.push(end);
   return events;
 }

@@ -59,6 +59,10 @@ await build({
     // Voice input: the microphone permission page and the PCM capture worklet.
     "mic-permission": join(root, "src/voice/mic-permission.ts"),
     "pcm-worklet": join(root, "src/voice/pcm-worklet.ts"),
+    // Notifications said in the Realtime voice: the offscreen document that plays them.
+    offscreen: join(root, "src/voice/notice-offscreen.ts"),
+    // On the account server's pages only: the dashboard's sign-in with this extension's account.
+    "dashboard-bridge": join(root, "src/dashboard-bridge.ts"),
   },
   outdir: staging,
 });

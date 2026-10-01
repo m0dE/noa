@@ -31,7 +31,7 @@ import type { SessionStore } from "./sessions.js";
 import { ActiveSessions, approvalStop, pauseUrlStop, stopOf } from "./run/active.js";
 import { CONTINUE_TEXT, continueRefusal } from "./run/conversation.js";
 import { DueLoop } from "./run/due-loop.js";
-import { FailurePolicy } from "./run/failure-policy.js";
+import { FailurePolicy, type ScheduledJob } from "./run/failure-policy.js";
 import { turnJob, withContext, type AdhocInput, type FirstJob, type RunnerApi, type TurnJob } from "./run/jobs.js";
 import { Lifecycle, type RunBrain } from "./run/lifecycle.js";
 import { ResultRecorder } from "./run/record.js";
@@ -92,6 +92,8 @@ export interface RunnerDeps {
    */
   tabChats?: TabChatsLike;
   notify(title: string, message: string): void | Promise<void>;
+  /** A scheduled job started running in the background (the user is told: background.ts). */
+  onScheduledStart?(job: ScheduledJob): void | Promise<void>;
   /** Whether the user has this conversation open in a side panel now (a scheduled run's approvals can then be answered). */
   watching?(sessionId: string): Promise<boolean>;
   /** Called every KEEP_ALIVE_MS while busy (chrome.runtime.getPlatformInfo). */
@@ -203,6 +205,7 @@ export class Runner {
       ...(deps.outOfCredit ? { outOfCredit: deps.outOfCredit } : {}),
       resolveBrain: deps.resolveBrain,
       notify: deps.notify,
+      ...(deps.onScheduledStart ? { onScheduledStart: deps.onScheduledStart } : {}),
       ...(deps.sleep ? { sleep: deps.sleep } : {}),
       now,
       newId: () => this.newId(),

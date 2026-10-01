@@ -16,3 +16,12 @@ export function dashboardUrl(apiBase: string, page: DashboardPage = ""): string 
     return "";
   }
 }
+
+/** `origin` is exactly the origin of the account server `apiBase` (false when either is not a URL). */
+export function isAccountServerOrigin(origin: string, apiBase: string): boolean {
+  try {
+    return !!origin && origin !== "null" && new URL(apiBase).origin === origin;
+  } catch {
+    return false;
+  }
+}

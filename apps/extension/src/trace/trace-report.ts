@@ -357,6 +357,8 @@ function eventRow(e: StampedAgentEvent, t: number, span: TraceEvent | undefined,
     }
     case "memory_undone":
       return { ...base, label: "Memory change undone", text: `change ${e.changeId}` };
+    case "memory_redone":
+      return { ...base, label: "Memory change redone", text: `change ${e.changeId}` };
     case "approval_request": {
       const r = e.request;
       return { ...base, label: `Approval asked: ${r.action}${r.site ? ` on ${r.site}` : ""}`, detail: join(r.why, `id ${r.id}`, `until ${r.expiresAt}`), ...(r.text ? { text: clip(r.text, TEXT_LIMITS.status) } : {}) };
@@ -592,6 +594,8 @@ const VOICE_LABELS: Record<string, string> = {
   "voice.unclear": "Voice: your words unclear (not used)",
   "voice.not_addressed": "Voice: speech not for the assistant (ignored)",
   "voice.echo": "Voice: the assistant's own voice heard back (ignored)",
+  "voice.talk_over": "Voice: you talked over the narrator (let through)",
+  "voice.played_on": "Voice: the narrator played on (it was not you talking)",
   "voice.narrator": "Voice: narrator reply",
   "voice.user_words": "Voice: your words transcribed",
 };

@@ -99,7 +99,7 @@ async function session(viewing: number) {
           });
           return socket;
         },
-        player: { play: () => {}, stop: () => null, close: () => {}, playing: false },
+        player: { play: () => {}, stop: () => null, close: () => {}, playing: false, pause: () => false, resume: () => {}, level: () => 0 },
       }),
     stopTask: async () => "",
     answerApproval: async () => true,
@@ -154,7 +154,7 @@ describe("Realtime: one message per request, the user's words folded under it", 
 
   for (const viewing of [1, 2]) {
     for (const wordsLate of [false, true]) {
-      it(`looking at ${viewing === 1 ? "the session's tab" : "another tab"}, words ${wordsLate ? "after" : "before"} the call: the request is the message, its words under it, never two bubbles`, async () => {
+      it(`looking at ${viewing === 1 ? "the session's tab" : "another tab"}, words ${wordsLate ? "after" : "before"} the call: each request is one message, its words under it, never two bubbles`, async () => {
         const t = await session(viewing);
         await turn(t.socket, "in1", W1, "speaks", wordsLate);
         await turn(t.socket, "in2", W2, "speaks", wordsLate);
@@ -163,12 +163,17 @@ describe("Realtime: one message per request, the user's words folded under it", 
         t.socket.event({ type: "conversation.item.input_audio_transcription.completed", item_id: "in3", content_index: 0, transcript: W3 });
         t.socket.event({ type: "conversation.item.input_audio_transcription.failed", item_id: "in3", error: { message: "x" } });
         await settle(30);
-        // The agent got the narrator's request only (with the note on the tab the user looks at, when away).
-        expect(t.deps.send).toHaveBeenCalledTimes(1);
-        expect((t.deps.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toMatch(/^Forget that for now\. I want you to look at Intercom/);
-        // One message: the request as understood, with every part of the speech that led to it (the narrator's replies
-        // to the first two answered a request by itself, so they were never heard: those parts are the request's too).
-        expect(userBubbles(t.chat)).toEqual([{ text: REQUEST, heard: [W1, W2, W3] }]);
+        // The narrator's replies to the first two answered a request by itself (never heard): their words went to the
+        // agent as the user said them; the third is the narrator's request (with the note on the tab the user looks
+        // at, when away).
+        expect(t.deps.send).toHaveBeenCalledTimes(3);
+        expect((t.deps.send as ReturnType<typeof vi.fn>).mock.calls[2]![0]).toMatch(/^Forget that for now\. I want you to look at Intercom/);
+        // One message a request, with the words that led to it (none folded under words sent as they were said).
+        expect(userBubbles(t.chat)).toEqual([
+          { text: W1 },
+          { text: W2 },
+          { text: REQUEST, heard: [W3] },
+        ]);
         expect(t.chat.filter((e) => e.type === "heard")).toEqual([]);
       });
     }

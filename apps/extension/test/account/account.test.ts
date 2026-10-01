@@ -256,20 +256,6 @@ describe("AccountService plan, credit and billing", () => {
     expect(await t.account.view()).toMatchObject({ stripeConfigured: false, plan: FREE_PLAN });
   });
 
-  it("API keys: list, create (the key is returned once), revoke", async () => {
-    const t = await signedIn({});
-    t.api.on("GET /v1/me/keys", { body: { keys: [{ id: "k1", name: "laptop", role: "runner", createdAt: "2026-09-01T00:00:00Z", revokedAt: null }] } });
-    t.api.on("POST /v1/me/keys", (c) => ({ status: 201, body: { id: "k2", ...(c.body as object), key: "bt_newkey" } }));
-    t.api.on("DELETE /v1/me/keys/k1", { status: 204 });
-    expect(await t.account.listKeys()).toHaveLength(1);
-    expect(await t.account.createKey("scheduler", "creator")).toEqual({ id: "k2", name: "scheduler", role: "creator", key: "bt_newkey" });
-    await t.account.revokeKey("k1");
-    expect(t.api.calls.filter((c) => c.path.startsWith("/v1/me/keys")).map((c) => `${c.method} ${c.path}`)).toEqual([
-      "GET /v1/me/keys",
-      "POST /v1/me/keys",
-      "DELETE /v1/me/keys/k1",
-    ]);
-  });
 });
 
 describe("AccountService: moving local tasks into the account", () => {
@@ -367,5 +353,28 @@ describe("AccountService.runnerApi", () => {
     await expect(runner.claim("r1")).rejects.toThrow(/401/);
     await new Promise((r) => setTimeout(r, 0));
     expect(await t.account.runnerApi()).toBeNull();
+  });
+});
+
+describe("AccountService cloud files", () => {
+  const png = () => new Blob(["png"], { type: "image/png" });
+  const filesCalls = (t: ReturnType<typeof setup>) => t.api.calls.filter((c) => c.path === "/v1/files");
+
+  it("keeps a copy in the account's files on a plan that has them", async () => {
+    const t = setup({ plan: PLUS_PLAN });
+    t.api.on("POST /v1/files", { status: 201, body: { id: "f1", name: "cat.png", folder: "images", contentType: "image/png", size: 3, createdAt: "2026-09-24T12:00:00.000Z" } });
+    await t.account.signIn();
+    expect(await t.account.keepInCloud(png(), "cat.png", "images")).toBe(true);
+    const [call] = filesCalls(t);
+    expect(call!.method).toBe("POST");
+    expect(call!.headers.authorization).toBe("Bearer bt_s_abc");
+  });
+
+  it("sends nothing signed out or on Free", async () => {
+    const t = setup();
+    expect(await t.account.keepInCloud(png(), "cat.png", "images")).toBe(false);
+    await t.account.signIn();
+    expect(await t.account.keepInCloud(png(), "cat.png", "images")).toBe(false);
+    expect(filesCalls(t)).toHaveLength(0);
   });
 });

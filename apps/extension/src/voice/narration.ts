@@ -7,7 +7,7 @@
  */
 import type { AgentEvent } from "@noa/shared";
 import { ProgressPacer } from "./milestones.js";
-import { endLine, errorLine, planLine } from "./spoken-line.js";
+import { endLine, errorLine, planLine, saidBefore, unsaid } from "./spoken-line.js";
 import { approvalLine } from "./approval-voice.js";
 
 export class Narration {
@@ -16,11 +16,16 @@ export class Narration {
   private opened = false;
   /** An error was said this turn (its end then does not repeat it). */
   private erred = false;
+  /** The lines said this turn (its end leaves out what they said), and in the turn before. */
+  private lines: string[] = [];
+  private before: string[] = [];
 
   /** The line to say for an event of the chat, or null. */
   push(ev: AgentEvent, now: number): string | null {
     const line = this.lineFor(ev, now);
-    if (line) this.progress.said(now);
+    if (!line) return null;
+    this.progress.said(now);
+    if (ev.type !== "task_end") this.lines.push(line);
     return line;
   }
 
@@ -41,8 +46,11 @@ export class Narration {
         return null;
       case "assistant_text": {
         if (this.opened) return null;
+        const plan = planLine(ev.text);
+        // The last answer again (Claude Code opening a turn by restating it): not said again, and not the opening.
+        if (plan && saidBefore(plan, [...this.before, ...this.lines])) return null;
         this.opened = true;
-        return planLine(ev.text);
+        return plan;
       }
       case "tool_call":
         return this.progress.step(ev, now);
@@ -53,8 +61,11 @@ export class Narration {
         return approvalLine(ev.request);
       case "task_end": {
         const repeat = this.erred && !ev.spoken;
+        const said = this.lines;
+        const line = repeat ? null : unsaid(endLine(ev), said) || null;
         this.newTurn(now);
-        return repeat ? null : endLine(ev);
+        this.before = line ? [...said, line] : said;
+        return line;
       }
       default:
         return null;
@@ -64,6 +75,9 @@ export class Narration {
   private newTurn(now: number): void {
     this.opened = false;
     this.erred = false;
+    // A turn that ended without its end (a new message into it): what it said is the turn before.
+    if (this.lines.length) this.before = this.lines;
+    this.lines = [];
     this.progress.reset(now);
   }
 }

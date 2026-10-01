@@ -17,6 +17,7 @@ import {
   narrationOf,
   NOISE_MAX_SPEECH_MS,
   echoesSpoken,
+  requestKindOf,
   repeatsRequest,
   requestKind,
   speechTurnOf,
@@ -28,16 +29,19 @@ import {
   ACKNOWLEDGE_INSTRUCTIONS,
   ACKNOWLEDGE_WHILE_WORKING_INSTRUCTIONS,
   HOLD_FOR_WORDS_MS,
-  MAKE_AGAIN_RESPONSE,
   NARRATOR_INSTRUCTIONS,
   progressResponse,
   NARRATOR_TOOLS,
   type RealtimeSocketLike,
 } from "../../src/voice/realtime-client.js";
 import { RealtimeEngine } from "../../src/voice/realtime-engine.js";
+import { ANSWER_HOLD_MS } from "../../src/voice/realtime-feed.js";
 import { PROGRESS } from "../../src/voice/milestones.js";
+import { fakePlayer } from "./fakes.js";
 
 const GAP = PROGRESS.stepGapMs;
+/** The brains' trace: the model read a message sent into its running turn. */
+const READ: AgentEvent = { type: "trace", trace: { t: 0, src: "helper", cat: "user", name: "interjection" } };
 const nav = (url: string): AgentEvent => ({ type: "tool_call", id: "t", name: "navigate", args: { url } });
 
 describe("narrationOf: what may make the narrator speak", () => {
@@ -77,10 +81,10 @@ describe("floor: one speaker at a time", () => {
   const free: Floor = { userSpeaking: false, awaitingReply: false, replying: false, playing: false };
   const kinds = ["ack", "milestone", "result", "question", "error"] as const;
 
-  it("the user speaking, or their reply about to start: every line is let go (their reply answers, with the news in it)", () => {
-    for (const k of kinds) {
-      expect(floor(k, { ...free, userSpeaking: true })).toBe("drop");
-      expect(floor(k, { ...free, awaitingReply: true })).toBe("drop");
+  it("the user speaking, or their reply about to start: progress and the acknowledgement are let go; news waits for them", () => {
+    for (const f of [{ ...free, userSpeaking: true }, { ...free, awaitingReply: true }]) {
+      for (const k of ["milestone", "ack"] as const) expect(floor(k, f)).toBe("drop");
+      for (const k of ["result", "question", "error"] as const) expect(floor(k, f)).toBe("later");
     }
   });
 
@@ -106,10 +110,13 @@ describe("isNoise", () => {
   });
 });
 
-it("the narrator is told to speak only with news", () => {
-  expect(NARRATOR_INSTRUCTIONS).toContain("Speak only when you have news the user doesn't have: results, questions, blockers, errors. Never describe routine steps");
-  expect(NARRATOR_INSTRUCTIONS).toContain("never repeat the user's request back to them");
+it("the narrator never says news itself: lines are said for it, word for word; its status is only context", () => {
+  expect(NARRATOR_INSTRUCTIONS).toContain("Results, questions from your work and progress are said for you, word for word: never say them yourself, and never bring up a result on your own.");
+  expect(NARRATOR_INSTRUCTIONS).not.toContain("Your update");
 });
+
+/** What each response.create asks to be said: a line (lineResponse, progressResponse), else "reply" (the narrator's own). */
+const lineOf = (c: Record<string, any>): string => /«(.*?)»/.exec(c.response?.instructions ?? "")?.[1]?.replace(/\.$/, "") ?? "reply";
 
 // ---------------------------------------------------------------- the real engine
 
@@ -168,7 +175,7 @@ async function started() {
     endVoice: noop,
     failed: noop,
   } as unknown as EngineEvents;
-  const player = { play: vi.fn(), stop: vi.fn(() => null), close: vi.fn(), playing: false };
+  const player = fakePlayer();
   const engine = new RealtimeEngine({ ticket: async () => ({ url: "wss://x", token: "t" }), createSource: () => mic, events, openSocket: () => socket, player });
   const start = engine.start();
   await settle();
@@ -182,12 +189,14 @@ async function started() {
   const serve = () => {
     while (served < creates().length) {
       const id = `ours${++served}`;
-      socket.event({ type: "response.created", response: { id } });
+      // Our response.create's metadata comes back with it (what tells the client the reply is one it asked for).
+      socket.event({ type: "response.created", response: { id, metadata: creates()[served - 1]!.response?.metadata ?? null } });
       socket.event({ type: "response.output_audio.delta", response_id: id, item_id: `a_${id}`, delta: "AAAA" });
       socket.event({ type: "response.done", response: { id, status: "completed" } });
     }
   };
-  const played = () => player.play.mock.calls.map((c) => c[0] as string);
+  // What the user heard (audio kept by a pause and let go is not).
+  const played = () => [...player.heard];
   return { s: socket, engine, player, serve, creates, played, words, shown, forwarded, paired };
 }
 
@@ -243,16 +252,16 @@ describe("one reply per spoken request (the owner's report)", () => {
       const before = t.creates().length;
       t.engine.agentEvent({ type: "task_end", outcome: "done", summary: "Summarized", spoken: "You have 3 new emails; one is from your accountant." }, T0 + 40_000);
       t.serve();
-      expect(t.creates().slice(before)).toEqual([{ type: "response.create" }]);
-      expect(t.s.sent.filter((e) => e.item?.role === "system" && !/^Your update \(progress\)/.test(e.item.content[0].text)).map((e) => e.item.content[0].text)).toEqual([
-        'Your update (finished): The task is done. Tell the user in one to three short sentences, in the first person: "You have 3 new emails; one is from your accountant."',
-      ]);
+      expect(t.creates().slice(before).map(lineOf)).toEqual(["You have 3 new emails; one is from your accountant"]);
+      // The narrator's conversation has its status only: no update for it to say later on its own.
+      const system = t.s.sent.filter((e) => e.item?.role === "system").map((e) => String(e.item.content[0].text));
+      expect(system.every((x) => x.startsWith("Status"))).toBe(true);
     });
   }
 });
 
 describe("the owner's trace of 2026-09-27", () => {
-  it("(a) a result arriving while the user speaks is not said over them: their reply answers, with it", async () => {
+  it("(a) a result arriving while the user speaks is not said over them: it waits for their turn and the reply to it", async () => {
     const t = await started();
     t.s.event({ type: "input_audio_buffer.speech_started", item_id: "in2", audio_start_ms: 1_000 });
     t.engine.agentEvent({ type: "task_end", outcome: "done", summary: "Summarized", spoken: "You have over 7,000 unread emails." }, Date.now());
@@ -261,9 +270,11 @@ describe("the owner's trace of 2026-09-27", () => {
     t.s.event({ type: "input_audio_buffer.committed", item_id: "in2" });
     t.s.event({ type: "response.created", response: { id: "r2" } });
     transcribed(t.s, "in2", "You're looking at the wrong inbox.");
-    t.s.event({ type: "response.done", response: { id: "r2", status: "completed" } });
-    t.serve();
     expect(t.creates()).toHaveLength(0);
+    t.s.event({ type: "response.done", response: { id: "r2", status: "completed" } });
+    // Their turn passed nothing on: the result is said after the reply to them (it used to be dropped, and the
+    // narrator said it later from its notes, a turn behind).
+    expect(t.creates().map(lineOf)).toEqual(["You have over 7,000 unread emails"]);
   });
 
   it("(a) a summary the user talked over is not heard afterwards, and not said again", async () => {
@@ -312,6 +323,7 @@ describe("the owner's trace of 2026-09-27", () => {
       reasoning: { effort: "minimal" },
       conversation: "none",
       input: [],
+      metadata: { noa: "milestone" },
     });
   });
 
@@ -334,7 +346,7 @@ describe("the owner's trace of 2026-09-27", () => {
     expect(t.creates().slice(first)).toHaveLength(0);
     t.player.playing = false;
     (t.engine as unknown as { client: { playbackIdle(): void } }).client.playbackIdle();
-    expect(t.creates().slice(first)).toEqual([{ type: "response.create" }]);
+    expect(t.creates().slice(first).map(lineOf)).toEqual(["Switched to admin@runhq.io; 2 emails need you"]);
   });
 
   it("(d) an empty transcript of a short sound: its reply is cancelled and never heard, and it is no message", async () => {
@@ -370,7 +382,7 @@ describe("the owner's trace of 2026-09-27", () => {
     transcribed(t.s, "in0", "");
     expect(t.creates()).toHaveLength(0);
     t.s.event({ type: "response.done", response: { id: "r0", status: "cancelled" } });
-    expect(t.creates()).toEqual([{ type: "response.create" }]);
+    expect(t.creates().map(lineOf)).toEqual(["Posted it"]);
   });
 });
 
@@ -386,31 +398,29 @@ describe("the owner's trace of 2026-09-27, gpt-realtime-2.1 with Claude Code: th
   const CORRECTION = "No, you're being a jerk. I'm talking about like yesterday.";
   const MADE_UP = "Yesterday, I told you about two Chrome Web Store emails";
 
-  it("(1, 5) a correction the narrator starts answering from its own notes: never heard or shown, cancelled, made again with a tool call required, and it reaches the agent", async () => {
+  it("(1, 5) a correction the narrator starts answering from its own notes: never heard or shown, cancelled, and the user's words reach the agent at once", async () => {
     const t = await started();
     userTurn(t.s, "in3", "r3", 3_500);
     speaks(t.s, "r3", MADE_UP);
     transcribed(t.s, "in3", CORRECTION);
+    await settle();
     expect(t.played()).toEqual([]);
     expect(t.shown).toEqual([]);
     expect(cancels(t.s)).toBe(1);
+    // Not asked again (a tool call required looped on empty messages): the user's words go, as the narrator's own call.
+    expect(t.forwarded).toEqual([CORRECTION]);
+    expect(t.paired).toEqual([[CORRECTION, CORRECTION]]);
+    expect(t.s.sent.filter((e) => e.type === "conversation.item.create" && e.item.type === "function_call")).toEqual([
+      { type: "conversation.item.create", item: { type: "function_call", call_id: "noa_in3", name: "send_to_agent", arguments: JSON.stringify({ text: CORRECTION, kind: "instruction" }) } },
+    ]);
     t.s.event({ type: "response.done", response: { id: "r3", status: "cancelled" } });
-    // What it began is out of its memory too (nothing of it was heard), and the turn is asked again: a tool must answer.
+    // What it began is out of its memory too (nothing of it was heard); then the one short acknowledgement.
     expect(truncations(t.s)).toEqual([["a_r3", 0]]);
-    expect(t.creates()).toEqual([{ type: "response.create", response: MAKE_AGAIN_RESPONSE }]);
-    t.s.event({ type: "response.created", response: { id: "r3b" } });
-    t.s.event({ type: "response.output_item.added", response_id: "r3b", item: { type: "function_call", name: "send_to_agent" } });
-    t.s.event({ type: "response.function_call_arguments.done", response_id: "r3b", call_id: "c3", name: "send_to_agent", arguments: JSON.stringify({ text: "I'm talking about yesterday." }) });
-    await settle();
-    t.s.event({ type: "response.done", response: { id: "r3b", status: "completed" } });
-    expect(t.forwarded).toEqual(["I'm talking about yesterday."]);
-    expect(t.paired).toEqual([[CORRECTION, "I'm talking about yesterday."]]);
-    // Then the one short acknowledgement, and nothing of the made-up answer was ever played.
-    expect(t.creates().slice(1)).toEqual([{ type: "response.create", response: ackResponse("I'm talking about yesterday.") }]);
+    expect(t.creates()).toEqual([{ type: "response.create", response: ackResponse(CORRECTION) }]);
     expect(t.played()).toEqual([]);
   });
 
-  it("(5) the words arriving after that reply is done: it is still never heard, and made again at once", async () => {
+  it("(5) the words arriving after that reply is done: it is still never heard, and the words go at once", async () => {
     const t = await started();
     userTurn(t.s, "in3", "r3");
     speaks(t.s, "r3", "It asked you to add a privacy policy.");
@@ -418,10 +428,13 @@ describe("the owner's trace of 2026-09-27, gpt-realtime-2.1 with Claude Code: th
     expect(t.played()).toEqual([]);
     expect(t.words).toEqual([]);
     transcribed(t.s, "in3", "What did the second email say exactly?");
+    await settle();
     expect(t.played()).toEqual([]);
     expect(t.shown).toEqual([]);
     expect(truncations(t.s)).toEqual([["a_r3", 0]]);
-    expect(t.creates()).toEqual([{ type: "response.create", response: MAKE_AGAIN_RESPONSE }]);
+    expect(t.forwarded).toEqual(["What did the second email say exactly?"]);
+    // A question: no acknowledgement (its answer is the reply).
+    expect(t.creates()).toEqual([]);
   });
 
   it("a request whose reply says a made-up answer and then calls send_to_agent (live, 2026-09-27): the call goes, nothing it said is heard, the acknowledgement is ours", async () => {
@@ -511,7 +524,7 @@ describe("the owner's trace of 2026-09-27, gpt-realtime-2.1 with Claude Code: th
     expect(ACK_MAX_OUTPUT_TOKENS).toBeLessThanOrEqual(120);
     expect(ACKNOWLEDGE_INSTRUCTIONS).toContain("at most four words");
     expect(ACKNOWLEDGE_INSTRUCTIONS).toContain("no answer, no facts, no question");
-    expect(NARRATOR_INSTRUCTIONS).toContain("Never answer those yourself from the updates, never guess dates or times");
+    expect(NARRATOR_INSTRUCTIONS).toContain("Never answer those yourself from the status, never guess dates or times");
   });
 
   it("(3) a reply cut off by noise shows nothing ('Said aloud: I don't have'), and the result that follows is the only line", async () => {
@@ -522,7 +535,7 @@ describe("the owner's trace of 2026-09-27, gpt-realtime-2.1 with Claude Code: th
     speaks(t.s, "r4", " the exact wording.");
     t.s.event({ type: "response.done", response: { id: "r4", status: "cancelled" } });
     t.engine.agentEvent({ type: "task_end", outcome: "done", summary: "x", spoken: "The second email asks you to add a privacy policy." }, Date.now());
-    expect(t.creates()).toEqual([{ type: "response.create" }]);
+    expect(t.creates().map(lineOf)).toEqual(["The second email asks you to add a privacy policy"]);
     t.s.event({ type: "response.created", response: { id: "res" } });
     speaks(t.s, "res", "The second email asks for a privacy policy.", "RRRR");
     t.s.event({ type: "response.done", response: { id: "res", status: "completed" } });
@@ -630,6 +643,30 @@ describe("echoesSpoken: the microphone hearing the assistant's own voice (the ow
     expect(echoesSpoken("okay", ["Okay, on it."])).toBe(false);
     expect(echoesSpoken("opening the home timeline", [])).toBe(false);
   });
+
+  it("speech that started over the narrator (minWords 1): one word of its line is echo; contractions count as their word (live: 'What you'd like.')", () => {
+    const line = "I'm doing well, thanks! Let me know what you'd like help with.";
+    expect(echoesSpoken("I'm.", [line], 1)).toBe(true);
+    expect(echoesSpoken("What you like.", [line])).toBe(true);
+    expect(echoesSpoken("Stop.", [line], 1)).toBe(false);
+    expect(echoesSpoken("Up.", [line], 1)).toBe(false);
+  });
+});
+
+describe("requestKindOf: the user's words passed on as they said them, a question or an instruction", () => {
+  it("a question mark, or words that start like a question; else an instruction", () => {
+    expect(["Hey, how you doing?", "What did the second email say exactly", "너 한국어 가능해?", "can you check my calendar"].map(requestKindOf)).toEqual([
+      "question",
+      "question",
+      "question",
+      "question",
+    ]);
+    expect(["Post gm on X.", "No, you're being a jerk. I'm talking about like yesterday.", "Herring's Landing. Give me one second here."].map(requestKindOf)).toEqual([
+      "instruction",
+      "instruction",
+      "instruction",
+    ]);
+  });
 });
 
 describe("repeatsRequest: a request passed on again goes to the agent once", () => {
@@ -668,15 +705,21 @@ describe("the owner's report of 2026-09-27: 'can you speak Korean?' while the ag
     ["너 한국어 가능해?", "네, 한국어 가능해요! 지금 Streamlabs 환불 요청 이메일 보내는 중이에요."],
     ["Can you speak Korean?", "Yes, I can speak Korean. I'm sending the Streamlabs refund email now."],
   ] as const) {
-    it(`"${question}" mid-task: passed on, no acknowledgement; the agent's answer is said once, at once`, async () => {
+    it(`"${question}" mid-task: passed on, no acknowledgement; the agent's answer is said once, while it goes on working`, async () => {
       const t = await passedOn(question, "question", true);
       expect(t.forwarded).toEqual([question]);
       expect(t.creates()).toEqual([]);
       const T0 = Date.now();
       t.engine.agentEvent({ type: "user_message", text: question, voice: true }, T0);
+      // The brain read it at its next step (its "interjection" trace).
+      t.engine.agentEvent(READ, T0 + 500);
       t.engine.agentEvent({ type: "assistant_text", text: answer }, T0 + 1_000);
-      expect(t.creates()).toEqual([{ type: "response.create" }]);
-      expect(notes(t.s)).toEqual([`Your update (answer): Your answer to the user's question: "${answer}" Tell the user in one or two short sentences, in the first person.`]);
+      // Held for the turn's end a few seconds (ANSWER_HOLD_MS); the agent goes on working, so it is said.
+      t.engine.tick(T0 + 1_000 + ANSWER_HOLD_MS - 1);
+      expect(t.creates()).toEqual([]);
+      t.engine.tick(T0 + 1_000 + ANSWER_HOLD_MS);
+      expect(t.creates().map(lineOf)).toEqual([answer.replace(/\.$/, "")]);
+      expect(notes(t.s).every((n) => n.startsWith("Status"))).toBe(true);
       t.serve();
       // Its next words go on with the task: not said.
       t.engine.agentEvent({ type: "assistant_text", text: "Clicking Send on the refund email." }, T0 + 2_000);
@@ -688,25 +731,23 @@ describe("the owner's report of 2026-09-27: 'can you speak Korean?' while the ag
     });
   }
 
-  it("the narrator answering '너 한국어 가능해?' by itself (live, 2026-09-27: '응, 가능해. 한국어로 편하게 말해줘.'): never heard, made again, passed on as a question, no acknowledgement", async () => {
+  it("the narrator answering '너 한국어 가능해?' by itself (live, 2026-09-27: '응, 가능해. 한국어로 편하게 말해줘.'): never heard, its words passed on as a question, no acknowledgement", async () => {
     const t = await started();
     t.engine.setAgentWorking(true);
     userTurn(t.s, "in1", "r1", 1_500);
     speaks(t.s, "r1", "응, 가능해. 한국어로 편하게 말해줘.");
     transcribed(t.s, "in1", "너 한국어 가능해?");
     t.s.event({ type: "response.done", response: { id: "r1", status: "cancelled" } });
-    expect(t.creates()).toEqual([{ type: "response.create", response: MAKE_AGAIN_RESPONSE }]);
-    t.s.event({ type: "response.created", response: { id: "r1b" } });
-    t.s.event({ type: "response.output_item.added", response_id: "r1b", item: { type: "function_call", name: "send_to_agent" } });
-    t.s.event({ type: "response.function_call_arguments.done", response_id: "r1b", call_id: "c1", name: "send_to_agent", arguments: JSON.stringify({ text: "너 한국어 가능해?", kind: "question" }) });
     await settle();
-    t.s.event({ type: "response.done", response: { id: "r1b", status: "completed" } });
-    await settle();
+    // Its words go as they were said, a question (no acknowledgement).
     expect(t.forwarded).toEqual(["너 한국어 가능해?"]);
-    expect(t.creates()).toHaveLength(1);
+    expect(t.creates()).toEqual([]);
     expect(t.played()).toEqual([]);
+    t.engine.agentEvent({ type: "user_message", text: "너 한국어 가능해?", voice: true }, Date.now());
+    t.engine.agentEvent(READ, Date.now());
     t.engine.agentEvent({ type: "assistant_text", text: "네, 한국어 가능해요!" }, Date.now());
-    expect(t.creates().slice(1)).toEqual([{ type: "response.create" }]);
+    t.engine.tick(Date.now() + ANSWER_HOLD_MS);
+    expect(t.creates().map(lineOf)).toEqual(["네, 한국어 가능해요!"]);
   });
 
   it("the user's correction ('아니, 저는 그냥 한국어 가능한지 물어본 거예요') is a question too: no acknowledgement", async () => {
@@ -722,7 +763,7 @@ describe("the owner's report of 2026-09-27: 'can you speak Korean?' while the ag
     t.engine.agentEvent({ type: "assistant_text", text: "I'll open your calendar." }, Date.now());
     expect(t.creates()).toEqual([]);
     t.engine.agentEvent({ type: "task_end", outcome: "done", summary: "Read", spoken: "Two meetings tomorrow." }, Date.now() + 5_000);
-    expect(t.creates()).toEqual([{ type: "response.create" }]);
+    expect(t.creates().map(lineOf)).toEqual(["Two meetings tomorrow"]);
   });
 
   it('"also cc my accountant" mid-task: one neutral acknowledgement only', async () => {
@@ -810,7 +851,7 @@ describe("a long run keeps the user informed (the owner's report: silent for 38 
     const record = (at: number) => {
       for (const c of t.creates().slice(seen)) {
         said.push(at);
-        kinds.push(c.response?.conversation === "none" ? "progress" : "reply");
+        kinds.push(String(c.response?.instructions ?? "").startsWith("You are working on the user's task. Say only this short update") ? "progress" : "reply");
       }
       seen = t.creates().length;
       t.serve();
@@ -831,7 +872,7 @@ describe("a long run keeps the user informed (the owner's report: silent for 38 
     const silence = longestSilence(said, 0, 38_045);
     expect({ progress: progress > 0, replies, silenceUnder20s: silence <= 20_000 }).toEqual({ progress: true, replies: 1, silenceUnder20s: true });
     // What was said when (ms after the request): each progress line as it is, the result once.
-    const lines = t.creates().map((c) => (c.response?.conversation === "none" ? /«(.*?)\.»/.exec(c.response.instructions)![1] : "result"));
+    const lines = t.creates().map((c, i) => (kinds[i] === "progress" ? lineOf(c) : "result"));
     expect(said.map((at, i) => [at, lines[i]])).toEqual([
       [2_000, "Opening x.com"],
       [20_000, "Still opening x.com"],

@@ -3,7 +3,7 @@
 // The helper is not needed: without one the status shows no brain (a helper registered on this
 // machine is tolerated: Auto may then pick its Claude Code).
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { driverCall, EXTENSION_ID, launchExtension, pageUi, routerUi } from "../../../test/e2e/lib/extension.mjs";
@@ -15,7 +15,9 @@ const site = await serveHtml((path) => (path === "/other" ? OTHER_PAGE : driverP
 const { base } = site;
 
 const { step, finish } = createSuite("smoke");
-const ext = await launchExtension({ name: "smoke" });
+// Chrome's download folder (the Noa folder goes in it).
+const downloadDir = mkdtempSync(join(tmpdir(), "noa-smoke-downloads-"));
+const ext = await launchExtension({ name: "smoke", prefs: { download: { default_directory: downloadDir, prompt_for_download: false } } });
 const { context, sw, extensionId, profile } = ext;
 const uploadFile = join(profile, "upload-me.txt");
 writeFileSync(uploadFile, "hello upload");
@@ -162,6 +164,18 @@ try {
     return out[0];
   });
 
+  await step("the Noa folder is Downloads/Noa, with its README, written once", async () => {
+    // Chrome's own download handling (Playwright saves downloads under random names in its own folder).
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("Browser.setDownloadBehavior", { behavior: "default" });
+    const { path } = await ui({ type: "folder.open" });
+    assert.equal(path, join(downloadDir, "Noa"));
+    assert.match(readFileSync(join(path, "README.txt"), "utf8"), /This is your Noa folder/);
+    await ui({ type: "folder.open" });
+    assert.deepEqual(readdirSync(downloadDir, { recursive: true }).sort(), ["Noa", join("Noa", "README.txt")], "opened again: the same README");
+    return path;
+  });
+
   // Driver against the fixture page, in the agent tab.
   const call = driverCall(sw);
 
@@ -291,7 +305,7 @@ try {
     const s = await call("readPage");
     assert.match(s.text, /Files: upload-me\.txt:12/);
     const err = await call("upload", { index: findIndex(snap, (e) => e.role === "link"), paths: [uploadFile] }).catch((e) => e.message);
-    assert.match(String(err), /not a file input/);
+    assert.match(String(err), /took neither a drop nor a paste/);
     return "upload-me.txt:12";
   });
 
@@ -361,6 +375,7 @@ try {
   });
 } finally {
   await ext.close();
+  rmSync(downloadDir, { recursive: true, force: true });
   await site.close();
 }
 

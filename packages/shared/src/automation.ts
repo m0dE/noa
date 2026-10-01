@@ -126,7 +126,11 @@ export interface ApprovalRequest {
   expiresAt: string;
 }
 
-/** The user's answer on an approval card. allow_task: no more approvals until this task's turn ends. */
+/**
+ * The user's answer on an approval card. allow_once ("Allow"): just this action; the next one asks again.
+ * allow_task ("Allow all until done"): this and every later action run without asking until the agent finishes
+ * what it is doing now (the turn ends); the next message or run asks again.
+ */
 export const ApprovalAnswer = z.enum(["allow_once", "allow_task", "deny"]);
 export type ApprovalAnswer = z.infer<typeof ApprovalAnswer>;
 
@@ -145,8 +149,8 @@ export type ApprovalEndedBy = ApprovalAnsweredBy | "stop" | "message" | "timeout
 
 /** The outcome as the card shows it once answered. */
 export const APPROVAL_OUTCOME_TEXT: Record<ApprovalOutcome, string> = {
-  allow_once: "Allowed once",
-  allow_task: "Allowed for this task",
+  allow_once: "Allowed",
+  allow_task: "Allowed all until done",
   deny: "Denied",
   timeout: "No answer in time: not done",
   ended: "The task ended before an answer: not done",

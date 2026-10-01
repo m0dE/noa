@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS, redactSettings, type ExtensionSettings } from "@noa/shared";
-import { adjustedFields, buildSettingsPatch, HELPER_WHY, helperStatus } from "../../src/options/settings-patch.js";
+import { adjustedFields, buildSettingsPatch, HELPER_WHY, helperInstallCommand, helperStatus } from "../../src/options/settings-patch.js";
 
 const saved: ExtensionSettings = redactSettings({ ...DEFAULT_SETTINGS, anthropicApiKey: "sk-real" });
 
@@ -53,5 +53,13 @@ describe("helperStatus", () => {
     const failed = helperStatus({ ...info, selfTest: { ok: false, error: "not logged in", ms: 1, at: "t" } });
     expect(failed.tone).toBe("warn");
     expect(failed.details).toContain("Self-test failed: not logged in");
+  });
+});
+
+describe("helperInstallCommand", () => {
+  it("pipes the site's installer into sh with this extension's id", () => {
+    expect(helperInstallCommand("abcdefghijklmnopabcdefghijklmnop")).toBe(
+      "curl -fsSL https://noa.bot/helper/install.sh | sh -s -- --extension-id abcdefghijklmnopabcdefghijklmnop",
+    );
   });
 });

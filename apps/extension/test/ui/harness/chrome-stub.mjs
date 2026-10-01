@@ -7,6 +7,8 @@ export function installChromeStub(data) {
   const VOICE_ENGINES = {
     engines: [
       { id: "realtime", name: "Realtime", model: "gpt-realtime-2.1", approxCentsPerMinute: 6.0762, assumption: "Per minute of conversation: you talk or it listens for 1 minute and it speaks for 18 seconds; includes transcribing what you say for the chat.", available: true },
+      { id: "realtime-mini", name: "Realtime mini", model: "gpt-realtime-2.1-mini", approxCentsPerMinute: 2.301, assumption: "Per minute of conversation: you talk or it listens for 1 minute and it speaks for 18 seconds; includes transcribing what you say for the chat.", available: true },
+      { id: "deepgram", name: "Deepgram", model: "nova-3 + aura-2-en", approxCentsPerMinute: 1.729, assumption: "Per minute of conversation: a minute of speech transcribed, and Deepgram's voice speaks for 18 seconds (about 270 characters).", available: true },
       { id: "standard", name: "Standard", model: "whisper-large-v3-turbo", approxCentsPerMinute: 0.0667, assumption: "Per minute of speech transcribed; replies are read aloud by your browser at no charge.", available: true },
     ],
     default: "realtime",
@@ -134,6 +136,12 @@ export function installChromeStub(data) {
       setTimeout(() => window.__push({ type: "event", event }), 0);
       return { ok: true };
     },
+    // Redo on an undone memory note: the background pushes the conversation's memory_redone.
+    "memory.redo": (req) => {
+      const event = { type: "memory_redone", changeId: req.changeId, ts: new Date().toISOString(), sessionId: req.sessionId };
+      setTimeout(() => window.__push({ type: "event", event }), 0);
+      return { ok: true };
+    },
     // Memory on or off for one chat: the session changes (and is pushed, as the background does).
     "chat.setMemory": (req) => {
       const cur = data.sessions.find((s) => s.sessionId === req.sessionId);
@@ -154,6 +162,7 @@ export function installChromeStub(data) {
       return { ok: true };
     },
     "agent.show": () => ({ ok: true }),
+    "folder.open": () => ({ path: "C:\\Users\\me\\Downloads\\Noa" }),
     "pause.migrate": () => data.state,
     // A job paused or resumed: the list is told its tasks changed (as the background does).
     "tasks.pause": (req) => {
@@ -186,16 +195,6 @@ export function installChromeStub(data) {
     "account.dismissMigration": () => {
       data.state = { ...data.state, account: { ...data.state.account, localTasks: undefined } };
       return data.state;
-    },
-    "account.keys.list": () => ({ keys: data.keys ?? [] }),
-    "account.keys.create": (req) => {
-      const k = { id: `k${(data.keys?.length ?? 0) + 1}`, name: req.name, role: req.role, createdAt: new Date().toISOString(), revokedAt: null };
-      data.keys = [...(data.keys ?? []), k];
-      return { id: k.id, name: k.name, role: k.role, key: "bt_EXAMPLE_not_a_real_key_0000000000000000" };
-    },
-    "account.keys.revoke": (req) => {
-      data.keys = (data.keys ?? []).filter((k) => k.id !== req.id);
-      return { ok: true };
     },
     // A task's details: what its memory keeps of its earlier runs (data.taskRuns, for the task whose instructions start with data.taskRunsFor).
     "memory.taskRuns": (req) => ({ runs: data.taskRunsFor && req.task.instructions.startsWith(data.taskRunsFor) ? (data.taskRuns ?? []) : [] }),
@@ -286,6 +285,9 @@ export function installChromeStub(data) {
     },
     "trace.add": () => ({ ok: true }),
     "voice.realtime": () => data.realtimeTicket ?? { url: "ws://127.0.0.1:9/v1/ai/realtime?session=s-new", token: "tok" },
+    // Deepgram's voice: no audio in the harness (the account server's answer as data).
+    "voice.speak": () => ({ error: { kind: "network", message: "No Deepgram voice in the harness.", fatal: false } }),
+    "notify.test": () => ({ ok: true }),
     // A said line is kept in its chat: the background pushes it back as a "spoken" event.
     "voice.spoken": (req) => {
       setTimeout(() => window.__push({ type: "event", event: { type: "spoken", text: req.text, ts: new Date().toISOString(), sessionId: req.sessionId } }), 0);
@@ -335,6 +337,10 @@ export function installChromeStub(data) {
   /** Tab addresses: none unless a case gives them (data.tabUrls). */
   const tabUrl = (id) => data.tabUrls?.[id];
   const noEvent = { addListener: () => {} };
+  // The helper's one-line installer on the site: online unless a case says otherwise (data.helperInstallerDown).
+  const realFetch = window.fetch.bind(window);
+  window.fetch = (url, init) =>
+    String(url) === "https://noa.bot/helper/install.sh" ? Promise.resolve(new Response(null, { status: data.helperInstallerDown ? 404 : 200 })) : realFetch(url, init);
   window.chrome = {
     runtime: {
       id: "abcdefghijklmnopabcdefghijklmnop",

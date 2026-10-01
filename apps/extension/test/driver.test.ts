@@ -428,20 +428,52 @@ describe("Driver", () => {
     });
   });
 
-  it("upload sets files on a file input and refuses other elements", async () => {
+  it("upload sets files on a file input", async () => {
     evalResults.push(["type === \"file\"", "file"]);
-    await driver.upload({ index: 4, paths: ["C:\\a.png"] });
+    expect(await driver.upload({ index: 4, paths: ["C:\\a.png"] })).toEqual({ ok: true });
     const cmd = chrome.debugger.commands.find((c) => c.method === "DOM.setFileInputFiles");
     expect(cmd?.params).toEqual({ files: ["C:\\a.png"], nodeId: 42 });
     const q = chrome.debugger.commands.find((c) => c.method === "DOM.querySelector");
     expect(q?.params).toEqual({ nodeId: 1, selector: '[data-noa-index="4"]' });
+    expect(chrome.debugger.commands.some((c) => c.method === "Input.dispatchDragEvent")).toBe(false);
 
-    evalResults.length = 0;
-    evalResults.push(["type === \"file\"", "notfile"]);
-    await expect(driver.upload({ index: 4, paths: ["C:\\a.png"] })).rejects.toThrow(/not a file input/);
     evalResults.length = 0;
     evalResults.push(["type === \"file\"", "missing"]);
     await expect(driver.upload({ index: 4, paths: ["C:\\a.png"] })).rejects.toThrow("element 4 not found; call read_page again");
+  });
+
+  const drags = () =>
+    chrome.debugger.commands
+      .filter((c) => c.method === "Input.dispatchDragEvent")
+      .map((c) => c.params as { type: string; x: number; y: number; data: { files: string[] } });
+
+  it("upload drops the files on another element with a real drag when the page accepts it", async () => {
+    evalResults.push(["type === \"file\"", "notfile"], ["scrollIntoView", { x: 110, y: 220 }], ["defaultPrevented", true]);
+    expect(await driver.upload({ index: 4, paths: ["C:\\a.png", "C:\\b.zip"] })).toEqual({ ok: true, via: "drop" });
+    expect(drags().map((d) => d.type)).toEqual(["dragEnter", "dragOver", "drop"]);
+    expect(drags()[2]).toMatchObject({ x: 110, y: 220, data: { files: ["C:\\a.png", "C:\\b.zip"] } });
+    expect(chrome.debugger.commands.some((c) => c.method === "DOM.setFileInputFiles")).toBe(false);
+  });
+
+  it("upload cancels a drag nothing accepts and pastes the files instead", async () => {
+    evalResults.push(["type === \"file\"", "notfile"], ["scrollIntoView", { x: 1, y: 2 }], ["defaultPrevented", false]);
+    const plain = chrome.debugger.respond;
+    let pasted = true;
+    chrome.debugger.respond = (method, params) => {
+      if (method === "Runtime.evaluate" && String((params as { expression: string }).expression).includes("createElement")) {
+        return { result: { objectId: "input-1" } };
+      }
+      if (method === "Runtime.callFunctionOn") return { result: { value: pasted } };
+      return plain(method, params);
+    };
+    expect(await driver.upload({ index: 4, paths: ["C:\\a.png"] })).toEqual({ ok: true, via: "paste" });
+    expect(drags().map((d) => d.type)).toEqual(["dragEnter", "dragOver", "dragCancel"]);
+    const set = chrome.debugger.commands.find((c) => c.method === "DOM.setFileInputFiles");
+    expect(set?.params).toEqual({ files: ["C:\\a.png"], objectId: "input-1" });
+    expect(chrome.debugger.commands.some((c) => c.method === "Runtime.releaseObject")).toBe(true);
+
+    pasted = false;
+    await expect(driver.upload({ index: 4, paths: ["C:\\a.png"] })).rejects.toThrow(/element 4 took neither a drop nor a paste/);
   });
 
   it("screenshot captures a JPEG", async () => {

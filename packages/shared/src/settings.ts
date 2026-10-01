@@ -3,7 +3,19 @@ import { DEFAULT_MODEL } from "./models.js";
 import { DEFAULT_REASONING, ReasoningLevel } from "./reasoning.js";
 import { MemoryKind } from "./memory.js";
 import { AutomationLevel, DEFAULT_AUTOMATION_LEVEL, DEFAULT_SCHEDULED_AUTOMATION, ScheduledAutomation } from "./automation.js";
-import { DEFAULT_REALTIME_VOICE, REALTIME_SPEED, RealtimeVoiceId, STANDARD_SPEED, VoiceEngineId } from "./voice.js";
+import { DEFAULT_IMAGE_MODEL, ImageModelId } from "./images.js";
+import { LanguageSetting } from "./language.js";
+import {
+  DEEPGRAM_SPEED,
+  DeepgramVoiceId,
+  DEFAULT_DEEPGRAM_VOICE,
+  DEFAULT_REALTIME_VOICE,
+  NotificationVoice,
+  REALTIME_SPEED,
+  RealtimeVoiceId,
+  STANDARD_SPEED,
+  VoiceEngineId,
+} from "./voice.js";
 
 /** The Noa account server. */
 export const ACCOUNT_API_BASE = "https://app.noa.bot";
@@ -71,9 +83,10 @@ export const ExtensionSettings = z.object({
   /** Minutes before a paused task can be claimed again. */
   pauseRetryMinutes: z.number().int().min(1).max(24 * 60).default(15),
   /**
-   * Hands-free voice (the voice shortcut): realtime = OpenAI Realtime through
-   * the account server (a spoken narrator); standard = speech-to-text on the server
-   * with the browser's own speech. Falls back to standard when realtime cannot run.
+   * Hands-free voice (the voice shortcut): realtime / realtime-mini = OpenAI Realtime through
+   * the account server (a spoken narrator; the full or the smaller model); deepgram =
+   * speech-to-text and Deepgram's voice on the server; standard = speech-to-text on the server
+   * with the browser's own speech. See VoiceEngineId.
    */
   voiceEngine: VoiceEngineId.default("realtime"),
   /** The Standard engine's voice: a speechSynthesis voice name; "" = the browser's default. */
@@ -84,10 +97,32 @@ export const ExtensionSettings = z.object({
   realtimeVoice: RealtimeVoiceId.default(DEFAULT_REALTIME_VOICE),
   /** The Realtime narrator's speaking speed (1 = normal; REALTIME_SPEED). */
   realtimeSpeed: z.number().min(REALTIME_SPEED.min).max(REALTIME_SPEED.max).default(REALTIME_SPEED.default),
+  /** The Deepgram engine's voice (one of Aura's English voices). */
+  deepgramVoice: DeepgramVoiceId.default(DEFAULT_DEEPGRAM_VOICE),
+  /** The Deepgram engine's speaking speed (1 = normal; DEEPGRAM_SPEED), applied when played. */
+  deepgramSpeed: z.number().min(DEEPGRAM_SPEED.min).max(DEEPGRAM_SPEED.max).default(DEEPGRAM_SPEED.default),
   /** The one-time notice of what Realtime voice costs was shown. */
   realtimeCostNoticed: z.boolean().default(false),
   /** Hands-free voice makes a short soft sound when the microphone goes live and when it stops. */
   voiceSounds: z.boolean().default(true),
+  /**
+   * How Noa's notifications (a scheduled job started, paused, needs your OK) are also heard, so the user notices
+   * them while working in another tab (notify.ts): in the hands-free engine's voice ("same"), another engine's
+   * voice (with that engine's voice and speed above), a chime, or not at all. Replaces speakNotifications (false
+   * became "off", parseSettings).
+   */
+  notificationVoice: NotificationVoice.default("same"),
+  /**
+   * The voice notifications are said in, just for them, among the voices of the engine they use
+   * (notificationSource): a Realtime or Deepgram voice id, or a browser voice name. "" = that engine's voice above.
+   * A value that is not one of that engine's voices (the engine changed since) also means the voice above.
+   */
+  notificationSpeaker: z.string().max(200).default(""),
+  /**
+   * The language Noa talks in (language.ts): the transcription's hint, what hands-free voice and notifications say,
+   * and what the agent writes back. "auto": the language the user speaks, with Noa's own lines in English.
+   */
+  language: LanguageSetting.default("auto"),
   /** A tab the agent controls shows it on the page: a glow and a "Noa is working" pill with Stop (Settings > Tasks). */
   showControlOverlay: z.boolean().default(true),
   /** How much the chat agent does without asking (automation.ts); enforced before each browser action. */
@@ -96,10 +131,19 @@ export const ExtensionSettings = z.object({
   autonomyWarningClosed: z.boolean().default(false),
   /** The same for scheduled runs of the TODO list (automation.ts). */
   scheduledAutomation: ScheduledAutomation.default(DEFAULT_SCHEDULED_AUTOMATION),
+  /**
+   * The agent may make pictures (generate_image, paid from the Noa account's usage credit). Off: the tool is not
+   * offered to either brain, and a call from a session that started before is refused.
+   */
+  imageGeneration: z.boolean().default(true),
+  /** The model generate_image uses (images.ts IMAGE_MODELS). */
+  imageModel: ImageModelId.default(DEFAULT_IMAGE_MODEL),
   /** Memory is paused: the agent is given none and saves none (Settings > Memory). What is kept stays. */
   memoryPaused: z.boolean().default(false),
   /** Kinds of memory turned off: not given to the agent, not saved (memory.ts). */
   memoryKindsOff: z.array(MemoryKind).default([]),
+  /** Noa Browser: its bookmarks sync with the signed-in Noa account (bookmark-sync.ts; the extension in Chrome has no bookmarks). */
+  bookmarkSync: z.boolean().default(false),
 });
 export type ExtensionSettings = z.infer<typeof ExtensionSettings>;
 
@@ -115,6 +159,8 @@ export function parseSettings(raw: unknown): ExtensionSettings {
     if (parsed.success && obj[key] !== undefined) out[key] = parsed.data;
   }
   const s = out as ExtensionSettings;
+  // "Read notifications aloud" turned off, before notificationVoice.
+  if (obj.notificationVoice === undefined && obj.speakNotifications === false) s.notificationVoice = "off";
   if (s.delayMaxSec < s.delayMinSec) s.delayMaxSec = s.delayMinSec;
   // Installs saved with an earlier default follow the default to its new address.
   s.accountApiBase = currentAccountApiBase(s.accountApiBase);

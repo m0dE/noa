@@ -451,7 +451,12 @@ export function installChromeFake() {
       },
       async search(q: { id: number }) {
         const d = fake.downloads.items.find((x) => x.id === q.id && !x.erased);
-        return d ? [{ id: d.id, state: d.state, filename: d.filename, error: d.error }] : [];
+        return d ? [{ id: d.id, state: d.state, filename: d.filename, error: d.error, exists: !d.removed }] : [];
+      },
+      /** Every show call (the file manager opened on that download), in order. */
+      shown: [] as number[],
+      show(id: number) {
+        fake.downloads.shown.push(id);
       },
       async setUiOptions(o: { enabled: boolean }) {
         fake.downloads.uiEnabled = o.enabled;

@@ -9,6 +9,8 @@ export interface TabChatState {
   tabChats?: Record<string, string>;
   /** running session id -> the tabs it acts in. */
   runningTabs?: Record<string, number[]>;
+  /** chat session id -> the tabs its agent opened and keeps between its turns. */
+  chatTabs?: Record<string, number[]>;
 }
 
 /** What the panel knows that the background may not have pushed yet. */
@@ -19,12 +21,14 @@ export interface TabChatLocal {
 
 /**
  * The conversation a panel that follows its window's active tab shows for tab `tab`: the tab's own, else a running
- * session acting in it that belongs to no tab (a scheduled run). Null: none (the list).
+ * session acting in it (a scheduled run, or a chat of another tab working in a tab its agent opened), else the chat
+ * whose agent opened the tab and keeps it between turns. Null: none (the list).
  */
 export function chatInTab(tab: number | null, s: TabChatState, local: TabChatLocal = {}): string | null {
   const own = ownChatOfTab(tab, s, local);
   if (own || tab === null) return own;
-  for (const [sessionId, tabs] of Object.entries(s.runningTabs ?? {})) if (tabs.includes(tab) && !isBound(sessionId, s)) return sessionId;
+  for (const [sessionId, tabs] of Object.entries(s.runningTabs ?? {})) if (tabs.includes(tab)) return sessionId;
+  for (const [sessionId, tabs] of Object.entries(s.chatTabs ?? {})) if (tabs.includes(tab)) return sessionId;
   return null;
 }
 

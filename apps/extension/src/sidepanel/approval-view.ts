@@ -20,7 +20,7 @@ export interface ApprovalView {
   expiresAt: string;
   /** Still waiting, or how it ended. */
   state: "pending" | ApprovalOutcome;
-  /** How it ended, in words ("Allowed once"). */
+  /** How it ended, in words ("Allowed"). */
   outcome?: string;
   /** Answered by voice. */
   byVoice?: true;
@@ -52,7 +52,7 @@ export function approvalEnding(events: readonly AgentEvent[], id: string): { out
   return after.some((e) => e.type === "task_end") ? { outcome: "ended" } : undefined;
 }
 
-/** The card's answers and their keys: Alt+Y allow once, Alt+T allow for this task, Alt+N deny. */
+/** The card's answers and their keys: Alt+Y allow, Alt+T allow all until done, Alt+N deny. */
 export const APPROVAL_KEYS: Readonly<Record<ApprovalAnswer, { code: string; label: string }>> = {
   allow_once: { code: "KeyY", label: "Alt+Y" },
   allow_task: { code: "KeyT", label: "Alt+T" },
@@ -67,14 +67,17 @@ export function approvalKeyOf(e: { code: string; altKey: boolean; ctrlKey: boole
 }
 
 /** The answers as buttons show them, in order. */
-export const APPROVAL_BUTTONS: readonly { answer: ApprovalAnswer; label: string }[] = [
-  { answer: "allow_once", label: "Allow once" },
-  { answer: "allow_task", label: "Allow for this task" },
-  { answer: "deny", label: "Deny" },
+export const APPROVAL_BUTTONS: readonly { answer: ApprovalAnswer; label: string; hint?: string }[] = [
+  { answer: "allow_once", label: "Allow", hint: "Allow just this action. It asks again next time." },
+  { answer: "allow_task", label: "Allow all until done", hint: "Allow this and everything else it does until it finishes what it's doing now, without asking again." },
+  { answer: "deny", label: "Deny", hint: "Don't do it. The agent is told you said no." },
 ];
 
+/** The line under the buttons that says what "Allow all until done" means. */
+export const APPROVAL_ALLOW_ALL_NOTE = "Allow all until done: it won't ask again until it finishes what it's doing now.";
+
 /** On a card its run paused at: go on with this action allowed once, or end the run as not done. */
-export const PAUSED_BUTTONS: readonly { answer: ApprovalAnswer; label: string }[] = [
+export const PAUSED_BUTTONS: readonly { answer: ApprovalAnswer; label: string; hint?: string }[] = [
   { answer: "allow_once", label: "Allow & continue" },
   { answer: "deny", label: "Don't" },
 ];

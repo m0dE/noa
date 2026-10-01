@@ -218,6 +218,28 @@ describe("Runner: conversations", () => {
     expect((await h.sessions.eventsOf(sessionId)).at(-1)).toMatchObject({ type: "task_end", outcome: "done", spoken: "You have two new emails." });
   });
 
+  it("the agent's own pause reason is marked as its words on the task_end (never read as one of Noa's errors)", async () => {
+    const h = harness();
+    const reason = "@rooftopchat is not signed in on this browser's X account menu, so switch_x_account cannot switch to it.";
+    h.brain.script = () => ({ outcome: "paused", reason, byAgent: true });
+    const { sessionId } = await h.runner.runAdhoc({ instructions: "Post on X as @rooftopchat" });
+    await settle(h);
+    expect((await h.sessions.eventsOf(sessionId)).at(-1)).toMatchObject({ type: "task_end", outcome: "paused", reason, byAgent: true });
+  });
+
+  it("a reason the runner puts in place of the agent's is not marked as the agent's (Stop)", async () => {
+    const h = harness();
+    h.brain.script = () => "hang";
+    h.brain.onAbort = () => ({ outcome: "paused", reason: "I'll ask the user", byAgent: true });
+    const { sessionId } = await h.runner.runAdhoc({ instructions: "check my email" });
+    await vi.waitFor(() => expect(h.brain.starts).toHaveLength(1));
+    h.runner.stop();
+    await settle(h);
+    const end = (await h.sessions.eventsOf(sessionId)).at(-1)!;
+    expect(end).toMatchObject({ type: "task_end", outcome: "paused", reason: stopOf("user-stop").reason });
+    expect(end).not.toHaveProperty("byAgent");
+  });
+
   it("falls back to a fresh session with a summary when the agent session is gone", async () => {
     const h = harness();
     const sessionId = await firstTurn(h);

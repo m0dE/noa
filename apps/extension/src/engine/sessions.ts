@@ -5,7 +5,7 @@
  * trace: `trace` events go there instead of the event stream, every other
  * event is counted there, and each turn's start is marked (create, reopen).
  */
-import { MAX_ASSISTANT_TEXT, MAX_DRAFT_CHARS, MAX_EVENT_TEXT, clipEventText, type AgentEvent, type SessionInfo, type StampedAgentEvent, type TitleBy, type TraceEvent } from "@noa/shared";
+import { MAX_ASSISTANT_TEXT, MAX_DRAFT_CHARS, MAX_EVENT_TEXT, clipEventText, isMessageRead, type AgentEvent, type SessionInfo, type StampedAgentEvent, type TitleBy, type TraceEvent } from "@noa/shared";
 import { Listeners } from "../listeners.js";
 import type { KvDb, KvStore } from "./kv.js";
 import type { TraceBook } from "../trace/trace-book.js";
@@ -109,7 +109,10 @@ export class SessionStore {
     if (event.type === "trace") {
       // Only for a session running now (a launch that never created its session leaves no trace behind).
       if (this.seq.has(sessionId)) this.trace?.record(sessionId, event.trace);
-      return { ...event, ts: now.toISOString(), sessionId };
+      const stamped = { ...event, ts: now.toISOString(), sessionId } as StampedAgentEvent;
+      // Hands-free voice needs to know when the model read a message sent mid-turn (never stored).
+      if (isMessageRead(event)) this.listeners.emit({ event: stamped });
+      return stamped;
     }
     this.trace?.observe(sessionId, event, now.getTime());
     if (event.type === "assistant_text_delta") {

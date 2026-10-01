@@ -58,7 +58,7 @@ describe("the voice strip: it only tells", () => {
   });
 
   it("names the engine (once chosen) in the tooltip", () => {
-    expect(view({ engine: "standard" }).hint).toMatch(/^Nova-3 voice · /);
+    expect(view({ engine: "standard" }).hint).toMatch(/^Browser voice · /);
     expect(view({ engine: null }).hint).toMatch(/^Voice · /);
   });
 
@@ -74,7 +74,7 @@ describe("the voice strip: it only tells", () => {
       label: "Voice on · Shop A",
       status: "",
       time: null,
-      hint: `Nova-3 voice · ${NOT_HERE_TEXT}`,
+      hint: `Browser voice · ${NOT_HERE_TEXT}`,
       meter: false,
       announce: "Voice on · Shop A",
       links: { turnOff: true },

@@ -8,7 +8,8 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* Header, pinned over every view: the name and the avatar; on a job, a row under it with back, its title and "⋯". */
 .top { background: var(--surface); border-bottom: 1px solid var(--border); }
 .head { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 6px 8px 6px 14px; }
-.brand { font-size: var(--text-lg); font-weight: 650; letter-spacing: -0.01em; }
+.brand { font-size: var(--text-lg); font-weight: 650; letter-spacing: -0.01em; margin-right: 6px; }
+button.head-icon { flex: none; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; }
 .job-head { padding-left: 4px; gap: 2px; border-top: 1px solid var(--border); }
 button.job-back { flex: none; width: 30px; height: 30px; padding: 0; color: var(--text); }
 .job-heading { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -40,7 +41,7 @@ input.job-rename { flex: 1; font-weight: 600; font-size: var(--text-lg); padding
 
 /* The jobs list: the search, then the groups; rows are lines, not cards. */
 .list-view { display: flex; flex-direction: column; padding: 0 6px 16px; }
-/* One line over the list: the view (a segmented control) and the search of that view, which takes the rest. */
+/* One line over the list: the search of the view the header's tabs chose (a segmented control in the header). */
 .list-bar {
   position: sticky; top: 0; z-index: var(--z-sticky); display: flex; align-items: center; gap: 8px;
   margin: 0 -6px; padding: 8px 12px 6px; background: var(--bg);
@@ -533,7 +534,7 @@ button[aria-disabled="true"]:hover { border-color: var(--border); }
 .log .ev-memory .mem-subject { flex: 0 1 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .log .ev-memory .mem-text { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .log .ev-memory .mem-replaced { flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; }
-.log .ev-memory .mem-undo { flex: none; margin-left: auto; padding-block: 1px; }
+.log .ev-memory .mem-undo, .log .ev-memory .mem-redo { flex: none; margin-left: auto; padding-block: 1px; }
 .log .ev-memory .mem-note { font-size: var(--text-xs); padding-left: 18px; }
 .log .ev-memory .mem-note.bad { color: color-mix(in srgb, var(--bad) 75%, var(--text)); }
 .log .ev-memory.undone .mem-line > svg { color: var(--faint); }

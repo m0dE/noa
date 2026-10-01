@@ -4,6 +4,7 @@ import type { AudioSource } from "../../src/voice/dictation.js";
 import type { EngineEvents } from "../../src/voice/engine.js";
 import type { RealtimeSocketLike } from "../../src/voice/realtime-client.js";
 import { RealtimeEngine } from "../../src/voice/realtime-engine.js";
+import { SENT_OUTPUT } from "../../src/voice/realtime-client.js";
 
 class FakeSocket implements RealtimeSocketLike {
   readyState = 0;
@@ -57,7 +58,7 @@ function setup() {
     useThisTab: async () => (log.push("useThisTab"), "Moved: you now work in Recipes (example.com)."),
     failed: (f) => void log.push(`failed:${(f as { kind: string }).kind}`),
   };
-  const player = { play: vi.fn(), stop: vi.fn(() => ({ itemId: "a1", playedMs: 800 })), close: vi.fn(), playing: false };
+  const player = { play: vi.fn(), stop: vi.fn(() => ({ itemId: "a1", playedMs: 800 })), close: vi.fn(), playing: false, pause: vi.fn(() => false), resume: vi.fn(), level: () => 0 };
   const engine = new RealtimeEngine({
     ticket: async () => ({ url: "wss://api.test/v1/ai/realtime", token: "tok" }),
     createSource: () => mic,
@@ -140,7 +141,7 @@ describe("RealtimeEngine", () => {
     t.socket.event({ type: "response.function_call_arguments.done", call_id: "c1", name: "send_to_agent", arguments: JSON.stringify({ text: "Post gm on X" }) });
     await settle();
     expect(t.log).toContain("forward:Post gm on X");
-    expect(t.socket.sent.find((e) => e.type === "conversation.item.create" && e.item.type === "function_call_output")!.item.output).toBe("Started. Your updates on it will follow.");
+    expect(t.socket.sent.find((e) => e.type === "conversation.item.create" && e.item.type === "function_call_output")!.item.output).toBe(SENT_OUTPUT);
   });
 
   it("stop_task and end_voice reach the panel", async () => {
@@ -188,12 +189,20 @@ describe("RealtimeEngine", () => {
     expect(t.socket.sent.find((e) => e.item?.type === "function_call_output")!.item.output).toBe("Stopped the task.");
   });
 
-  it("the chat's events become notes for the narrator", async () => {
+  it("the chat's events: its line said word for word, out of band, and the narrator's one status replaced", async () => {
     const t = await started();
     t.engine.agentEvent({ type: "task_end", outcome: "done", summary: "Posted", spoken: "Posted it." }, 0);
-    const note = t.socket.sent.find((e) => e.type === "conversation.item.create" && e.item.role === "system")!;
-    expect(note.item.content[0].text).toMatch(/Posted it\./);
-    expect(t.socket.sent.at(-1)).toEqual({ type: "response.create" });
+    const statuses = () => t.socket.sent.filter((e) => e.type === "conversation.item.create" && e.item.role === "system");
+    expect(statuses()).toHaveLength(1);
+    expect(statuses()[0]!.item.id).toMatch(/^noa_status_/);
+    const say = t.socket.sent.find((e) => e.type === "response.create")!;
+    expect(say.response).toMatchObject({ conversation: "none", tool_choice: "none" });
+    expect(say.response.instructions).toContain("«Posted it.»");
+    // The next status replaces it: the narrator never keeps a pile of updates to say later.
+    t.socket.event({ type: "response.created", response: { id: "r1" } });
+    t.socket.event({ type: "response.done", response: { id: "r1", status: "completed" } });
+    t.engine.agentEvent({ type: "user_message", text: "use the second draft" }, 10);
+    expect(t.socket.sent.filter((e) => e.type === "conversation.item.delete").map((e) => e.item_id)).toEqual([statuses()[0]!.item.id]);
   });
 
   it("a failure after the start is reported; stop() closes without one", async () => {

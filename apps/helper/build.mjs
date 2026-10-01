@@ -17,7 +17,8 @@ await build({
   bundle: true,
   platform: "node",
   format: "esm",
-  target: "node22",
+  // Node 20: the oldest the helper installer (apps/web/public/helper/install.sh) accepts; the helper tests pass on it.
+  target: "node20",
   sourcemap: true,
   logLevel: "warning",
   banner: {

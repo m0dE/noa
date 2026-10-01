@@ -44,6 +44,14 @@ export const freshMemory = (now = -Infinity): NarrationMemory => ({ lastSpokenAt
 export type RequestKind = "question" | "instruction";
 export const requestKind = (args: Record<string, unknown> | null): RequestKind => (args?.kind === "question" ? "question" : "instruction");
 
+/** A question by its words (asks something: a question mark, or it starts like one), else an instruction. */
+export function requestKindOf(words: string): RequestKind {
+  const w = words.trim().toLowerCase();
+  return w.endsWith("?") || /^(?:what|who|whom|whose|when|where|why|how|which|is|are|am|was|were|can|could|do|does|did|will|would|should|shall|may|might|have|has|had)\b/.test(w)
+    ? "question"
+    : "instruction";
+}
+
 /** Said once: false when the very same line was said last (dedupe by meaning). */
 function news(line: string, memory: NarrationMemory, now: number): boolean {
   const key = line.trim().toLowerCase();
@@ -98,20 +106,18 @@ export interface Floor {
 
 /**
  * Whether a line of `kind` starts now, waits for the floor ("later"), or is let go ("drop").
- * - The user speaking, or their reply about to start: dropped. Their reply is made with every note so far (a result
- *   included), so it answers once, with the news in it.
+ * - The user speaking, or their reply about to start: progress and the acknowledgement are let go (old by then); a
+ *   result, a question and a problem wait for the user and the reply to them. If what the user said was a new request,
+ *   they are let go then (realtime-client.ts supersedeNews): the agent answers that one. Dropped at once, the answer
+ *   was lost whenever it came while the user talked, and the narrator said it later from its notes, a turn behind.
  * - A reply being made or audio playing: a milestone is let go (old news by then); the acknowledgement, a result, a
  *   question and a problem wait their turn.
  */
 export function floor(kind: SpokenKind, f: Floor): "now" | "later" | "drop" {
-  if (f.userSpeaking || f.awaitingReply) return "drop";
+  if (f.userSpeaking || f.awaitingReply) return kind === "milestone" || kind === "ack" ? "drop" : "later";
   if (f.replying || f.playing) return kind === "milestone" ? "drop" : "later";
   return "now";
 }
-
-/** Replies waiting for the floor: the most important one is made (it covers the others, whose notes it sees). */
-const RANK: Record<SpokenKind, number> = { milestone: 0, ack: 1, result: 2, error: 3, question: 4 };
-export const moreImportant = (a: SpokenKind | null, b: SpokenKind): SpokenKind => (a && RANK[a] >= RANK[b] ? a : b);
 
 /** An empty transcript is noise when the speech was short (or its length is unknown). */
 export function isNoise(transcript: string, speechMs: number | null): boolean {
@@ -215,19 +221,20 @@ export const ECHO_OVERLAP_MIN = 0.75;
 /** Shorter transcripts are never taken for echo ("okay" after the narrator said "Okay, on it" is the user's). */
 const ECHO_MIN_WORDS = 2;
 
-/** Words as compared for echo: lower case, simple endings off ("Opening" and "open" are one word). */
+/** Words as compared for echo: lower case, simple endings and contractions off ("Opening" and "open", "you'd" and "you" are one word). */
 function stems(text: string): string[] {
-  return (text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? []).map((w) => w.replace(/'s$/, "").replace(/(?<=\p{L}{3})(?:ing|ed|es|s)$/u, ""));
+  return (text.toLowerCase().replace(/[’`]/g, "'").match(/[\p{L}\p{N}']+/gu) ?? []).map((w) => w.replace(/'(?:s|d|ll|re|ve)$/, "").replace(/(?<=\p{L}{3})(?:ing|ed|es|s)$/u, ""));
 }
 
 /**
  * The microphone heard the assistant's own voice (the narrator's line, a result said aloud) and not the user: most
  * of the transcript's words are in what was said aloud lately (`said`). A real trace: "opening the home timeline" was
- * sent to the agent right after the narrator said "Opening the home timeline now."
+ * sent to the agent right after the narrator said "Opening the home timeline now." `minWords`: shorter transcripts are
+ * never echo (speech that started over the narrator: 1, "I'm." of "I'm doing well").
  */
-export function echoesSpoken(transcript: string, said: readonly string[]): boolean {
+export function echoesSpoken(transcript: string, said: readonly string[], minWords = ECHO_MIN_WORDS): boolean {
   const heard = stems(transcript);
-  if (heard.length < ECHO_MIN_WORDS || !said.length) return false;
+  if (heard.length < minWords || !said.length) return false;
   const left = new Map<string, number>();
   for (const w of said.flatMap(stems)) left.set(w, (left.get(w) ?? 0) + 1);
   let found = 0;

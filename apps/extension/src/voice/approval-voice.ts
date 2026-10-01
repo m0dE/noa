@@ -14,11 +14,36 @@ export function approvalLine(r: Pick<ApprovalRequest, "action" | "site" | "why">
 const ALLOW = /^(yes|yeah|yep|sure|ok|okay|allow( it)?|go ahead|do it|approve( it)?|allow once)$/;
 const DENY = /^(no|nope|deny( it)?|don'?t|do not|stop|cancel|refuse|don'?t do it)$/;
 
+/** A whole short answer in the other languages of Settings > Language (language.ts): yes... */
+const ALLOW_OTHER = new Set([
+  "sí", "si", "vale", "claro", "adelante", "hazlo", "permítelo", // Spanish
+  "sim", "pode", "pode fazer", "permita", // Portuguese
+  "oui", "d'accord", "vas-y", "vas y", "autorise", // French
+  "ja", "klar", "mach es", "erlauben", "erlaube es", // German
+  "네", "예", "응", "그래", "좋아", "좋아요", "허락", "허락해", "승인", // Korean
+  "はい", "いいよ", "どうぞ", "許可", "許可します", "お願いします", // Japanese
+  "是的", "好的", "好", "可以", "允许", "同意", // Chinese
+  "हाँ", "हां", "ठीक है", "करो", "अनुमति है", // Hindi
+  "نعم", "موافق", "حسنا", "اسمح", // Arabic
+]);
+/** ...and no. */
+const DENY_OTHER = new Set([
+  "no", "no lo hagas", "cancela", // Spanish
+  "não", "nao", "não faça", // Portuguese
+  "non", "ne le fais pas", "refuse", // French
+  "nein", "nicht", "lass es", // German
+  "아니", "아니요", "아니오", "안 돼", "안돼", "하지 마", "하지마", "거절", // Korean
+  "いいえ", "だめ", "ダメ", "やめて", "拒否", // Japanese
+  "不", "不要", "别", "不行", "拒绝", // Chinese
+  "नहीं", "ना", "मत करो", // Hindi
+  "لا", "ارفض", "لا تفعل", // Arabic
+]);
+
 /** The answer a short utterance gives, or null when it is something else (then it goes to the agent as usual). */
 export function spokenApprovalAnswer(text: string): ApprovalAnswer | null {
-  const t = text.toLowerCase().replace(/[.!,?]+/g, " ").replace(/\s+/g, " ").trim().replace(/ please$/, "");
-  if (ALLOW.test(t)) return "allow_once";
-  if (DENY.test(t)) return "deny";
+  const t = text.toLowerCase().replace(/[.!,?。！？、，]+/g, " ").replace(/\s+/g, " ").trim().replace(/ please$/, "");
+  if (ALLOW.test(t) || ALLOW_OTHER.has(t)) return "allow_once";
+  if (DENY.test(t) || DENY_OTHER.has(t)) return "deny";
   return null;
 }
 
@@ -42,6 +67,8 @@ const YES_WORDS = [
   // Japanese, Chinese
   "はい", "いいよ", "いいです", "お願いします", "どうぞ", "許可", "承認", "投稿して",
   "是的", "好的", "可以", "允许", "同意", "批准", "发吧", "发布吧",
+  // Hindi, Arabic
+  "हाँ", "हां", "ठीक है", "करो", "कर दो", "अनुमति है", "نعم", "موافق", "حسنا", "اسمح", "تفضل",
 ];
 
 /** Words that make an utterance anything but a plain yes: a no, a wait, or a question. */
@@ -51,13 +78,14 @@ const NOT_YES_WORDS = [
   "아니", "안 돼", "안돼", "하지 마", "하지마", "잠깐", "멈춰", "왜", "뭐",
   "いいえ", "だめ", "ダメ", "待って", "やめ", "なぜ", "なんで", "何",
   "不", "别", "等", "为什么", "什么", "吗",
+  "não", "nao", "pare", "por que", "pourquoi", "nicht", "warum", "नहीं", "मत", "रुको", "क्यों", "क्या", "لا", "انتظر", "لماذا", "ماذا",
 ];
 
 /** Scripts written without spaces between words: a phrase counts wherever it appears. */
 const UNSPACED = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
 
 function normalized(text: string): string {
-  return ` ${text.toLowerCase().replace(/[’`]/g, "'").replace(/[^\p{L}\p{N}'?\-]+/gu, " ").replace(/\s+/g, " ").trim()} `;
+  return ` ${text.toLowerCase().replace(/[’`]/g, "'").replace(/[^\p{L}\p{M}\p{N}'?\-]+/gu, " ").replace(/\s+/g, " ").trim()} `;
 }
 
 function hasWord(t: string, phrase: string): boolean {

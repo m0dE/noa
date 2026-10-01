@@ -34,6 +34,8 @@ export interface DueLoopDeps {
   outOfCredit?(): boolean;
   resolveBrain(settings: ExtensionSettings): Promise<{ brain: Brain | null; status: BrainStatus }>;
   notify(title: string, message: string): void | Promise<void>;
+  /** A scheduled job just started in the background (RunnerDeps.onScheduledStart). */
+  onScheduledStart?(job: ScheduledJob): void | Promise<void>;
   sleep?: Sleep;
   now(): Date;
   newId(): string;
@@ -203,6 +205,10 @@ export class DueLoop {
             live.ended.notify();
           });
         scheduled.add(tracked);
+        // The user may be in another tab or window: they are told it started (a notification, said aloud).
+        void Promise.resolve()
+          .then(() => this.deps.onScheduledStart?.(scheduledJob))
+          .catch((err) => this.deps.log(`telling the user ${scheduledJob.title} started failed: ${errorMessage(err)}`));
       }
       while (scheduled.size) await Promise.allSettled([...scheduled]);
     } catch (err) {

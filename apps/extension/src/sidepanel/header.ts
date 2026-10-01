@@ -1,9 +1,9 @@
 /**
- * The side panel's header: "Noa" and the account menu (Log in, Settings, Plan & billing, Sign out) over the
- * jobs list, and under either view a one-line problem strip that shows only while something stops jobs for the
- * whole account (no AI set up, out of usage credit, a plan without the TODO list) with the button that fixes it.
- * Jobs are paused one by one (their rows and menus), never all at once from here. The brain in use is the brand's
- * tooltip.
+ * The side panel's header: "Noa", the jobs view's tabs (job-list.ts), the Noa folder button (opens Downloads/Noa
+ * in the system's file manager) and the account menu (Log in, Settings, Plan & billing, Sign out), and under either
+ * view a one-line problem strip that shows only while something stops jobs for the whole account (no AI set up,
+ * out of usage credit, a plan without the TODO list) with the button that fixes it. Jobs are paused one by one
+ * (their rows and menus), never all at once from here. The brain in use is the brand's tooltip.
  */
 import { uiRequest, type UiState } from "../ui-protocol.js";
 import { createAccountMenu } from "../ui/account-menu.js";
@@ -55,6 +55,8 @@ export function initHeader(deps: HeaderDeps): Header {
     ],
   });
   $("acct-slot").replaceWith(menu.el);
+  const folder = $<HTMLButtonElement>("open-folder");
+  folder.addEventListener("click", () => void busy(folder, () => uiRequest({ type: "folder.open" }), say));
 
   function renderStatus(s: UiState): void {
     last = s;
