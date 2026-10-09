@@ -2,7 +2,7 @@
 import { ANTHROPIC_API_BASE, ANTHROPIC_API_VERSION, errorMessage, type ExtensionSettings, type PageSnapshot } from "@noa/shared";
 import type { JevLike } from "@noa/core";
 import type { BrainStatus } from "../ui-protocol.js";
-import { builtInJev, HOSTED_LABEL, HOSTED_SIGN_IN } from "./brain-resolver.js";
+import { CLOUD_JEV, HOSTED_SIGN_IN } from "./brain-resolver.js";
 import type { CoreApi } from "./brains.js";
 import { hostedJevEndpoint } from "./hosted-brain.js";
 
@@ -58,22 +58,23 @@ export interface TestJevDeps {
 
 /**
  * One tiny Jev decision on a two-element page, with the Jev the resolved
- * brain would use: Noa AI's own through the account server, else the
- * key set here. The helper's own key (local Claude Code) cannot be reached from here.
+ * brain would use (BrainStatus.jevSource): the key set here, or Noa's cloud
+ * Jev through the account server. The helper's own key (local Claude Code)
+ * cannot be reached from here.
  */
-export async function testJev(settings: ExtensionSettings, brain: Pick<BrainStatus, "effective" | "helper">, deps: TestJevDeps): Promise<TestResult> {
+export async function testJev(settings: ExtensionSettings, brain: Pick<BrainStatus, "jevSource">, deps: TestJevDeps): Promise<TestResult> {
   const fetchOpt = deps.fetch ? { fetch: deps.fetch } : undefined;
-  const source = builtInJev(brain.effective, brain.helper);
-  if (source === "hosted") {
-    if (!deps.hosted) return { ok: false, detail: HOSTED_SIGN_IN };
-    return askJev(`${HOSTED_LABEL}'s Jev`, deps.core.createJev(deps.hosted.token, { endpoint: hostedJevEndpoint(deps.hosted.apiBase), ...fetchOpt }));
+  switch (brain.jevSource) {
+    case "cloud":
+      if (!deps.hosted) return { ok: false, detail: HOSTED_SIGN_IN };
+      return askJev(CLOUD_JEV, deps.core.createJev(deps.hosted.token, { endpoint: hostedJevEndpoint(deps.hosted.apiBase), ...fetchOpt }));
+    case "key":
+      return askJev("Jev", deps.core.createJev(settings.jevApiKey, fetchOpt));
+    case "helper":
+      return { ok: false, detail: "Local Claude Code uses the helper's own Jev key, which this test cannot reach" };
+    default:
+      return { ok: false, detail: "No Jev: set a Jev key, or log in to use Noa's cloud Jev" };
   }
-  if (!settings.jevApiKey) {
-    return source === "helper"
-      ? { ok: false, detail: "No Jev key set here: local Claude Code uses the helper's own key, which this test cannot reach" }
-      : { ok: false, detail: "No Jev key set" };
-  }
-  return askJev("Jev", deps.core.createJev(settings.jevApiKey, fetchOpt));
 }
 
 async function askJev(name: string, jev: JevLike): Promise<TestResult> {

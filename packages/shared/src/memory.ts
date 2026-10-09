@@ -163,6 +163,11 @@ export interface MemoryEntry {
   pinned?: true;
   /** A task run (TASK_RUN_SUBJECT): what it produced, e.g. the exact text it posted or sent (task_complete `output`). */
   output?: string;
+  /**
+   * An episode whose conversation the user stopped before it finished: what it tells was abandoned, not learned, so it
+   * is not given at the start of a turn (selectMemory); recall and search_history still find it.
+   */
+  stopped?: true;
 }
 
 /** An earlier value of an entry: what it said, and from when until when. */
@@ -217,7 +222,9 @@ export const MemoryEntrySchema = z.object({
   history: z.array(PastValueSchema).max(MAX_MEMORY_HISTORY).optional(),
   pinned: z.literal(true).optional(),
   output: z.string().min(1).max(MAX_RUN_OUTPUT_CHARS).optional(),
+  stopped: z.literal(true).optional(),
 }).superRefine((e, ctx) => {
+  if (e.stopped && e.kind !== "episode") ctx.addIssue({ code: "custom", path: ["stopped"], message: "only an episode is stopped" });
   if (e.output !== undefined && !(e.kind === "task" && e.scope === "task" && !!e.taskKey && e.key === undefined)) {
     ctx.addIssue({ code: "custom", path: ["output"], message: "only a repeating task's run has an output" });
   }

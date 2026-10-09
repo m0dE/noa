@@ -4,7 +4,7 @@ import { uiRequest, type AccountView, type UiState } from "../ui-protocol.js";
 import { busy, flash } from "./dom.js";
 
 /** The account before the background has said anything about it. */
-export const SIGNED_OUT: AccountView = { signedIn: false, signInConfigured: false, apiBase: "", dashboardUrl: "", billingUrl: "" };
+export const SIGNED_OUT: AccountView = { signedIn: false, signInConfigured: false, apiBase: "", dashboardUrl: "", billingUrl: "", filesUrl: "" };
 
 /**
  * Signs in with Google from `button`: progress and problems show in `note`,

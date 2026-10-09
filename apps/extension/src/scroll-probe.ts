@@ -95,7 +95,11 @@ export function scrollProbeInPage(
 
   var start: Element | null;
   if (index != null) {
-    start = document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]');
+    start = (document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') ||
+    ((window as unknown as Record<string, Element[] | undefined>)[marks.shadow] || []).filter(function (m) {
+      return m.isConnected && m.getAttribute(marks.attr) === String(Math.trunc(index));
+    })[0] ||
+    null);
     if (!start) return { ok: false, error: marks.notFound.replace("#", String(index)) };
   } else {
     start = document.elementFromPoint(x, y);

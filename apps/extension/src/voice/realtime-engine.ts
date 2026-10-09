@@ -45,7 +45,7 @@ export interface RealtimeEngineDeps {
   language?: string;
   log?(message: string): void;
   openSocket?: OpenSocket;
-  player?: Pick<PcmPlayer, "play" | "stop" | "close" | "playing" | "pause" | "resume" | "level">;
+  player?: Pick<PcmPlayer, "play" | "stop" | "close" | "playing" | "quietMs" | "pause" | "resume" | "level">;
   /** The conversation's trace: the session token (ticket), connecting, each narrator reply, its tool calls. */
   trace?: VoiceTracer;
   /**
@@ -61,7 +61,7 @@ export class RealtimeEngine implements HandsFreeEngine {
   private client: RealtimeClient | null = null;
   private source: AudioSource | null = null;
   private readonly feed = new NarratorFeed();
-  private readonly player: Pick<PcmPlayer, "play" | "stop" | "close" | "playing" | "pause" | "resume" | "level">;
+  private readonly player: Pick<PcmPlayer, "play" | "stop" | "close" | "playing" | "quietMs" | "pause" | "resume" | "level">;
   /** The narrator's own voice heard back is not the user (echo-gate.ts). */
   private readonly gate = new EchoGate(REALTIME_SAMPLE_RATE);
   private chunks: Float32Array[] = [];
@@ -147,6 +147,7 @@ export class RealtimeEngine implements HandsFreeEngine {
           onTool: (name, args, inputId, heard) => this.tool(name, args, inputId, heard),
           onHeard: (words) => !this.stopped && ev.userWords(words),
           playing: () => this.player.playing,
+          quietMs: () => this.player.quietMs,
           // Noise's reply: what of it plays stops.
           onNoise: () => this.cutOff(),
           onTurnDone: (inputId) => {

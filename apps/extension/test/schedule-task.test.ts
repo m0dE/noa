@@ -282,7 +282,18 @@ describe("TaskScheduler.update", () => {
     await t.scheduler.update("s1", { task_id: "u1", schedule: { repeat: null } });
     expect(t.todo.tasks.get("u1")).toMatchObject({ repeat: null, notBefore: "2026-09-28T13:30:00.000Z" });
     await expect(t.scheduler.update("s1", { task_id: "u1", schedule: { at: "2026-09-26T09:00:00-04:00" } })).rejects.toThrow(/has already passed/);
-    await expect(t.scheduler.update("s1", { task_id: "u2", task: "x" })).rejects.toThrow("Task u2 is done: only a task that waits to run (pending or paused) can be changed. Nothing was changed.");
+    await expect(t.scheduler.update("s1", { task_id: "u2", task: "x" })).rejects.toThrow("Task u2 is done: only a task that waits to run (pending or paused), or a repeating task while it runs, can be updated. Nothing was changed.");
+  });
+
+  it("a repeating task that is running can be updated (its next runs do it); a new time, a cancel or a running one-off are refused", async () => {
+    const t = await setup();
+    t.todo.own({ id: "u1", instructions: "Daily post", status: "running", notBefore: "2026-09-28T13:30:00.000Z", repeat: { cron: "30 9 * * *", tz: NY } });
+    t.todo.own({ id: "u2", instructions: "Once", status: "running" });
+    await t.scheduler.update("s1", { task_id: "u1", task: "Daily post, a new topic each day", schedule: { repeat: { cron: "0 10 * * *", tz: NY } } });
+    expect(t.todo.tasks.get("u1")).toMatchObject({ instructions: "Daily post, a new topic each day", repeat: { cron: "0 10 * * *", tz: NY } });
+    await expect(t.scheduler.update("s1", { task_id: "u1", schedule: { at: "2026-09-29T09:30:00-04:00" } })).rejects.toThrow(/is running now/);
+    await expect(t.scheduler.cancel("s1", { task_id: "u1" })).rejects.toThrow("Task u1 is running: only a task that waits to run (pending or paused) can be cancelled. Nothing was changed.");
+    await expect(t.scheduler.update("s1", { task_id: "u2", task: "x" })).rejects.toThrow(/Task u2 is running: only/);
   });
 
   it("new instructions from the agent are the agent's (the user's task is no longer trusted); a time alone or the same words keep who wrote it", async () => {

@@ -4,7 +4,7 @@
  */
 import { z } from "zod";
 import * as core from "@noa/core";
-import { errorMessage, type ExtensionSettings, type SessionInfo, type TodoToolName, type TodoToolResult } from "@noa/shared";
+import { cloudFileName, errorMessage, FILE_READ_CHUNK_BYTES, formatBytes, SAVE_FILE_MAX_BYTES, type ExtensionSettings, type SessionInfo, type TodoToolName, type TodoToolResult } from "@noa/shared";
 import { AccountService, browserTimeZone, type AccountServiceDeps } from "./account/account.js";
 import type { AccountTaskList } from "./account/account-api.js";
 import { AccountTodo, LocalTodo, type TodoSource } from "./account/todo-source.js";
@@ -23,7 +23,7 @@ import { ControlIndicator } from "./control-indicator.js";
 import { GOOGLE_CLIENT_ID } from "./build-config.js";
 import { ApiBrain } from "./engine/api-brain.js";
 import { hostedBackend } from "./engine/hosted-brain.js";
-import { needsHelper, resolveBrain } from "./engine/brain-resolver.js";
+import { cloudJevUsable, needsHelper, resolveBrain } from "./engine/brain-resolver.js";
 import { registerBrowserHandlers } from "./engine/browser-caller.js";
 import { ImageGenerator } from "./engine/image-generator.js";
 import type { Brain } from "./engine/brains.js";
@@ -32,8 +32,11 @@ import { runConfig } from "./engine/run/turn.js";
 import { IdbKvDb } from "./engine/kv.js";
 import { AttachmentStore } from "./engine/attachment-store.js";
 import { LocalStore } from "./engine/local-store.js";
-import { MediaFiles } from "./engine/media-files.js";
-import { NoaFolder } from "./engine/noa-folder.js";
+import { MediaFiles, writeDownload } from "./engine/media-files.js";
+import { NOA_FOLDER, NoaFiles, NoaFolder } from "./engine/noa-folder.js";
+import { downloadsWriter, FileSaver, lastDownloadFinder, type SaverDownloadsLike } from "./engine/file-saver.js";
+import { ApiRequestError } from "./http-client.js";
+import { base64ToBytes } from "./base64.js";
 import { Runner, type ResolvedBrain } from "./engine/runner.js";
 import { reviewJob } from "./engine/task-review.js";
 import { MAX_SESSIONS, SessionStore } from "./engine/sessions.js";
@@ -48,7 +51,7 @@ import { ChatTitler } from "./engine/chat-titles.js";
 import { testClaude, testJev } from "./engine/settings-tests.js";
 import { UiHub } from "./engine/ui-hub.js";
 import { UiRouter, type ExtraRequest } from "./engine/ui-router.js";
-import { HelperLink } from "./helper-link.js";
+import { HELPER_CALL_TIMEOUT_MS, HelperLink } from "./helper-link.js";
 import { logger } from "./log.js";
 import { notifier } from "./notify.js";
 import { noticePlayer } from "./voice/notice-voice.js";
@@ -76,7 +79,13 @@ const hub = new UiHub(() => router.getState());
 
 // Notifications are said aloud too (Settings > Voice), unless hands-free voice is on (voiceSessions: declared below, used later).
 // In a Realtime or Deepgram voice, or as a chime, an offscreen document plays them (Settings > AI > Voice > Notifications).
-const notify = notifier({ settings: loadSettings, voiceOn: () => voiceSessions.view() !== null, play: noticePlayer() });
+// Not while the screen is locked (a closed laptop lid): the notification is there when the user is back.
+const notify = notifier({
+  settings: loadSettings,
+  voiceOn: () => voiceSessions.view() !== null,
+  locked: async () => (await chrome.idle.queryState(60)) === "locked",
+  play: noticePlayer(),
+});
 // In Noa Browser the agent's tabs are driven through the browser's own DevTools connection
 // (noa-browser/host-debugger.ts); in Chrome through chrome.debugger.
 const tabDebugger = noaBrowserAwareDebugger(
@@ -103,6 +112,56 @@ const approvals = new ApprovalBroker({
   // How long each approval waited and what ended it (a card, a key, voice, Stop, a message, no answer), in the Raw view.
   trace: (sessionId, trace) => void sessions.append(sessionId, { type: "trace", trace }),
 });
+// The user's Noa folder (Downloads/Noa): the folder button opens it, list_files lists it (read from disk by the helper,
+// connected for it when it is installed) with the account's cloud files; a cloud file the agent uploads is downloaded
+// into the folder first.
+const noaFolder = new NoaFolder();
+const noaFiles = new NoaFiles({
+  folder: noaFolder,
+  helperList: async (params, timeoutMs) => {
+    await helper.connect(timeoutMs);
+    return helper.call("files.list", params, { timeoutMs: HELPER_CALL_TIMEOUT_MS });
+  },
+  cloud: {
+    list: () => account.cloudFiles(),
+    download: async (file) => {
+      const { url, headers } = await account.cloudFileDownload(file.id);
+      const filename = [NOA_FOLDER, ...(file.folder ? [file.folder] : []), cloudFileName(file.name)].join("/");
+      return writeDownload(chrome.downloads, { url, filename, headers }, () => {}, 5 * 60_000);
+    },
+  },
+  log: logger("files"),
+});
+// save_file: kept in the Noa folder and, on a plan with cloud files, in the account's (engine/file-saver.ts).
+const fileSaver = new FileSaver({
+  writeLocal: downloadsWriter(chrome.downloads),
+  cloud: async (blob, name, folder) => {
+    try {
+      if (await account.keepInCloud(blob, name, folder)) return { saved: true };
+    } catch (err) {
+      // An account server from before named folders: the copy goes to the top.
+      if (!folder || !(err instanceof ApiRequestError) || err.status !== 400 || !/folder/i.test(err.message)) throw err;
+      await account.keepInCloud(blob, name, "");
+      return { saved: true, folder: "" };
+    }
+    return { saved: false, why: account.session() ? "no-plan" : "signed-out" };
+  },
+  readLocal: async (path) => {
+    await helper.connect(10_000);
+    const parts: Uint8Array<ArrayBuffer>[] = [];
+    for (let offset = 0; ; ) {
+      const r = await helper.call("files.read", { path, offset, length: FILE_READ_CHUNK_BYTES }, { timeoutMs: HELPER_CALL_TIMEOUT_MS });
+      if (r.size > SAVE_FILE_MAX_BYTES) throw new Error(`The file is ${formatBytes(r.size)}; save_file keeps files up to ${formatBytes(SAVE_FILE_MAX_BYTES)}.`);
+      const bytes = base64ToBytes(r.dataBase64);
+      parts.push(bytes);
+      offset += bytes.length;
+      if (!bytes.length || offset >= r.size) break;
+    }
+    return new Blob(parts);
+  },
+  lastDownload: lastDownloadFinder(chrome.downloads as unknown as SaverDownloadsLike, chrome.runtime.id),
+  folder: () => noaFolder.path(),
+});
 const slots: AgentSlots = new AgentSlots(
   cdp,
   vault,
@@ -117,7 +176,7 @@ const slots: AgentSlots = new AgentSlots(
     request: (sessionId, ask, opts) => approvals.request(sessionId, ask, opts),
     trace: (sessionId, trace) => void sessions.append(sessionId, { type: "trace", trace }),
     jev: async (sessionId) =>
-      approvalJev({ settings: await loadSettings(), brain: runner.runningSessions.find((s: SessionInfo) => s.sessionId === sessionId)?.brain, hosted: account.session(), sessionId }),
+      approvalJev({ settings: await loadSettings(), hosted: cloudJevSession(), sessionId }),
     end: (sessionId) => approvals.end(sessionId),
     // Allow & continue on a card a run paused for: that action, once, for the run that goes on (its session or task).
     preapproved: (sessionId, ask) => preapprovals.take([sessionId, runner.runningSessions.find((s: SessionInfo) => s.sessionId === sessionId)?.taskId], ask),
@@ -131,6 +190,7 @@ const slots: AgentSlots = new AgentSlots(
     keepInCloud: (png, name, folder) => account.keepInCloud(png, name, folder),
     onCloudError: (err) => logger("images")(`cloud copy of a generated image failed: ${errorMessage(err)}`),
   }),
+  { list: (p) => noaFiles.list(p), fetch: (paths) => noaFiles.fetch(paths), save: (p, ctx) => fileSaver.save(p, ctx) },
 );
 const { tab: agentTab, driver, browser } = slots.get(0);
 const db = new IdbKvDb();
@@ -184,8 +244,13 @@ const claudeCodeBrain = new ClaudeCodeBrain(helper, {
   onSessionsChanged: () => hub.pushState(),
   // The model call that wrote task_complete, and Claude Code's turn summary, end after the turn: kept in its trace.
   onLateTrace: (sessionId, trace) => void sessions.addTrace(sessionId, [trace]),
+  cloudJev: () => cloudJevSession(),
 });
-const apiBrain = new ApiBrain({ core, browser, todoTool, memoryTool, onSessionsChanged: () => hub.pushState() });
+const apiBrain = new ApiBrain({ core, browser, todoTool, memoryTool, onSessionsChanged: () => hub.pushState(), cloudJev: () => cloudJevSession() });
+/** The account's session while Noa's cloud Jev can be used (no Jev key: Claude Code and the Claude API use it too). */
+function cloudJevSession(): { token: string; apiBase: string } | null {
+  return cloudJevUsable(account.brainAccount()) ? account.session() : null;
+}
 
 type SignInIdentity = { clientId: string; identity: NonNullable<AccountServiceDeps["identity"]> };
 /** Google sign-in: the built-in client and Chrome's auth flow (the e2e suite swaps in a fake Google, setIdentity). */
@@ -500,7 +565,7 @@ const router = new UiRouter({
   memoryBackfill: () => episodes.backfillProgress(),
   titles,
   showAgent: (sessionId) => slots.show(sessionId ?? runner.running?.sessionId),
-  folder: new NoaFolder(),
+  folder: noaFolder,
   localStore,
   sessions,
   openConversations: () => [...claudeCodeBrain.openSessions(), ...apiBrain.openSessions()],
@@ -686,6 +751,12 @@ chrome.tabs.onRemoved.addListener((tabId) => {
       if (sessionId) runner.onChatTabClosed(sessionId);
     })
     .catch(() => {});
+});
+// The screen locked (a closed laptop lid): Noa goes quiet. Hands-free voice ends, and a notice being said stops.
+chrome.idle.onStateChanged.addListener((state) => {
+  if (state !== "locked") return;
+  if (voiceSessions.view() !== null) panelCommands.stopVoice();
+  chrome.tts.stop();
 });
 // Before anything is awaited: sidePanel.open() needs the key press as its user gesture.
 chrome.commands?.onCommand.addListener((command, tab) => void panelCommands.onCommand(command, tab));

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { accountSummary, dateLabel } from "../../src/options/account-view.js";
 import type { AccountView } from "../../src/ui-protocol.js";
 
-const base: AccountView = { signedIn: true, signInConfigured: true, apiBase: "https://api.test", dashboardUrl: "https://api.test/", billingUrl: "https://api.test/billing", user: { email: "a@b.c", name: null, pictureUrl: null } };
+const base: AccountView = { signedIn: true, signInConfigured: true, apiBase: "https://api.test", dashboardUrl: "https://api.test/", billingUrl: "https://api.test/billing", filesUrl: "https://api.test/files", user: { email: "a@b.c", name: null, pictureUrl: null } };
 
 describe("options: account summary", () => {
   it("free plan without billing on the server", () => {

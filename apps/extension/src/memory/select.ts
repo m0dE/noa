@@ -119,9 +119,10 @@ export function recordsNamedIn(records: readonly MemoryEntry[], text: string): M
   return found.sort((a, b) => a.i - b.i).map((x) => x.e);
 }
 
-/** Entries that may be given in this context: not turned off, and not another task's notes or records (the user's records are). */
+/** Entries that may be given in this context: not turned off, not a stopped conversation's episode, and not another task's notes or records (the user's records are). */
 function candidates(entries: readonly MemoryEntry[], ctx: MemoryContext, kindsOff: ReadonlySet<MemoryKind>): MemoryEntry[] {
-  return entries.filter((e) => !kindsOff.has(e.kind) && (e.scope !== "task" || (!!ctx.taskKey && e.taskKey === ctx.taskKey)));
+  // A stopped conversation's episode tells where it looked, not what is there: given, the next turn goes back there.
+  return entries.filter((e) => !kindsOff.has(e.kind) && !e.stopped && (e.scope !== "task" || (!!ctx.taskKey && e.taskKey === ctx.taskKey)));
 }
 
 /** The block's line under the task's history when some of its runs are left out. */

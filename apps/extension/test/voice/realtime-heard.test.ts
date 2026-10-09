@@ -81,11 +81,10 @@ async function session(viewing: number) {
     keepSpoken: () => {},
     // voice.heard: kept as a heard event.
     keepHeard: (_s, text) => void chat.push({ type: "heard", text }),
-    settings: () => ({ voiceEngine: "realtime", realtimeCostNoticed: true }) as ExtensionSettings,
+    settings: () => ({ voiceEngine: "realtime" }) as ExtensionSettings,
     account: () => undefined,
     engines: async () => ({ default: "realtime", engines: [{ id: "realtime", name: "Realtime", model: "gpt-realtime-2.1", approxCentsPerMinute: 6, assumption: "", available: true }] }) as VoiceEnginesResponse,
     saveSettings: async () => {},
-    openVoiceSettings: () => {},
     createEngine: (_id, events) =>
       new RealtimeEngine({
         ticket: async () => ({ url: "wss://x/v1/ai/realtime", token: "t" }),
@@ -99,7 +98,7 @@ async function session(viewing: number) {
           });
           return socket;
         },
-        player: { play: () => {}, stop: () => null, close: () => {}, playing: false, pause: () => false, resume: () => {}, level: () => 0 },
+        player: { play: () => {}, stop: () => null, close: () => {}, playing: false, pause: () => false, resume: () => {}, level: () => 0, quietMs: 0 },
       }),
     stopTask: async () => "",
     answerApproval: async () => true,
@@ -163,18 +162,14 @@ describe("Realtime: one message per request, the user's words folded under it", 
         t.socket.event({ type: "conversation.item.input_audio_transcription.completed", item_id: "in3", content_index: 0, transcript: W3 });
         t.socket.event({ type: "conversation.item.input_audio_transcription.failed", item_id: "in3", error: { message: "x" } });
         await settle(30);
-        // The narrator's replies to the first two answered a request by itself (never heard): their words went to the
-        // agent as the user said them; the third is the narrator's request (with the note on the tab the user looks
+        // The first two are the user thinking aloud, which the narrator answered itself (no tool call): heard, kept
+        // for the record, nothing sent. The third is the narrator's request (with the note on the tab the user looks
         // at, when away).
-        expect(t.deps.send).toHaveBeenCalledTimes(3);
-        expect((t.deps.send as ReturnType<typeof vi.fn>).mock.calls[2]![0]).toMatch(/^Forget that for now\. I want you to look at Intercom/);
-        // One message a request, with the words that led to it (none folded under words sent as they were said).
-        expect(userBubbles(t.chat)).toEqual([
-          { text: W1 },
-          { text: W2 },
-          { text: REQUEST, heard: [W3] },
-        ]);
-        expect(t.chat.filter((e) => e.type === "heard")).toEqual([]);
+        expect(t.deps.send).toHaveBeenCalledTimes(1);
+        expect((t.deps.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toMatch(/^Forget that for now\. I want you to look at Intercom/);
+        // One message a request, with the words that led to it.
+        expect(userBubbles(t.chat)).toEqual([{ text: REQUEST, heard: [W3] }]);
+        expect(t.chat.filter((e) => e.type === "heard").map((e) => (e as { text: string }).text)).toEqual([W1, W2]);
       });
     }
   }

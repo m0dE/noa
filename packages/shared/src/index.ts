@@ -41,3 +41,4 @@ export * from "./noa-browser.js";
 export * from "./browser-release.js";
 export * from "./bookmark-sync.js";
 export * from "./cloud-files.js";
+export * from "./noa-files.js";

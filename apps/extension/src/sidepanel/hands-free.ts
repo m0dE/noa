@@ -69,9 +69,9 @@
  * closes, so the microphone is never on without the indicator in view.
  */
 import type { AccountView } from "../ui-protocol.js";
-import { errorMessage, traceStart, type AgentEvent, type ApprovalAnswer, type ExtensionSettings, type StampedAgentEvent, isRealtimeEngine, type VoiceEngine, type VoiceEngineId, type VoiceEnginesResponse } from "@noa/shared";
+import { errorMessage, traceStart, type AgentEvent, type ApprovalAnswer, type ExtensionSettings, type StampedAgentEvent, isRealtimeEngine, type VoiceEngineId, type VoiceEnginesResponse } from "@noa/shared";
 import type { PanelTrace } from "../trace/panel-trace.js";
-import { checkEngine, costPerMinuteText, ENGINE_SHORT_NAMES } from "../voice/engine-choice.js";
+import { checkEngine } from "../voice/engine-choice.js";
 
 /** The action that starts the free engine instead (the browser's voice). */
 const BROWSER_VOICE_LABEL = "Use browser voice";
@@ -189,8 +189,6 @@ export interface HandsFreeDeps {
   /** The server's voice engines (null: could not be loaded). */
   engines(): Promise<VoiceEnginesResponse | null>;
   saveSettings(patch: Partial<ExtensionSettings>): Promise<void>;
-  /** Settings > AI, where the voice engine is picked. */
-  openVoiceSettings(): void;
   /** takeover: a Realtime engine ends the user's session still open on the server and takes its place. */
   createEngine(id: VoiceEngineId, events: EngineEvents, opts?: { takeover?: boolean }): HandsFreeEngine;
   /** Stops the running task of a chat; says what happened. */
@@ -232,6 +230,8 @@ export interface HandsFree extends HandsFreeControl {
   setSession(view: VoiceSessionView | null): void;
   /** The background asks this panel to end its session (Stop or Use voice here in another panel). */
   stopHere(): void;
+  /** The task's Stop was pressed for chat `sessionId`: voice ends too if it talks to that chat or listens for the tab shown. */
+  endWith(sessionId: string | null): void;
   /** The chat the session talks to (null: none, or a new chat not started yet). */
   chat(): string | null;
   /** Mutes or unmutes the microphone of the session on (nothing while none runs yet). */
@@ -822,7 +822,6 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
         return;
       }
       if (check.note) deps.notify({ key: ENGINE_NOTICE, text: check.note, level: "info", actions: [{ label: "Top up", run: deps.openBilling }] });
-      else if (isRealtimeEngine(id) && settings && !settings.realtimeCostNoticed) costNotice(id, engines?.engines ?? null);
       const r = await connect(id, takeover, gen);
       if (r === "stopped") return;
       if (r !== "open") {
@@ -901,15 +900,6 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     const actions = [{ label: "Try again", run: () => void start(id, muteAgain) }];
     if (connecting && isRealtimeEngine(id)) actions.push({ label: BROWSER_VOICE_LABEL, run: () => void start("standard", muteAgain) });
     deps.notify({ text, level: "error", actions });
-  }
-
-  /** Once: what Realtime costs; the engine is changed in Settings. */
-  function costNotice(id: VoiceEngineId, engines: VoiceEngine[] | null): void {
-    const rt = engines?.find((e) => e.id === id);
-    const name = `${ENGINE_SHORT_NAMES[id]} voice`;
-    const cost = rt ? `${name} uses ${costPerMinuteText(rt.approxCentsPerMinute)}.` : `${name} uses usage credit by the minute.`;
-    deps.notify({ key: ENGINE_NOTICE, text: `${cost} Deepgram and the browser voice cost much less.`, level: "info", actions: [{ label: "Voice settings", run: deps.openVoiceSettings }] });
-    void deps.saveSettings({ realtimeCostNoticed: true }).catch((err: unknown) => deps.log?.(`saving the cost notice failed: ${errorMessage(err)}`));
   }
 
   /** Ends the session; `why` goes in the trace (the state machine's reason, or what ended it here). */
@@ -1161,6 +1151,11 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     },
     stopHere() {
       if (on()) stop("remote");
+    },
+    endWith(sessionId) {
+      if (!on() || (sessionId !== null && chatNow() !== sessionId && !here())) return;
+      if (starting) finish(null);
+      else stop("button");
     },
     chat: chatNow,
   };

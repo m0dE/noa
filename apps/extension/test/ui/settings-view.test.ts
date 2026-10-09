@@ -19,7 +19,7 @@ import type { AccountView, BrainStatus } from "../../src/ui-protocol.js";
 import { installChromeFake } from "../chrome-fake.js";
 
 const HELPER: HelperInfo = { version: "0.2.0", jevAvailable: true, claudePath: "C:\\claude.exe", logDir: "C:\\logs", selfTest: { ok: true, ms: 5000, at: "2026-09-25T00:00:00Z" } } as HelperInfo;
-const SIGNED_OUT: AccountView = { signedIn: false, signInConfigured: true, apiBase: "https://api.test", dashboardUrl: "https://api.test/", billingUrl: "https://api.test/billing" };
+const SIGNED_OUT: AccountView = { signedIn: false, signInConfigured: true, apiBase: "https://api.test", dashboardUrl: "https://api.test/", billingUrl: "https://api.test/billing", filesUrl: "https://api.test/files" };
 const user = { email: "a@example.com", name: "Ada", pictureUrl: null };
 const credit = (cents: number) => ({ subscriptionCents: 0, topupCents: cents, totalCents: cents, periodGrantCents: 0, periodEnd: null });
 const FREE_EMPTY: AccountView = { ...SIGNED_OUT, signedIn: true, user, plan: { id: "free", status: "none", currentPeriodEnd: null, cancelAtPeriodEnd: false }, credit: credit(0), stripeConfigured: true };
@@ -203,9 +203,8 @@ describe("model, Jev and cloud", () => {
     expect(view({ draft: { jevEnabled: true } }).showJevFields).toBe(true);
     expect(view({ draft: { jevEnabled: false } }).showJevFields).toBe(false);
   });
-  it("Jev note: the helper's own key; none when off", () => {
-    expect(view({ helper: HELPER }).jevNote).toMatch(/TYPESAFE_API_KEY/);
-    expect(view({ helper: HELPER, settings: { jevApiKey: "j" } }).jevNote).toBeNull();
+  it("Jev note: the order of Jev sources; none when off", () => {
+    expect(view({ helper: HELPER }).jevNote).toMatch(/TYPESAFE_API_KEY.*Noa's cloud Jev/);
     expect(view({ helper: HELPER, draft: { jevEnabled: false } }).jevNote).toBeNull();
   });
   it("Noa AI (chosen, or picked by Auto) includes Jev: no key field, no key in the copy", () => {
@@ -213,17 +212,21 @@ describe("model, Jev and cloud", () => {
       const v = view({ account: PLUS, draft: { brain } });
       expect(v.showJevKey).toBe(false);
       expect(v.showJevFields).toBe(true);
-      expect(v.jevUseHint).toMatch(/Included with Noa AI/);
+      expect(v.jevUseHint).toBe("Clicking and typing: Noa's cloud Jev, billed to your usage credit. Approval checks: Noa's cloud Jev, billed to your usage credit.");
       expect(`${v.jevUseHint} ${v.jevTestHint} ${v.jevNote ?? ""}`).not.toMatch(/key/i);
     }
   });
-  it("the Claude API needs a Jev key here; local Claude Code may use the helper's", () => {
-    const api = view({ account: PLUS, draft: { brain: "claude-api" } });
+  it("says which Jev each job uses: a key here, the helper's own, or Noa's cloud Jev", () => {
+    const api = view({ account: PLUS, draft: { brain: "claude-api" }, settings: { anthropicApiKey: "set" } });
     expect(api.showJevKey).toBe(true);
-    expect(api.jevUseHint).toMatch(/Jev key/);
+    expect(api.jevUseHint).toBe("Clicking and typing: Noa's cloud Jev, billed to your usage credit. Approval checks: Noa's cloud Jev, billed to your usage credit.");
     const cc = view({ helper: HELPER, draft: { brain: "claude-code" } });
     expect(cc.showJevKey).toBe(true);
-    expect(cc.jevUseHint).toMatch(/helper's own Jev key/);
+    expect(cc.jevUseHint).toBe("Clicking and typing: the helper's own Jev key. Approval checks: none (add a Jev key, or log in to use Noa's cloud Jev).");
+    expect(view({ helper: HELPER, account: PLUS, draft: { brain: "claude-code" } }).jevUseHint).toMatch(/Approval checks: Noa's cloud Jev/);
+    expect(view({ helper: HELPER, draft: { brain: "claude-code" }, settings: { jevApiKey: "set" } }).jevUseHint).toBe(
+      "Clicking and typing: your Jev key. Approval checks: your Jev key.",
+    );
     expect(view({ draft: { brain: "claude-api", jevEnabled: false } }).showJevKey).toBe(false);
   });
 });

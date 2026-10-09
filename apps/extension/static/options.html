@@ -87,7 +87,7 @@
         <section class="panel" id="panel-ai" role="tabpanel" aria-labelledby="tab-ai" tabindex="-1" hidden>
           <div id="ai-tabs" class="subtabs" role="tablist" aria-label="AI settings">
             <button type="button" role="tab" id="ai-tab-source" aria-controls="ai-source" aria-selected="true">Source</button>
-            <button type="button" role="tab" id="ai-tab-speed" aria-controls="ai-speed" aria-selected="false" tabindex="-1">Speed</button>
+            <button type="button" role="tab" id="ai-tab-speed" aria-controls="ai-speed" aria-selected="false" tabindex="-1">Jev</button>
             <button type="button" role="tab" id="ai-tab-voice" aria-controls="ai-voice" aria-selected="false" tabindex="-1">Voice</button>
             <button type="button" role="tab" id="ai-tab-images" aria-controls="ai-images" aria-selected="false" tabindex="-1">Images</button>
           </div>
@@ -202,8 +202,8 @@
 
           <div class="subpanel" id="ai-speed" role="tabpanel" aria-labelledby="ai-tab-speed" hidden>
           <div class="group" id="jev-group">
-            <h3 class="group-title">Speed (Jev)</h3>
-            <p class="group-hint">Optional. Jev handles simple clicks and typing faster than Claude. Without it, Claude does every step.</p>
+            <h3 class="group-title">Jev: clicking and classifying</h3>
+            <p class="group-hint">Jev is a small, fast model. It picks the element for each click and typing step, and classifies whether an action publishes, sends, pays or deletes, so fewer actions stop to ask you. Without it, Claude picks every element (slower) and more actions ask for your OK.</p>
             <div class="box">
               <div class="srow">
                 <label class="srow-label" for="f-jevEnabled"><b>Use Jev</b><small id="jev-use-hint"></small></label>

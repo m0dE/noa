@@ -90,8 +90,14 @@ export interface BrainStatus {
   helper: HelperInfo | null;
   helperError?: string;
   hasApiKey: boolean;
+  /** Jev is on and the effective brain has a Jev (jevSource). */
   jevActive: boolean;
+  /** Where the effective brain's Jev comes from (jevSourceFor), Jev on or off; absent: it has none. */
+  jevSource?: JevSource;
 }
+
+/** A Jev key in Settings, the helper's own key, or Noa's cloud Jev (billed to usage credit). */
+export type JevSource = "key" | "helper" | "cloud";
 
 /** The Noa account (Google sign-in) as the UI shows it. */
 export interface AccountView {
@@ -104,6 +110,8 @@ export interface AccountView {
   dashboardUrl: string;
   /** The dashboard's Billing page: plans, top-ups and invoices. Every upgrade button opens it (ui/billing.ts). */
   billingUrl: string;
+  /** The dashboard's Files page: the account's cloud files (the folder button opens it when the plan has them). */
+  filesUrl: string;
   user?: { email: string; name: string | null; pictureUrl: string | null };
   /** Missing while the server has no billing (or it could not be loaded). */
   plan?: PlanInfo;

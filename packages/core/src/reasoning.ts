@@ -38,7 +38,7 @@ export const MAX_RAISES_PER_TURN = 2;
  * failures are no sign of a stuck plan (a slow page, a long wait_for), and they do not end a run of
  * failures or count as the same action again.
  */
-export const OBSERVING_TOOLS: ReadonlySet<string> = new Set<ToolName>(["read_page", "screenshot", "list_tabs", "wait_for", "recall", "search_history", "check_similar", "get_credential"]);
+export const OBSERVING_TOOLS: ReadonlySet<string> = new Set<ToolName>(["read_page", "screenshot", "list_tabs", "list_files", "wait_for", "recall", "search_history", "check_similar", "get_credential"]);
 
 /** Tools repeated on purpose (scrolling loads more): never "the same action again". */
 const REPEATED_ON_PURPOSE: ReadonlySet<string> = new Set<ToolName>(["scroll"]);

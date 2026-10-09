@@ -43,6 +43,15 @@ describe("hostsIn", () => {
 });
 
 describe("selectMemory", () => {
+  it("leaves out the episode of a conversation the user stopped (where it looked is no lead), not a finished one", () => {
+    const stopped = entry({ kind: "episode", subject: "Send the Lindgren quote", text: "User asked to send the Lindgren quote. Agent started searching Drive but the user stopped the task.", at: "2026-09-20T10:00:00.000Z", stopped: true });
+    const done = entry({ kind: "episode", subject: "Found the Lindgren quote", text: "User asked for the Lindgren quote. Agent found it in Drive. Done.", at: "2026-09-21T10:00:00.000Z" });
+    const s = selectMemory([stopped, done], { hosts: [], text: "send the Lindgren quote again" });
+    expect(s.entries).toEqual([done]);
+    // recall still finds it ("what did we do about the Lindgren quote").
+    expect(recallMemory([stopped, done], "Lindgren quote", { now: new Date("2026-09-25T00:00:00.000Z") }).map((e) => e.id)).toContain(stopped.id);
+  });
+
   it("gives the playbook of the user's tab and of sites the request names, not other sites'", () => {
     const s = selectMemory(all, { hosts: ["mail.google.com"], text: "reply to the newest email" });
     expect(s.entries).toContain(gmailBook);

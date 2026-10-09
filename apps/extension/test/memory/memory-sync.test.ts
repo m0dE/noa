@@ -116,6 +116,18 @@ describe("MemorySync", () => {
     expect((await a.store.list())[0]!.text).toBe("calm");
   });
 
+  it("its own write coming back from a server on an older schema keeps the fields that server dropped", async () => {
+    const server = fakeServer();
+    const a = browser(server, ADA, "a");
+    await a.store.putEpisode({ subject: "Send the quote", text: "Started looking in Drive; the user stopped it.", at: now().toISOString(), stopped: true }, CHAT);
+    await wait();
+    await a.sync.sync();
+    const [e] = await a.store.list();
+    const { stopped: _s, ...dropped } = e!;
+    await a.store.applyRemote([dropped], []);
+    expect((await a.store.list())[0]!.stopped).toBe(true);
+  });
+
   it("changes from the account are not sent back, and an entry this computer refuses is left out", async () => {
     const server = fakeServer();
     const a = browser(server, ADA, "a");

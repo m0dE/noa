@@ -2,6 +2,7 @@ import type { AgentAttachment } from "./attachments.js";
 import type { AgentEvent } from "./events.js";
 import type { TaskOutcome } from "./task.js";
 import type { ReasoningLevel } from "./reasoning.js";
+import type { NoaFileList } from "./noa-files.js";
 
 /** Native messaging host name registered with Chrome. */
 export const NATIVE_HOST_NAME = "com.noa.helper";
@@ -16,8 +17,13 @@ export interface RunConfig {
   maxTaskMinutes: number;
   jevEnabled: boolean;
   jevThreshold: number;
-  /** Jev key from the extension settings. The helper falls back to TYPESAFE_API_KEY. */
+  /** Jev key from the extension settings. The helper falls back to TYPESAFE_API_KEY, then jevCloud. */
   jevApiKey?: string;
+  /**
+   * Noa's cloud Jev (the account server's /v1/ai/jev, billed to the signed-in account's usage credit): the
+   * helper uses it when neither jevApiKey nor its own TYPESAFE_API_KEY is set. token: the account session.
+   */
+  jevCloud?: { endpoint: string; token: string };
   /**
    * Claude model from the extension settings (e.g. "claude-sonnet-5"), so both
    * brains run the same model. The helper falls back to NOA_MODEL, then Claude Code's "sonnet" alias.
@@ -210,6 +216,18 @@ export type HelperMethods = {
    * MEMORY_SUMMARIZE_TIMEOUT_MS.
    */
   "memory.summarize": { params: { system: string; prompt: string }; result: { text: string; costUsd?: number } };
+  /**
+   * list_files: the files in the user's Noa folder, read from disk (the extension knows where the folder is, but
+   * cannot list one). folder: the Noa folder, absolute (the folder of its README download); search: only names
+   * containing it (any case).
+   */
+  "files.list": { params: { folder: string; search?: string }; result: NoaFileList };
+  /**
+   * save_file: a piece of a file on this computer (the extension cannot read files): at most FILE_READ_CHUNK_BYTES
+   * from `offset`. size: the whole file's bytes. The extension asks only for paths the agent may use (list_files,
+   * the task's media) and for the browser's own last download.
+   */
+  "files.read": { params: { path: string; offset: number; length: number }; result: { dataBase64: string; size: number } };
 };
 
 /** Notifications the helper sends to the extension (no reply). */

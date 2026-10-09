@@ -13,7 +13,7 @@ import {
   UNMUTED_NOTE,
   WORKING_SMALL_TALK_RESPONSE,
 } from "../../src/voice/realtime-client.js";
-import { ANSWER_HOLD_MS, NarratorFeed, type FeedOutput } from "../../src/voice/realtime-feed.js";
+import { NarratorFeed, type FeedOutput } from "../../src/voice/realtime-feed.js";
 import { lookingElsewhereNote, lookingHomeNote, useThisTabAnswer } from "../../src/voice/hands-free-tab.js";
 
 /**
@@ -51,8 +51,7 @@ function feedOutput(): { strings: string[]; kinds: string[] } {
   out.push(...feed.push({ type: "task_end", outcome: "paused", reason: "Which account should I post from?" }, 60_003));
   out.push(...feed.sent("which account are you on?", true, 60_004, false));
   feed.push({ type: "user_message", text: "which account are you on?", voice: true }, 60_004);
-  feed.push({ type: "assistant_text", text: "Not yet: I'm still signed in as Rooftop Chat." }, 60_005);
-  out.push(...feed.tick(60_005 + ANSWER_HOLD_MS));
+  out.push(...feed.push(call("answer_user", { text: "Not yet: I'm still signed in as Rooftop Chat." }), 60_005));
   out.push(...feed.sent("post it", false, 70_000));
   feed.push({ type: "user_message", text: "post it", voice: true }, 70_000);
   out.push(...feed.push({ type: "task_end", outcome: "done", summary: "Posted", spoken: "Posted your thread on X." }, 70_001));

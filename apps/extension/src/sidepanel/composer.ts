@@ -125,6 +125,8 @@ export function initComposer(opts: {
   onState: (state: UiState) => void;
   /** "Top up…" in the model menu. */
   onTopup?: () => void;
+  /** Stop was pressed for chat `sessionId` (null: everything): hands-free voice ends with the task. */
+  onStop?: (sessionId: string | null) => void;
   /** The browser tab the panel is showing the chat of (null: unknown). */
   tabId?: () => number | null;
   /** The conversation's trace: when each message was sent and how long the background took to take it. */
@@ -403,8 +405,9 @@ export function initComposer(opts: {
 
 
   stop.addEventListener("click", () => {
-    // Stops this conversation's turn; other tasks keep running.
+    // Stops this conversation's turn (and voice with it); other tasks keep running.
     const t = target();
+    opts.onStop?.(t?.sessionId ?? null);
     void busy(stop, () => uiRequest({ type: "run.stop", ...(t ? { sessionId: t.sessionId } : {}) }), problem);
   });
 

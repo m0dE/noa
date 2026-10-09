@@ -10,7 +10,7 @@ import {
 } from "@noa/shared";
 import { todoAllowed } from "../account/types.js";
 import { BRAIN_LABELS, brainLabel, modelLabel } from "../ui/labels.js";
-import type { AccountView, UiState } from "../ui-protocol.js";
+import type { AccountView, JevSource, UiState } from "../ui-protocol.js";
 import { NO_AI } from "../engine/brain-resolver.js";
 import { errorHelp, FIXES, type ErrorFix } from "./error-help.js";
 
@@ -152,8 +152,10 @@ export interface ModelChipInfo {
   outOfCredit: boolean;
   model: string;
   jevActive: boolean;
-  /** Whether Jev can be switched on at all (a key here, or the helper has its own). */
+  /** Whether Jev can be switched on at all (a key here, the helper's own, or Noa's cloud Jev). */
   jevPossible: boolean;
+  /** Where the running AI's Jev comes from (BrainStatus.jevSource). */
+  jevSource?: JevSource;
   jevEnabled: boolean;
 }
 
@@ -170,12 +172,20 @@ export function modelChip(state: Pick<UiState, "settings" | "brain" | "account">
     outOfCredit: noCredit,
     model,
     jevActive,
-    jevPossible: hosted || state.brain.jevActive || !!state.settings.jevApiKey || !!state.brain.helper?.jevAvailable,
+    jevPossible: hosted || !!state.brain.jevSource || !!state.settings.jevApiKey || !!state.brain.helper?.jevAvailable,
     jevEnabled: state.settings.jevEnabled,
   };
+  if (state.brain.jevSource) info.jevSource = state.brain.jevSource;
   const credit = state.account?.signedIn ? state.account.credit : undefined;
   if (hosted && credit) info.credit = `${formatCents(credit.totalCents)} usage credit left`;
   return info;
+}
+
+/** The Jev switch's line in the model menu: where Jev comes from, or how to get it. */
+export function jevHint(info: Pick<ModelChipInfo, "hosted" | "jevPossible" | "jevSource">): string {
+  if (info.hosted) return "Faster clicks and typing, included";
+  if (info.jevSource === "cloud") return "Faster clicks and typing, from Noa's cloud (usage credit)";
+  return info.jevPossible ? "Faster clicks and typing" : "Add a Jev key or log in";
 }
 
 /** Whether scheduling works: signed out, a plan without the TODO list, or it does. "loading": the account is not known yet. */

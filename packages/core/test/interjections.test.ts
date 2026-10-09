@@ -16,7 +16,7 @@ describe("Interjections", () => {
     i.add("  ");
     i.add("and hurry");
     expect(i.unseen).toBe(true);
-    expect(i.take("request")).toBe('The user just said: "no, use page B", then: "and hurry". Act on it now: a question or remark, answer it in a short reply before your next tool call (in the same message) and go on with the task; otherwise it changes the current task (keep doing what it does not change), or replaces or stops it if that is what it says.');
+    expect(i.take("request")).toBe('The user just said: "no, use page B", then: "and hurry". Act on it now: a question or remark, answer it with answer_user (at once when you know the answer, else right after the step that finds it out) and go on with the task; otherwise it changes the current task (keep doing what it does not change), or replaces or stops it if that is what it says.');
     expect(i.unseen).toBe(false);
     expect(i.take("request")).toBeNull();
     expect(routes).toEqual([["request", 2]]);
@@ -65,6 +65,25 @@ describe("the tool executor with interjections", () => {
     };
     return { browser, loads };
   }
+
+  it("answer_user answers only a message the model got in this turn: refused before any event otherwise, and again once a new turn starts", async () => {
+    const { exec, interjections, events } = setup();
+    const refused = await exec.call("answer_user", { text: "Yes, I can." });
+    expect(refused).toEqual({ text: expect.stringContaining("only for a message the user sent while you work"), isError: true });
+    expect(events).toEqual([]);
+    interjections.add("can you speak Korean?");
+    interjections.take("request");
+    expect(await exec.call("answer_user", { text: "Yes, I can." })).toEqual({ text: expect.stringContaining("The user has your answer") });
+    expect(events.map((e) => e.type)).toEqual(["tool_call", "tool_result"]);
+    interjections.newTurn();
+    expect((await exec.call("answer_user", { text: "Yes, I can." })).isError).toBe(true);
+    // Handed off to Claude Code: answerable once it read the message, not before.
+    interjections.add("which account?");
+    interjections.handOff("next_step");
+    expect((await exec.call("answer_user", { text: "@acme." })).isError).toBe(true);
+    interjections.seen(interjectionText(["which account?"]));
+    expect((await exec.call("answer_user", { text: "@acme." })).isError).toBeUndefined();
+  });
 
   it("navigate stops waiting for a slow page the moment the user speaks: the load goes on, the result says so", async () => {
     const { browser, loads } = slowLoads();

@@ -101,8 +101,6 @@ export const ExtensionSettings = z.object({
   deepgramVoice: DeepgramVoiceId.default(DEFAULT_DEEPGRAM_VOICE),
   /** The Deepgram engine's speaking speed (1 = normal; DEEPGRAM_SPEED), applied when played. */
   deepgramSpeed: z.number().min(DEEPGRAM_SPEED.min).max(DEEPGRAM_SPEED.max).default(DEEPGRAM_SPEED.default),
-  /** The one-time notice of what Realtime voice costs was shown. */
-  realtimeCostNoticed: z.boolean().default(false),
   /** Hands-free voice makes a short soft sound when the microphone goes live and when it stops. */
   voiceSounds: z.boolean().default(true),
   /**

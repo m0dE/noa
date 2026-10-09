@@ -17,9 +17,9 @@ import {
   type ReasoningLevel,
 } from "@noa/shared";
 import { isPaidActive } from "../account/types.js";
-import { builtInJev, HOSTED_LABEL, resolveBrain } from "../engine/brain-resolver.js";
+import { approvalJevSource, CLOUD_JEV, HOSTED_LABEL, JEV_SOURCE_LABELS, jevSourceFor, resolveBrain } from "../engine/brain-resolver.js";
 import { brainLabel, modelLabel } from "../ui/labels.js";
-import type { AccountView, BrainStatus } from "../ui-protocol.js";
+import type { AccountView, BrainStatus, JevSource } from "../ui-protocol.js";
 
 // ---------------------------------------------------------------- sections (the sidebar)
 
@@ -264,19 +264,20 @@ export function settingsView(input: ViewInput): SettingsView {
     { value: "claude-api", label: "Claude API", detail: "Your Anthropic API key, straight from Chrome.", enabled: true },
   ];
 
-  // Jev for the brain the draft would run: the hosted AI brings its own; else a key here, else the helper's own key.
-  const jevSource = builtInJev(chosen.effective, brain.helper);
-  const jevUseHint =
-    jevSource === "hosted"
-      ? `Included with ${HOSTED_LABEL}. Speeds up single steps.`
-      : jevSource === "helper"
-        ? "Speeds up single steps. Uses the helper's own Jev key unless you set one here."
-        : "Speeds up single steps. Needs a Jev key.";
-  const jevTestHint = jevSource === "hosted" ? `Sends one test request to ${HOSTED_LABEL}, billed to your usage credit.` : "Sends one test request.";
+  // Which Jev the draft's brain picks elements with, and which the approval checks use (brain-resolver's order).
+  const clicks = chosen.effective ? jevSourceFor(chosen.effective, { settings, helper: brain.helper, account: acct }) : null;
+  const checks = approvalJevSource({ settings, account: acct });
+  const noJev = acct.signedIn ? "none (add a Jev key, or top up to use Noa's cloud Jev)" : "none (add a Jev key, or log in to use Noa's cloud Jev)";
+  const jevLabel = (src: JevSource | null) => (src ? JEV_SOURCE_LABELS[src] : noJev);
+  const jevUseHint = `${chosen.effective ? `Clicking and typing: ${jevLabel(clicks)}.` : "Clicking and typing: no AI source set up yet."} Approval checks: ${jevLabel(checks)}.`;
+  const jevTestHint =
+    clicks === "cloud"
+      ? `Sends one test request to ${CLOUD_JEV}, billed to your usage credit.`
+      : clicks === "helper"
+        ? "Sends one test request. The helper's own key cannot be tested from here."
+        : "Sends one test request.";
   const jevNote =
-    jevSource === "helper" && !settings.jevApiKey
-      ? "With local Claude Code the helper uses its own Jev key (TYPESAFE_API_KEY in its .env file). A key entered here takes priority and also works with the Claude API."
-      : null;
+    "Used first, for clicking, typing and approval checks, and not billed by Noa. Without a key, Local Claude Code uses the helper's own key (TYPESAFE_API_KEY in its .env file) when it has one, and everything else uses Noa's cloud Jev, billed to your usage credit.";
 
   return {
     signedIn,
@@ -294,10 +295,11 @@ export function settingsView(input: ViewInput): SettingsView {
     reasoningHint: REASONING_LEVELS.find((r) => r.id === (draft.reasoning ?? settings.reasoning))?.detail ?? "",
     showReasoningAutoRaise: (draft.reasoning ?? settings.reasoning) === "fast",
     showJevFields: draft.jevEnabled,
-    showJevKey: draft.jevEnabled && jevSource !== "hosted",
+    // Noa AI always uses its cloud Jev for clicking and typing.
+    showJevKey: draft.jevEnabled && chosen.effective !== "noa",
     jevUseHint,
     jevTestHint,
-    jevNote: draft.jevEnabled ? jevNote : null,
+    jevNote: draft.jevEnabled && chosen.effective !== "noa" ? jevNote : null,
   };
 }
 

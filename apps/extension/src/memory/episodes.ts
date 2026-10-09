@@ -50,6 +50,7 @@ import {
   type StampedAgentEvent,
   type TranscriptLine,
   type WriterFact,
+  USER_STOP_REASON,
 } from "@noa/shared";
 import type { StorageLike } from "../engine/kv.js";
 import type { Job } from "../engine/run/jobs.js";
@@ -70,6 +71,8 @@ export const EPISODE_TASK_DELAY_MS = 30_000;
 export const EPISODE_RETRY_MS = 5 * 60_000;
 /** Tries per summary before it is dropped. */
 export const MAX_EPISODE_ATTEMPTS = 3;
+/** Bump to look over the episodes written before they were marked stopped (markStopped) again. */
+export const STOPPED_MARK_VERSION = 1;
 /** Bump to list the past conversations without an episode again (a new writer worth running over them). */
 export const BACKFILL_VERSION = 1;
 /** How far back the backfill looks. */
@@ -126,6 +129,8 @@ interface WriterState {
   backfill?: Backfill;
   /** The BACKFILL_VERSION whose backfill was listed (done, or under way). */
   backfilled?: number;
+  /** The STOPPED_MARK_VERSION whose pass over the older episodes is done. */
+  stoppedMarked?: number;
 }
 
 /** How far the backfill is: conversations settled (written, skipped or given up) of all it listed. */
@@ -135,7 +140,7 @@ export interface BackfillProgress {
 }
 
 export interface EpisodeWriterDeps {
-  store: Pick<MemoryStore, "list" | "put" | "putEpisode">;
+  store: Pick<MemoryStore, "list" | "put" | "putEpisode" | "markStopped">;
   sessions: Pick<SessionStore, "get" | "eventsOf" | "note" | "list">;
   settings(): Promise<Pick<ExtensionSettings, "memoryPaused" | "memoryKindsOff">>;
   /** The writer's call for a conversation on this brain (null: that brain has none). */
@@ -188,10 +193,12 @@ export class EpisodeWriter {
   }
 
   /**
-   * A worker start: the past conversations without an episode are listed for the backfill (once per
-   * BACKFILL_VERSION), and the alarm is set again for what is queued (alarms may not survive a browser restart).
+   * A worker start: the episodes written before they were marked stopped are marked (once per STOPPED_MARK_VERSION),
+   * the past conversations without an episode are listed for the backfill (once per BACKFILL_VERSION), and the
+   * alarm is set again for what is queued (alarms may not survive a browser restart).
    */
   async resume(): Promise<void> {
+    await this.markStopped().catch((err: unknown) => this.deps.log(`stopped episodes not marked: ${errorMessage(err)}`));
     await this.planBackfill().catch((err: unknown) => this.deps.log(`episode backfill not listed: ${errorMessage(err)}`));
     await this.reschedule();
   }
@@ -204,6 +211,20 @@ export class EpisodeWriter {
 
   private async reschedule(): Promise<void> {
     await this.schedule().catch((err: unknown) => this.deps.log(`episode alarm not set: ${errorMessage(err)}`));
+  }
+
+  /** Marks the episodes whose conversation (still in the session store) the user stopped, as write() does now. */
+  private async markStopped(): Promise<void> {
+    if ((await this.state()).stoppedMarked === STOPPED_MARK_VERSION) return;
+    const episodes = (await this.deps.store.list()).filter((e) => e.kind === "episode" && !e.stopped && e.source.sessionId);
+    const ids: string[] = [];
+    for (const e of episodes) {
+      const s = await this.deps.sessions.get(e.source.sessionId!);
+      if (s && stoppedByUser(s)) ids.push(e.id);
+    }
+    const n = ids.length ? await this.deps.store.markStopped(ids) : 0;
+    await this.mutate((s) => void (s.stoppedMarked = STOPPED_MARK_VERSION));
+    if (n) this.deps.log(`${n} episode(s) of stopped conversations marked`);
   }
 
   /**
@@ -353,8 +374,10 @@ export class EpisodeWriter {
     let episode = "no episode";
     if (answer.episode) {
       const task = job.task ? { taskKey: memoryKeyOfTask(job.task), taskTitle: firstLine(job.task.instructions) } : {};
+      // Its last turn stopped by the user: what it tried is no lead for the next turn (selectMemory leaves it out).
+      const stopped = stoppedByUser(session);
       try {
-        const change = await this.deps.store.putEpisode({ ...answer.episode, at: session.firstStartedAt ?? session.startedAt, ...task }, source);
+        const change = await this.deps.store.putEpisode({ ...answer.episode, at: session.firstStartedAt ?? session.startedAt, ...task, ...(stopped ? { stopped } : {}) }, source);
         episode = `episode [${change.after!.id}] ${change.before ? "rewritten" : "written"}`;
       } catch (err) {
         if (!(err instanceof MemoryRefusal)) throw err;
@@ -426,6 +449,7 @@ export class EpisodeWriter {
       written: got?.written && typeof got.written === "object" ? { ...got.written } : {},
       ...(pending.length ? { backfill: { pending, total: Math.max(pending.length, Number(b!.total) || 0), nextAt: Number(b!.nextAt) || 0 } } : {}),
       ...(typeof got?.backfilled === "number" ? { backfilled: got.backfilled } : {}),
+      ...(typeof got?.stoppedMarked === "number" ? { stoppedMarked: got.stoppedMarked } : {}),
     };
   }
 
@@ -497,6 +521,11 @@ function entriesToShow(entries: readonly MemoryEntry[], sessionId: string, lines
     .sort((a, b) => b.s - a.s || b.e.updatedAt.localeCompare(a.e.updatedAt))
     .slice(0, MAX_WRITER_EXISTING_ENTRIES)
     .map((x) => x.e);
+}
+
+/** The conversation's last turn was stopped by the user (not paused for them: a question, a sign-in). */
+function stoppedByUser(s: SessionInfo): boolean {
+  return s.outcome === "paused" && s.reason?.trim() === USER_STOP_REASON;
 }
 
 /** Why no episode may be written at all now (memory paused, Episodes off), or null. */

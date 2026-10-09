@@ -194,6 +194,7 @@ const composer = initComposer({
   onStarted: startedHere,
   onState: (s) => applyState(s),
   onTopup: billing,
+  onStop: (sessionId) => handsFree.endWith(sessionId),
   tabId: () => activeTab,
   trace: panelTrace,
 });
@@ -298,7 +299,6 @@ const handsFree = initHandsFree({
   account: () => state?.account,
   engines: loadVoiceModels,
   saveSettings: async (patch) => applyState(await uiRequest({ type: "settings.save", settings: patch })),
-  openVoiceSettings: () => void openSettings("ai"),
   createEngine: (id, events, opts) => {
     // Standard chosen in Settings skips the engine list: its model (for the trace) is asked for here.
     if (id === "standard" && !voiceModels.standard && state?.account?.signedIn) void loadVoiceModels();

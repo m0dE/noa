@@ -27,10 +27,16 @@ const RESTRICTED_SCHEMES: Readonly<Record<string, string>> = {
   file: "local files: need the user's per-extension \"Allow access to file URLs\" switch",
 };
 
-/** Web Store hosts (and paths): Chrome answers "The extensions gallery cannot be scripted." */
-const WEB_STORE: readonly { host: string; path?: string; why: string }[] = [
+/**
+ * Web Store hosts: Chrome answers "The extensions gallery cannot be scripted." on every page of them and their
+ * subdomains (Chromium's IsWebstoreDomain is url.DomainIs(host)), not only under /webstore.
+ */
+const WEB_STORE: readonly { host: string; why: string }[] = [
   { host: "chromewebstore.google.com", why: "the Chrome Web Store" },
-  { host: "chrome.google.com", path: "/webstore", why: "the old Web Store address, including the developer dashboard (/webstore/devconsole)" },
+  {
+    host: "chrome.google.com",
+    why: "the old Web Store address, including the developer dashboard, also under another signed-in account (/u/2/webstore/devconsole)",
+  },
 ];
 
 /**
@@ -58,7 +64,8 @@ export function isRestrictedUrl(url: string | undefined | null): boolean {
   if (scheme && scheme in RESTRICTED_SCHEMES) return true;
   try {
     const u = new URL(url);
-    return WEB_STORE.some((w) => u.hostname === w.host && (!w.path || u.pathname.startsWith(w.path)));
+    const host = u.hostname.toLowerCase().replace(/\.$/, "");
+    return WEB_STORE.some((w) => host === w.host || host.endsWith(`.${w.host}`));
   } catch {
     return false;
   }
@@ -109,6 +116,9 @@ export function isRestrictedError(err: unknown): boolean {
   if (FOREIGN_FRAME_ERROR.test(msg)) return false;
   return /cannot be scripted|Cannot access a chrome(-untrusted)?:\/\/ URL|Cannot access contents of url|"code"\s*:\s*-32000[^}]*"Not allowed"|^\s*Not allowed\.?\s*$/i.test(msg);
 }
+
+/** A tab of the run on such a page, where open_tabs lists it: no use reading it. */
+export const RESTRICTED_TAB = "Chrome doesn't allow extensions to see or control this page, so it can't be read, captured or clicked";
 
 /** A tool's answer on such a page, in place of Chrome's raw error. */
 export function restrictedToolError(url?: string): string {

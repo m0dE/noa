@@ -11,7 +11,7 @@ import type { BrainStatus } from "../../ui-protocol.js";
 import type { Brain } from "../brains.js";
 import type { LocalStore } from "../local-store.js";
 import type { SessionStore } from "../sessions.js";
-import type { ActiveSessions, ForcedStop } from "./active.js";
+import { stopOf, type ActiveSessions, type ForcedStop } from "./active.js";
 import { runNextTurn } from "./conversation.js";
 import { openTask, startHeartbeat, withContext, type FirstJob, type Job, type TurnJob } from "./jobs.js";
 import type { ResultRecorder } from "./record.js";
@@ -207,7 +207,9 @@ export class Lifecycle {
     this.deps.log(`session ${sessionId} ${describe(job, active.session)} with ${active.session.brain} in slot ${opts.slotIndex}`);
 
     const cleanups: Cleanup[] = [];
-    if (job.source === "cloud") cleanups.push(startHeartbeat(job, (m) => this.deps.log(m)));
+    // Stopped from the account (paused or cancelled there): as if the user pressed Stop here.
+    const running = active;
+    if (job.source === "cloud") cleanups.push(startHeartbeat(job, (m) => this.deps.log(m), () => this.deps.live.force(running, stopOf("user-stop"))));
     let result: TaskRunResult;
     try {
       await this.waitForX(active);

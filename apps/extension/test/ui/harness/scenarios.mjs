@@ -126,7 +126,7 @@ export function scenario(kind) {
     maxConsecutiveFailures: 3, retryAfterMinutes: 10, intervalMinutes: 15,
     delayMinSec: 60, delayMaxSec: 180, maxToolCalls: 60, maxTaskMinutes: 10, maxParallelTasks: 2, jevEnabled: true, jevThreshold: 0.8,
     pauseRetryMinutes: 15, accountApiBase: "https://app.noa.bot",
-    voiceEngine: "realtime", speechVoice: "", speechRate: 1, realtimeVoice: "marin", realtimeSpeed: 1, realtimeCostNoticed: true, voiceSounds: true, notificationVoice: "same", deepgramVoice: "thalia", deepgramSpeed: 1, showControlOverlay: true, imageGeneration: true, imageModel: "gpt-image-2",
+    voiceEngine: "realtime", speechVoice: "", speechRate: 1, realtimeVoice: "marin", realtimeSpeed: 1, voiceSounds: true, notificationVoice: "same", deepgramVoice: "thalia", deepgramSpeed: 1, showControlOverlay: true, imageGeneration: true, imageModel: "gpt-image-2",
     automationLevel: "ask_consequential", scheduledAutomation: "full_within_task",
     memoryPaused: false, memoryKindsOff: [], reasoning: "fast", reasoningAutoRaise: true,
   };
@@ -150,7 +150,7 @@ export function scenario(kind) {
   const PLUS = { id: "plus", status: "active", currentPeriodEnd: iso(60 * 24 * 30), cancelAtPeriodEnd: false };
   const money = (sub, top, grant = 0) => ({ subscriptionCents: sub, topupCents: top, totalCents: sub + top, periodGrantCents: grant, periodEnd: grant ? iso(60 * 24 * 30) : null });
   state.account = {
-    signedIn: true, signInConfigured: true, apiBase: API, dashboardUrl: `${API}/`, billingUrl: `${API}/billing`,
+    signedIn: true, signInConfigured: true, apiBase: API, dashboardUrl: `${API}/`, billingUrl: `${API}/billing`, filesUrl: `${API}/files`,
     user: { email: "ada.lovelace@example.com", name: "Ada Lovelace", pictureUrl: avatar },
     plan: PLUS, credit: money(0, 0), stripeConfigured: true, fetchedAt: iso(0),
   };
@@ -158,7 +158,7 @@ export function scenario(kind) {
   /** The account's list came back locked (a plan without the TODO list). */
   let tasksLocked = false;
   if (kind === "loggedout" || kind === "loggedout-noclient") {
-    state.account = { signedIn: false, signInConfigured: kind === "loggedout", apiBase: API, dashboardUrl: `${API}/`, billingUrl: `${API}/billing` };
+    state.account = { signedIn: false, signInConfigured: kind === "loggedout", apiBase: API, dashboardUrl: `${API}/`, billingUrl: `${API}/billing`, filesUrl: `${API}/files` };
     state.running = null;
   }
   if (kind === "account" || kind === "hosted-out") {
@@ -187,7 +187,7 @@ export function scenario(kind) {
   // A paid plan whose usage credit ran out (runs paused on a 402).
   if (kind === "opt-paid-out") state.account = { ...state.account, plan: PLUS, credit: money(0, 0, 2000), outOfCredit: true };
   if (kind === "opt-nobilling") state.account = { ...state.account, plan: FREE, credit: money(0, 0), stripeConfigured: false };
-  if (kind === "opt-signedout") state.account = { signedIn: false, signInConfigured: true, apiBase: API, dashboardUrl: `${API}/`, billingUrl: `${API}/billing` };
+  if (kind === "opt-signedout") state.account = { signedIn: false, signInConfigured: true, apiBase: API, dashboardUrl: `${API}/`, billingUrl: `${API}/billing`, filesUrl: `${API}/files` };
   if (kind === "idle" || kind === "free" || kind === "empty" || kind === "noshortcut") state.running = null;
   if (kind === "nobrain") {
     state.brain = { effective: null, note: "No AI set up. Install the helper, add a Claude API key, or log in.", helper: null, helperError: "Helper not installed", hasApiKey: false, jevActive: false };

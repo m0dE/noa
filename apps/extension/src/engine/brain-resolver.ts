@@ -11,7 +11,7 @@
  */
 import type { BrainKind, ExtensionSettings, HelperInfo } from "@noa/shared";
 import { HELPER_NOT_INSTALLED } from "../helper-link.js";
-import type { BrainStatus } from "../ui-protocol.js";
+import type { BrainStatus, JevSource } from "../ui-protocol.js";
 
 export interface BrainInputs {
   settings: Pick<ExtensionSettings, "brain" | "anthropicApiKey" | "jevApiKey" | "jevEnabled">;
@@ -25,6 +25,14 @@ export interface BrainInputs {
 export const HOSTED_LABEL = "Noa AI";
 export const HOSTED_SIGN_IN = `Sign in to use ${HOSTED_LABEL}`;
 export const HOSTED_NO_CREDIT = `Out of usage credit: subscribe or top up to use ${HOSTED_LABEL}`;
+/** What Noa's cloud Jev (the account server's /v1/ai/jev) is called. */
+export const CLOUD_JEV = "Noa's cloud Jev";
+/** How the settings page names each Jev source. */
+export const JEV_SOURCE_LABELS: Record<JevSource, string> = {
+  key: "your Jev key",
+  helper: "the helper's own Jev key",
+  cloud: `${CLOUD_JEV}, billed to your usage credit`,
+};
 /** No brain can run tasks (the status note says why, when there is one). */
 export const NO_AI = "No AI set up";
 /** Auto would move a conversation from the user's own Claude Code to the paid hosted AI: it refuses instead. */
@@ -62,22 +70,30 @@ function nothingUsable(inputs: BrainInputs, ccProblem: string): string {
 }
 
 /**
- * Where a brain's Jev comes from without a Jev key in Settings: "hosted", the
- * hosted AI's own (/v1/ai/jev; a key here is not used); "helper", the
- * helper's own key (TYPESAFE_API_KEY in its environment; a key here takes
- * priority); null, nowhere (Jev needs the user's key). The runner's
- * jevActive, the settings page and its Test Jev button all ask this.
+ * Where a brain's Jev (picking act's elements) comes from, Jev on or off: "key", the Jev key in
+ * Settings; "helper", the helper's own key (TYPESAFE_API_KEY in its environment); "cloud", Noa's
+ * cloud Jev (/v1/ai/jev, billed to the account's usage credit). Noa AI always uses the cloud; the
+ * other brains use the first that is there, in that order, so a missing key never leaves them
+ * without Jev while the account has credit. null: none. The runner's jevActive, the settings page,
+ * its Test Jev button and the brains themselves all ask this.
  */
-export function builtInJev(brain: BrainKind | null, helper: HelperInfo | null): "hosted" | "helper" | null {
-  if (brain === "noa") return "hosted";
-  if (brain === "claude-code" && helper?.jevAvailable) return "helper";
-  return null;
+export function jevSourceFor(brain: BrainKind | null, inputs: Pick<BrainInputs, "settings" | "helper" | "account">): JevSource | null {
+  if (!brain) return null;
+  if (brain === "noa") return "cloud";
+  if (inputs.settings.jevApiKey) return "key";
+  if (brain === "claude-code" && inputs.helper?.jevAvailable) return "helper";
+  return cloudJevUsable(inputs.account) ? "cloud" : null;
 }
 
-function jevActiveFor(brain: BrainKind | null, inputs: BrainInputs): boolean {
-  const s = inputs.settings;
-  if (!s.jevEnabled || !brain) return false;
-  return !!s.jevApiKey || !!builtInJev(brain, inputs.helper);
+/** The approval checks' Jev (they run in the extension, which cannot reach the helper's key): the key in Settings, else the cloud. */
+export function approvalJevSource(inputs: Pick<BrainInputs, "settings" | "account">): JevSource | null {
+  if (inputs.settings.jevApiKey) return "key";
+  return cloudJevUsable(inputs.account) ? "cloud" : null;
+}
+
+/** Noa's cloud Jev answers: signed in, with usage credit or a paid plan. */
+export function cloudJevUsable(account: BrainInputs["account"]): boolean {
+  return !!account?.signedIn && account.hostedUsable;
 }
 
 /**
@@ -131,8 +147,13 @@ export function resolveBrain(inputs: BrainInputs): BrainStatus {
     effective,
     helper,
     hasApiKey,
-    jevActive: jevActiveFor(effective, inputs),
+    jevActive: false,
   };
+  const jevSource = jevSourceFor(effective, inputs);
+  if (jevSource) {
+    status.jevSource = jevSource;
+    status.jevActive = settings.jevEnabled;
+  }
   if (note) status.note = note;
   if (!helper && inputs.helperError) status.helperError = inputs.helperError;
   return status;

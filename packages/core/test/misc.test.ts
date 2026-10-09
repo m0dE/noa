@@ -5,7 +5,7 @@ import { errorDetail, plainErrorText } from "../src/api-errors.js";
 import { mapStrings, MIN_SECRET_CHARS, REDACTED, SecretRedactor } from "../src/redact.js";
 import { SCREEN_HELP_TEXT } from "@noa/shared";
 import { agentError, buildFollowUpMessage, buildSystemPrompt, buildTaskPrompt, classifyFailure, createJev, ENDED_WITHOUT_RESULT, EXITED_WITHOUT_RESULT, formatSnapshot, timeLimitReached, toolCallLimitExceeded, verifyXPost } from "../src/index.js";
-import { buildJevQuestions, buildJevState, jevFromClient, type JevClientLike } from "../src/jev.js";
+import { buildJevQuestions, buildJevState, JEV_TOKEN_BUDGET, jevFromClient, type JevClientLike } from "../src/jev.js";
 import { mentionsHandle, MENU_WAIT_MS, switchXAccount } from "../src/x-account.js";
 import type { BrowserCaller } from "../src/types.js";
 import { parseSnapshotText } from "../src/page-format.js";
@@ -65,7 +65,7 @@ describe("jev", () => {
   });
 
   it("builds a trimmed state, capped at 250, in-viewport elements first", () => {
-    const s = buildJevState("post it", snapshot(400));
+    const s = buildJevState("post it", snapshot(400), 250, {}, Infinity);
     expect(s.elements).toHaveLength(250);
     // The 200 in-viewport elements come first (in page order), then offscreen ones.
     expect(s.elements.slice(0, 200).every((e) => e.inViewport)).toBe(true);
@@ -137,6 +137,57 @@ describe("jev", () => {
     const q = buildJevQuestions(buildJevState("select United Kingdom in the Country dropdown", snap, 250, { typesText: true }));
     expect(q.target.criteria["8"]).toBe('combobox "Country", options: Australia, United Kingdom, in view');
     expect(q.operation.criteria.type).toMatch(/choose it as the option of a dropdown/);
+  });
+
+  it("keeps a dense page's request within the token budget, the elements in view first", () => {
+    // A dashboard: 240 elements with long labels and links, the first 60 in view.
+    const snap: PageSnapshot = {
+      url: "https://dash.example.com/acct/zone/rules",
+      title: "Rules",
+      text: "Rules\n".repeat(400),
+      truncated: false,
+      elements: Array.from({ length: 240 }, (_, i) => ({
+        index: i,
+        tag: "a",
+        role: "link",
+        name: `Rule ${i} forwarding URL to the destination page`,
+        text: "Status Code: 301 - Permanent Redirect",
+        href: `https://dash.example.com/acct/zone/rules/${i}/edit`,
+        inViewport: i >= 180,
+      })),
+    };
+    const s = buildJevState("click Edit", snap);
+    expect(s.elements.length).toBeGreaterThan(60);
+    expect(s.elements.length).toBeLessThan(240);
+    expect(s.elements.slice(0, 60).map((e) => e.index)).toEqual(Array.from({ length: 60 }, (_, i) => 180 + i));
+    const bytes = JSON.stringify({ state: s, questions: buildJevQuestions(s) }).length;
+    // TypeSafe's count (measured): about 121 tokens per element and 0.165 per byte; it refuses past about 32k.
+    expect(121 * s.elements.length + 0.165 * bytes).toBeLessThan(JEV_TOKEN_BUDGET + 500);
+  });
+
+  it("sends a request TypeSafe finds too long again with fewer elements", async () => {
+    const sent: number[] = [];
+    const client: JevClientLike = {
+      systemOne: async (req) => {
+        sent.push(req.state.elements.length);
+        if (sent.length < 3) throw new Error('Jev HTTP 400: max_tokens_exceeded');
+        return { answers: { operation: { choice: "click", confidence: 0.9 }, target: { choice: "1", confidence: 0.9 } } };
+      },
+    };
+    expect(await jevFromClient(client).decide({ goal: "g", snapshot: snapshot(400) })).toMatchObject({ operation: "click", index: 1 });
+    expect(sent[1]).toBeLessThan(sent[0]!);
+    expect(sent[2]).toBeLessThan(sent[1]!);
+    // Gives up after three tries, and other errors are not retried.
+    const failing = (msg: string) => {
+      const calls: number[] = [];
+      return { calls, client: { systemOne: async () => (calls.push(1), Promise.reject(new Error(msg))) } satisfies JevClientLike };
+    };
+    const tooLong = failing('400 {"detail":{"error_type":"max_tokens_exceeded"}}');
+    await expect(jevFromClient(tooLong.client).decide({ goal: "g", snapshot: snapshot(400) })).rejects.toThrow(/max_tokens_exceeded/);
+    expect(tooLong.calls).toHaveLength(3);
+    const down = failing("Jev HTTP 500: boom");
+    await expect(jevFromClient(down.client).decide({ goal: "g", snapshot: snapshot(400) })).rejects.toThrow(/boom/);
+    expect(down.calls).toHaveLength(1);
   });
 
   it("asks operation + target choice questions and returns the lower confidence", async () => {
@@ -245,8 +296,30 @@ describe("prompts", () => {
       expect(p).toContain(`at most ${MAX_SPOKEN_CHARS} characters`);
       // Spoken lines and short answers to mid-task questions: Noa speaking, never "the agent".
       expect(p).toMatch(/give `spoken`[^\n]*in the first person as Noa \("I posted it"\), never "the agent"/);
-      expect(p).toMatch(/answered at once in a short reply[^\n]*in the first person as Noa[^\n]*never "the agent"/);
+      expect(p).toMatch(/answered with answer_user, in the first person as Noa[^\n]*never "the agent"/);
     }
+  });
+
+  it("system prompt: the user's files are in the Noa folder, which list_files lists and upload attaches", () => {
+    for (const readAttachments of [false, true]) {
+      const p = buildSystemPrompt({ tools: TOOL_NAMES, jev: false, readAttachments });
+      expect(p).toMatch(/The user's own files are in their Noa folder \(Downloads\/Noa[^\n]*look there with list_files before saying you cannot get it/);
+      expect(p).toContain("or a path list_files gave for a file in the user's Noa folder");
+      expect(p).toContain("; list_files shows the files in the user's Noa folder, which upload can attach.");
+    }
+    const without = buildSystemPrompt({ tools: TOOL_NAMES.filter((n) => n !== "list_files" && n !== "generate_image" && n !== "save_file"), jev: false });
+    expect(without).not.toMatch(/Noa folder/);
+    expect(without).toContain("Attach media with upload, using the exact absolute file paths listed in the task, on an input");
+    expect(without).toContain("You have no shell, file or web access other than these tools.");
+  });
+
+  it("system prompt: save_file when asked, and on the agent's own judgment of what the user will need again", () => {
+    const p = buildSystemPrompt({ tools: TOOL_NAMES, jev: false });
+    expect(p).toMatch(/save_file keeps a file[^\n]*when the user asks you to save, keep or download a file, and on your own judgment when the task finds or produces a file they are likely to need again/);
+    expect(p).toContain("or a path save_file gave for a file you kept");
+    // Read up front (the tool list is in the system prompt): a page-made file is saved by clicking its button, then download: true.
+    expect(p).toMatch(/- save_file: [^\n]*a file the page makes itself when a button is clicked[^\n]*click that button, then call save_file with download: true/);
+    expect(buildSystemPrompt({ tools: TOOL_NAMES.filter((n) => n !== "save_file"), jev: false })).not.toMatch(/save_file/);
   });
 
   it("a kept-open agent's system prompt adds the follow-up rules", () => {
@@ -365,7 +438,9 @@ describe("the user's tab", () => {
     const p = buildTaskPrompt({ ...ask, userTab: inbox }, [], { isRetry: false });
     expect(p).toContain(`The user's tab: "Inbox (8) - Mail" (http://localhost:4777/w/inbox)`);
     expect(p).toMatch(/"this page".*"these".*it means what this tab shows/s);
-    expect(p).toMatch(/navigate away only when the task needs another page/);
+    // Looked at when the task does not say where its subject is, before going elsewhere.
+    expect(p).toMatch(/When the task does not say where its subject is, read_page this tab before going elsewhere/);
+    expect(p).toMatch(/navigate away only when the task needs another page/i);
     // Before the instructions, so they are read with it in mind.
     expect(p.indexOf("The user's tab:")).toBeLessThan(p.indexOf("Task instructions:"));
   });
@@ -403,9 +478,11 @@ describe("the user's tab", () => {
     }
   });
 
-  it("the system prompt uses the tab when it shows what the task is about, and navigates only when needed", () => {
+  it("the system prompt looks at the user's tab when the request lacks context, not by its title alone", () => {
     const p = buildSystemPrompt({ tools: TOOL_NAMES, jev: true });
-    expect(p).toMatch(/When the user's tab .* already shows what the task is about, work on that page; navigate only when the task needs another page or site/);
+    expect(p).toMatch(/When the request leaves out where its subject is .* look at that page with read_page before going anywhere else or guessing a site/);
+    expect(p).toMatch(/Do not judge it by its title alone/);
+    expect(p).toMatch(/Go to another page or site only for what that page does not have/);
     expect(p).not.toMatch(/Start by navigating to the site/);
   });
 });
@@ -489,6 +566,8 @@ describe("error text the user reads", () => {
     expect(errorDetail(JSON.stringify({ error: "plan_required", message: "Upgrade to Plus" }))).toBe("Upgrade to Plus");
     expect(errorDetail(JSON.stringify({ error: "invalid input", message: "name is required" }))).toBe("invalid input: name is required");
     expect(errorDetail(JSON.stringify({ message: "Internal error" }))).toBe("Internal error");
+    expect(errorDetail(JSON.stringify({ detail: { error_type: "max_tokens_exceeded" } }))).toBe("max_tokens_exceeded");
+    expect(errorDetail(JSON.stringify({ detail: "Not authenticated" }))).toBe("Not authenticated");
     expect(errorDetail("<html><head><title>502 Bad Gateway</title></head><body>cloudflare</body></html>")).toBe("");
     expect(errorDetail(JSON.stringify({ unexpected: { shape: true } }))).toBe("");
     expect(errorDetail("  Bad gateway\n  try later ")).toBe("Bad gateway try later");

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { bytesToBase64 } from "../../src/base64.js";
 import { PcmPlayer } from "../../src/voice/pcm-player.js";
 
@@ -116,6 +116,23 @@ describe("PcmPlayer: pause keeps what is left, resume plays on from there", () =
     p.resume();
     ctx.advance(0.2);
     expect(Math.round(p.stop()!.playedMs)).toBe(500);
+  });
+
+  it("quietMs: how long nothing has sounded (0 while a chunk plays; a pause is quiet; never played: Infinity)", () => {
+    const { ctx, p } = player();
+    const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    expect(p.quietMs).toBe(Infinity);
+    p.play(chunk(200, 0.5), "a1");
+    expect(p.quietMs).toBe(0);
+    ctx.advance(0.2);
+    now.mockReturnValue(12_000);
+    expect(p.quietMs).toBe(2_000);
+    p.play(chunk(200, 0.5), "a2");
+    now.mockReturnValue(12_100);
+    p.pause();
+    now.mockReturnValue(12_600);
+    expect(p.quietMs).toBe(500);
+    now.mockRestore();
   });
 
   it("level: how loud what plays is, over the last window; 0 when nothing plays or paused", () => {

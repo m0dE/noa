@@ -21,6 +21,7 @@ describe("notifier", () => {
   const setup = (
     opts: {
       voiceOn?: boolean;
+      locked?: () => Promise<boolean>;
       notes?: NotificationVoice;
       speaker?: string;
       voice?: string;
@@ -44,6 +45,7 @@ describe("notifier", () => {
       }),
       ...(opts.play ? { play: opts.play } : {}),
       voiceOn: () => opts.voiceOn ?? false,
+      ...(opts.locked ? { locked: opts.locked } : {}),
       notifications: { create: created as never },
       tts: { speak: speak as never, getVoices: (async () => [{ voiceName: "Samantha" }]) as never },
       iconUrl: () => "icon.png",
@@ -162,6 +164,41 @@ describe("notifier", () => {
       expect(speak).not.toHaveBeenCalled();
       expect(play).not.toHaveBeenCalled();
     }
+  });
+
+  it("is silent while the screen is locked (a closed lid); the notification still shows", async () => {
+    for (const opts of [{}, { engine: "realtime" as const }, { notes: "chime" as const }]) {
+      const play = vi.fn(async () => {});
+      const { notify, created, speak } = setup({ ...opts, locked: async () => true, play });
+      await notify("Task paused", "Needs you.");
+      expect(created).toHaveBeenCalledOnce();
+      expect(speak).not.toHaveBeenCalled();
+      expect(play).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does not play a notice queued before the screen locked", async () => {
+    let locked = false;
+    let release!: () => void;
+    const first = new Promise<void>((r) => (release = r));
+    const play = vi.fn(async (sound: NoticeSound) => {
+      if (sound.kind !== "chime" && sound.line === "a") await first;
+    });
+    const { notify, speak } = setup({ engine: "realtime", locked: async () => locked, play });
+    const a = notify("x", "y", "a");
+    const b = notify("x", "y", "b");
+    await new Promise((r) => setTimeout(r, 0));
+    locked = true;
+    release();
+    await Promise.all([a, b]);
+    expect(play).toHaveBeenCalledOnce();
+    expect(speak).not.toHaveBeenCalled();
+  });
+
+  it("speaks when whether the screen is locked cannot be told", async () => {
+    const { notify, speak } = setup({ locked: async () => Promise.reject(new Error("no idle")) });
+    await notify("Task paused", "Needs you.");
+    expect(speak).toHaveBeenCalledOnce();
   });
 
   it("never throws", async () => {

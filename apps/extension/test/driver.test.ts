@@ -57,6 +57,7 @@ describe("AgentTab", () => {
     "chrome-extension://abc/page.html",
     "https://chromewebstore.google.com/detail/x",
     "https://chrome.google.com/webstore/x",
+    "https://chrome.google.com/u/2/webstore/devconsole/x",
     "about:version",
     "edge://settings",
     "devtools://devtools/x",
@@ -104,6 +105,17 @@ describe("AgentTab", () => {
     const snap = await driver.readPage();
     expect(snap.note).toMatch(/^A new tab opened from the page: t2 "" https:\/\/x\.test\/grok\. Your current tab is still the one you were in: use switch_tab t2 to work in the new one/);
     expect((await driver.readPage()).note).toBeUndefined();
+  });
+
+  it("a new tab on a page Chrome keeps extensions out of is reported as such, not as one to read", async () => {
+    const { windowId, tabId } = await userWindow("https://x.test/compose");
+    await agent.prepare("current-tab");
+    evalResults.push(["snapshotPage", { url: "https://x.test/compose", title: "X", text: "What is happening?! Post your reply", elements: [{}, {}, {}], truncated: false }]);
+    const store = await chrome.tabs.create({ windowId, url: "https://chrome.google.com/u/2/webstore/devconsole/x", active: false });
+    await agent.adopt(store.id!, tabId);
+    const { note } = await driver.readPage();
+    expect(note).toMatch(/^A new tab opened from the page: t2 .*Chrome doesn't allow extensions to see or control it/);
+    expect(note).not.toMatch(/read_page, act and screenshot work there/);
   });
 
   it("about:blank is controllable", async () => {
@@ -428,13 +440,19 @@ describe("Driver", () => {
     });
   });
 
-  it("upload sets files on a file input", async () => {
+  it("upload sets files on a file input (found by object, so one inside a shadow root too)", async () => {
     evalResults.push(["type === \"file\"", "file"]);
+    const respond = chrome.debugger.respond;
+    chrome.debugger.respond = (method, params) => {
+      const p = params as { expression?: string; returnByValue?: boolean };
+      if (method === "Runtime.evaluate" && !p.returnByValue && p.expression?.includes('[data-noa-index=\\"4\\"]')) return { result: { objectId: "file-4" } };
+      return respond(method, params);
+    };
     expect(await driver.upload({ index: 4, paths: ["C:\\a.png"] })).toEqual({ ok: true });
     const cmd = chrome.debugger.commands.find((c) => c.method === "DOM.setFileInputFiles");
-    expect(cmd?.params).toEqual({ files: ["C:\\a.png"], nodeId: 42 });
-    const q = chrome.debugger.commands.find((c) => c.method === "DOM.querySelector");
-    expect(q?.params).toEqual({ nodeId: 1, selector: '[data-noa-index="4"]' });
+    expect(cmd?.params).toEqual({ files: ["C:\\a.png"], objectId: "file-4" });
+    expect(chrome.debugger.commands.some((c) => c.method === "Runtime.releaseObject")).toBe(true);
+    chrome.debugger.respond = respond;
     expect(chrome.debugger.commands.some((c) => c.method === "Input.dispatchDragEvent")).toBe(false);
 
     evalResults.length = 0;

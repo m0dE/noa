@@ -13,8 +13,12 @@ export function snapshotExpression(): string {
  */
 export function snapshotPage(marks: PageMarks, maxText: number, maxElements: number, maxOptions: number): PageSnapshot {
   var ATTR = marks.attr;
-  var old = document.querySelectorAll("[" + ATTR + "]");
+  var w = window as unknown as Record<string, Element[] | undefined>;
+  var old: Element[] = Array.prototype.slice.call(document.querySelectorAll("[" + ATTR + "]")).concat(w[marks.shadow] || []);
   for (var i = 0; i < old.length; i++) old[i]!.removeAttribute(ATTR);
+  // The numbered elements inside shadow roots, for the page functions that look a number up (page-input.ts).
+  var shadowMarked: Element[] = [];
+  Object.defineProperty(w, marks.shadow, { value: shadowMarked, configurable: true, writable: true, enumerable: false });
 
   var SELECTOR = [
     "a[href]",
@@ -44,14 +48,27 @@ export function snapshotPage(marks: PageMarks, maxText: number, maxElements: num
     return (s || "").replace(/\s+/g, " ").trim().slice(0, max);
   }
 
+  /** The parent, or for the top of a shadow root its host. */
+  function parentOf(e: Element): Element | null {
+    if (e.parentElement) return e.parentElement;
+    var root = e.getRootNode() as ShadowRoot;
+    return root && root.host ? root.host : null;
+  }
+
   function isVisible(el: Element): boolean {
     var rect = el.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return false;
     if (getComputedStyle(el).visibility === "hidden") return false;
-    for (var e: Element | null = el; e; e = e.parentElement) {
+    for (var e: Element | null = el; e; e = parentOf(e)) {
       if (getComputedStyle(e).display === "none") return false;
     }
     return true;
+  }
+
+  /** The element with this id in el's own document or shadow root, where its aria references point. */
+  function byId(el: Element, id: string): Element | null {
+    var root = el.getRootNode() as Document | ShadowRoot;
+    return root.getElementById ? root.getElementById(id) : document.getElementById(id);
   }
 
   function implicitRole(el: Element): string {
@@ -73,6 +90,7 @@ export function snapshotPage(marks: PageMarks, maxText: number, maxElements: num
       return "textbox";
     }
     if ((el as HTMLElement).isContentEditable) return "textbox";
+    if (tag === "tr") return "row";
     return "generic";
   }
 
@@ -91,7 +109,7 @@ export function snapshotPage(marks: PageMarks, maxText: number, maxElements: num
       var ids = (el.getAttribute("aria-errormessage") || el.getAttribute("aria-describedby") || "").split(/\s+/);
       var said = ids
         .map(function (id) {
-          var ref = id ? document.getElementById(id) : null;
+          var ref = id ? byId(el, id) : null;
           return ref ? ref.textContent || "" : "";
         })
         .join(" ");
@@ -116,7 +134,7 @@ export function snapshotPage(marks: PageMarks, maxText: number, maxElements: num
     if (labelledBy) {
       var parts: string[] = [];
       labelledBy.split(/\s+/).forEach(function (id) {
-        var ref = document.getElementById(id);
+        var ref = byId(el, id);
         if (ref) parts.push(ref.textContent || "");
       });
       var joined = clean(parts.join(" "), 120);
@@ -147,9 +165,48 @@ export function snapshotPage(marks: PageMarks, maxText: number, maxElements: num
     return "";
   }
 
+  /**
+   * Things a script made clickable without its HTML saying so: the outermost box styled cursor: pointer (a table row
+   * with a click handler, a card), that is not a control above, inside one, or only a wrapper around one. Labels are
+   * left out: their control is listed. Skipped on very large pages, where reading every node's style is too slow.
+   */
+  function scriptClickables(): Element[] {
+    var found: Element[] = [];
+    var all = document.body ? document.body.getElementsByTagName("*") : [];
+    if (all.length > 20000) return found;
+    for (var c = 0; c < all.length; c++) {
+      var cand = all[c]!;
+      if (/^(LABEL|OPTION|SCRIPT|STYLE|svg|path|g|use)$/.test(cand.tagName)) continue;
+      if (getComputedStyle(cand).cursor !== "pointer") continue;
+      var parent = cand.parentElement;
+      if (parent && getComputedStyle(parent).cursor === "pointer") continue;
+      if (cand.matches(SELECTOR) || (parent && parent.closest(SELECTOR))) continue;
+      var ownText = clean((cand as HTMLElement).innerText, 200);
+      if (!ownText) continue;
+      var control = cand.querySelector(SELECTOR) as HTMLElement | null;
+      if (control && clean(control.innerText, 200) === ownText) continue;
+      found.push(cand);
+    }
+    return found;
+  }
+
+  /**
+   * The controls in page order, with those inside open shadow roots where their host is (web components: a design
+   * system's text field keeps its <textarea> in one). Closed shadow roots cannot be read.
+   */
+  function controls(root: Document | ShadowRoot, extra: Element[], out: Element[]): Element[] {
+    var all = root.querySelectorAll("*");
+    for (var c = 0; c < all.length; c++) {
+      var e = all[c]!;
+      if (e.matches(SELECTOR) || extra.indexOf(e) >= 0) out.push(e);
+      if (e.shadowRoot) controls(e.shadowRoot, extra, out);
+    }
+    return out;
+  }
+
   var elements: PageSnapshot["elements"] = [];
   var truncated = false;
-  var nodes = document.querySelectorAll(SELECTOR);
+  var nodes = controls(document, scriptClickables(), []);
   for (var n = 0; n < nodes.length; n++) {
     var el = nodes[n]!;
     var tag = el.tagName.toLowerCase();
@@ -163,6 +220,7 @@ export function snapshotPage(marks: PageMarks, maxText: number, maxElements: num
     }
     var index = elements.length;
     el.setAttribute(ATTR, String(index));
+    if (el.getRootNode() !== document) shadowMarked.push(el);
     var rect = el.getBoundingClientRect();
     var info: PageSnapshot["elements"][number] = {
       index: index,

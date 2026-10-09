@@ -42,6 +42,13 @@ const EMAILS: Email[] = [
     when: "Yesterday",
     thread: [["Stripe <no-reply@stripe.com>", "Your payouts this week totaled $1,284.10. The next payout is scheduled for Monday."]],
   },
+  {
+    id: "18f3b",
+    from: "Neon",
+    subject: "Your Neon invoice for September 2026",
+    when: "Sep 30",
+    thread: [["Neon <billing@neon.tech>", "Invoice NEON-2026-09 for $170.39, billed to jaeyun@gmail.com. Paid automatically on October 1, 2026 with the card ending 4242. Manage your projects at https://console.neon.tech."]],
+  },
 ];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -51,11 +58,17 @@ export class FakeGmail {
   private links: { index: number; href: string }[] = [];
 
   /** The tab as the user sees it when they start (the run acts in it). */
-  static readonly start = { url: INBOX, title: "Inbox (3) - jaeyun@acme.io - Gmail" };
+  static readonly start = { url: INBOX, title: "Inbox (4) - jaeyun@acme.io - Gmail" };
 
   private title(): string {
+    if (this.onNeon()) return "Projects - Neon Console";
     const email = this.email();
     return email ? `${email.subject} - jaeyun@acme.io - Gmail` : FakeGmail.start.title;
+  }
+
+  /** The Neon console (the invoice's site): its projects and their usage this month. */
+  private onNeon(): boolean {
+    return /neon\.(tech|com)/.test(this.url);
   }
 
   private email(): Email | undefined {
@@ -71,7 +84,12 @@ export class FakeGmail {
       elements.push({ ...el, index, inViewport: true } as ElementInfo);
       if (href) this.links.push({ index, href });
     };
-    add({ tag: "a", role: "link", name: "Inbox 3", href: INBOX }, INBOX);
+    if (this.onNeon()) {
+      for (const n of ["noa-prod", "noa-staging"]) add({ tag: "a", role: "link", name: n });
+      const text = "Projects\nnoa-prod — aws-us-east-2 — compute 412 CU-hrs, storage 18.2 GB — $158.20 this month\nnoa-staging — aws-us-east-2 — compute 31 CU-hrs, storage 1.1 GB — $12.19 this month";
+      return { url: this.url, title: this.title(), text, elements, truncated: false };
+    }
+    add({ tag: "a", role: "link", name: "Inbox 4", href: INBOX }, INBOX);
     const email = this.email();
     let text: string;
     if (email) {

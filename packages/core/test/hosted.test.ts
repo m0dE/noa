@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { startApiAgentWith } from "../src/api-agent.js";
 import { HOSTED_AI_UNAVAILABLE, HOSTED_AI_UNAVAILABLE_CODE, LOW_CREDIT, OUT_OF_CREDIT } from "@noa/shared";
 import { OutOfCreditError } from "../src/api-errors.js";
-import { createJev } from "../src/jev.js";
+import { createJev, withoutCreditPause } from "../src/jev.js";
+import { createToolExecutor } from "../src/executor.js";
 import type { ApiAgentOptions } from "../src/types.js";
 import { FakeX } from "./fake-x.js";
 import { CONFIG, collect, fakeMessagesServer, noSleep, TASK_COMPLETE_REPLY as done, type FakeReply } from "./helpers.js";
@@ -139,5 +140,22 @@ describe("createJev through the Noa proxy", () => {
     const s = fakeMessagesServer([{ status: 500, body: { error: "boom" } }]);
     const jev = createJev("t", { fetch: s.fetchImpl, endpoint: "https://api.test/v1/ai/jev" });
     await expect(jev.decide({ goal: "g", snapshot })).rejects.toThrow("Jev HTTP 500: boom");
+  });
+});
+
+describe("Noa's cloud Jev on another AI (withoutCreditPause)", () => {
+  it("no credit does not pause the task: act leaves the step to the model, and Jev is not asked again", async () => {
+    const decide = vi.fn(async () => {
+      throw new OutOfCreditError(OUT_OF_CREDIT);
+    });
+    const ended: unknown[] = [];
+    const exec = createToolExecutor({ browser: new FakeX({ url: "https://x.com/home" }).caller(), jev: withoutCreditPause({ decide }), jevThreshold: 0.8, mediaPaths: [], onEvent: (e) => e.type === "task_end" && ended.push(e) });
+    const first = await exec.call("act", { steps: [{ goal: "click the Post button" }] });
+    const second = await exec.call("act", { steps: [{ goal: "click the Post button" }] });
+    expect(first.text).toMatch(/Jev is unavailable \(Noa's cloud Jev: /);
+    expect(second.text).toMatch(/Jev is unavailable/);
+    expect(first.text).not.toMatch(/Task paused/);
+    expect(ended).toEqual([]);
+    expect(decide).toHaveBeenCalledTimes(1);
   });
 });

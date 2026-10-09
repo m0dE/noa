@@ -183,7 +183,7 @@ export function installChromeStub(data) {
     },
     "account.signOut": () => {
       const a = data.state.account;
-      data.state = { ...data.state, account: { signedIn: false, signInConfigured: a.signInConfigured, apiBase: a.apiBase, dashboardUrl: a.dashboardUrl, billingUrl: a.billingUrl } };
+      data.state = { ...data.state, account: { signedIn: false, signInConfigured: a.signInConfigured, apiBase: a.apiBase, dashboardUrl: a.dashboardUrl, billingUrl: a.billingUrl, filesUrl: a.filesUrl } };
       return data.state;
     },
     "account.refresh": () => data.state,

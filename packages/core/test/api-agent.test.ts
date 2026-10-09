@@ -210,11 +210,11 @@ describe("startApiAgent", () => {
     expect(content[0].type).toBe("tool_result");
     // Never inside the tool result (untrusted page content): a user text block of its own.
     expect(content[0].content[0].text).not.toContain("use the draft text instead");
-    expect(content[1]).toEqual({ type: "text", text: 'The user just said: "use the draft text instead". Act on it now: a question or remark, answer it in a short reply before your next tool call (in the same message) and go on with the task; otherwise it changes the current task (keep doing what it does not change), or replaces or stops it if that is what it says.', cache_control: { type: "ephemeral" } });
+    expect(content[1]).toEqual({ type: "text", text: 'The user just said: "use the draft text instead". Act on it now: a question or remark, answer it with answer_user (at once when you know the answer, else right after the step that finds it out) and go on with the task; otherwise it changes the current task (keep doing what it does not change), or replaces or stops it if that is what it says.', cache_control: { type: "ephemeral" } });
     expect(r.events.some((e) => e.type === "user_message" && e.text === "use the draft text instead")).toBe(true);
   });
 
-  it("a question sent mid-task (\"can you speak Korean?\") is framed to be answered before the next browser call; the answer reaches the chat before that call runs", async () => {
+  it("a question sent mid-task (\"can you speak Korean?\") is framed to be answered with answer_user; the answer reaches the chat as that call, before the next browser call runs", async () => {
     const x = new FakeX({ url: "https://mail.test/u/0" });
     let session!: ReturnType<typeof start>["session"];
     const r = start(
@@ -225,19 +225,19 @@ describe("startApiAgent", () => {
           return msg(tool("act", { steps: [{ goal: "type the refund request", index: 1, text: "refund" }, { goal: "click send", index: 2 }] }));
         },
         // A model following the framing: the answer first, then the task goes on.
-        msg(text("Yes, I can speak Korean."), tool("read_page")),
+        msg(tool("answer_user", { text: "Yes, I can speak Korean." }), tool("read_page")),
         msg(tool("task_complete", { summary: "sent" })),
       ],
       { stream: false },
     );
     session = r.session;
     await session.done;
-    expect(lastUser(r.server.requests[1]!).content.at(-1)).toEqual({ type: "text", text: expect.stringContaining("a question or remark, answer it in a short reply before your next tool call"), cache_control: { type: "ephemeral" } });
-    const answer = r.events.findIndex((e) => e.type === "assistant_text" && e.text === "Yes, I can speak Korean.");
+    expect(lastUser(r.server.requests[1]!).content.at(-1)).toEqual({ type: "text", text: expect.stringContaining("a question or remark, answer it with answer_user"), cache_control: { type: "ephemeral" } });
+    const answer = r.events.findIndex((e) => e.type === "tool_call" && e.name === "answer_user" && (e.args as { text?: string }).text === "Yes, I can speak Korean.");
     const nextCall = r.events.findIndex((e) => e.type === "tool_call" && e.name === "read_page");
     expect(answer).toBeGreaterThan(-1);
     expect(nextCall).toBeGreaterThan(answer);
-    expect(r.server.requests[0]!.body.system.map((b: any) => b.text).join(" ")).toContain('A question or remark (e.g. "can you speak Korean?") is answered at once');
+    expect(r.server.requests[0]!.body.system.map((b: any) => b.text).join(" ")).toContain('A question or remark (e.g. "can you speak Korean?") is answered with answer_user');
   });
 
   it("a user message sent while the model writes its final answer keeps the turn going: task_complete is refused and the message follows", async () => {

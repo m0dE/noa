@@ -7,13 +7,15 @@
  */
 import { randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import {
   APPROVAL_TIMEOUT_MS,
   DEFAULT_SETTINGS,
   delay,
   errorMessage,
+  RpcError,
   RpcPeer,
+  SESSION_HEADER,
   toolsFor,
   type AgentEvent,
   type BrowserMethods,
@@ -23,7 +25,7 @@ import {
   type HelperNotifications,
   type RpcMessage,
 } from "@noa/shared";
-import { createJev, createToolExecutor, type JevLike } from "@noa/core";
+import { createJev, createToolExecutor, withoutCreditPause, type JevLike } from "@noa/core";
 import { HELPER_VERSION, loadConfig } from "./config.js";
 import { LiveLog, redirectConsole, summarize } from "./logger.js";
 import { encodeNativeMessage, FrameTooLargeError, MAX_NATIVE_OUT, NativeDecoder } from "./native-framing.js";
@@ -38,6 +40,7 @@ import { ScriptedBrain } from "./brains/scripted.js";
 import type { Brain } from "./brains/brain.js";
 import { SelfTestCache } from "./self-test.js";
 import { runMemorySummarize } from "./memory-summarize.js";
+import { listFolder, readChunk } from "./noa-files.js";
 import { pruneRuns, readRunLog } from "./run-log.js";
 import { removeHelperFile, writeHelperFile } from "./helper-file.js";
 
@@ -70,7 +73,9 @@ async function main(): Promise<void> {
   const notify = <K extends keyof HelperNotifications>(method: K, params: HelperNotifications[K]) => peer.notify(method, params);
   const browser = rpcBrowser(peer);
 
-  const makeJev = (key: string): JevLike => createJev(key);
+  // Noa's cloud Jev is billed to the account, not this run's AI: no credit turns it off instead of pausing the task.
+  const makeJev = (key: string, cloud?: { endpoint: string; sessionId: string }): JevLike =>
+    cloud ? withoutCreditPause(createJev(key, { endpoint: cloud.endpoint, headers: { [SESSION_HEADER]: cloud.sessionId } })) : createJev(key);
   const envJev = config.typesafeApiKey ? makeJev(config.typesafeApiKey) : null;
   const pipePath = pipePathFor(process.pid);
   // The pipe's name is predictable: only calls carrying this token are answered (the MCP servers this helper starts get it, --attach reads helper.json).
@@ -199,6 +204,17 @@ async function main(): Promise<void> {
   });
   peer.handle("helper.getLog", ({ lines }) => ({ text: live.tail(lines) }));
   peer.handle("helper.runLog", ({ path, maxBytes }) => readRunLog(config.runsDir, path, maxBytes));
+  // list_files: the extension knows where the Noa folder is, but cannot list a folder.
+  peer.handle("files.list", ({ folder, search }) => {
+    if (!isAbsolute(folder)) throw new RpcError("folder must be an absolute path", "invalid_params");
+    return listFolder(folder, search ? { search } : {});
+  });
+  // save_file: the extension cannot read a file on this computer.
+  peer.handle("files.read", ({ path, offset, length }) => {
+    if (!isAbsolute(path)) throw new RpcError("path must be absolute", "invalid_params");
+    if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(length) || length < 0) throw new RpcError("offset and length must be whole numbers", "invalid_params");
+    return readChunk(path, offset, length);
+  });
   // The background memory writer on Claude Code: run in the helper's runs folder, so no project's files are read.
   peer.handle("memory.summarize", async ({ system, prompt }) => {
     if (!claudePath) throw new Error(scripted ? "The scripted brain has no memory writer" : CLAUDE_NOT_FOUND);

@@ -58,7 +58,7 @@ function setup() {
     useThisTab: async () => (log.push("useThisTab"), "Moved: you now work in Recipes (example.com)."),
     failed: (f) => void log.push(`failed:${(f as { kind: string }).kind}`),
   };
-  const player = { play: vi.fn(), stop: vi.fn(() => ({ itemId: "a1", playedMs: 800 })), close: vi.fn(), playing: false, pause: vi.fn(() => false), resume: vi.fn(), level: () => 0 };
+  const player = { play: vi.fn(), stop: vi.fn(() => ({ itemId: "a1", playedMs: 800 })), close: vi.fn(), playing: false, pause: vi.fn(() => false), resume: vi.fn(), level: () => 0, quietMs: 0 };
   const engine = new RealtimeEngine({
     ticket: async () => ({ url: "wss://api.test/v1/ai/realtime", token: "tok" }),
     createSource: () => mic,

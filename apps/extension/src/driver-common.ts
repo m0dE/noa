@@ -33,16 +33,20 @@ export function assertOpenable(url: string): void {
 /**
  * What page functions need from here: they run in the page, serialized with
  * Function.prototype.toString, so they cannot import it and get it as an
- * argument instead. attr: read_page's element numbers; notFound: the error
- * for a number the page no longer has ("#" is the number).
+ * argument instead. attr: read_page's element numbers; shadow: the window
+ * property listing the numbered elements inside shadow roots, which
+ * document.querySelector cannot reach; notFound: the error for a number the
+ * page no longer has ("#" is the number).
  */
 export interface PageMarks {
   attr: string;
+  shadow: string;
   notFound: string;
 }
 
 export const PAGE_MARKS: PageMarks = {
   attr: "data-noa-index",
+  shadow: "__noaShadowMarks",
   notFound: "element # not found; call read_page again",
 };
 
@@ -53,6 +57,12 @@ export function notFound(index: number): Error {
 /** Selector for the element with this number from the last read_page. */
 export function indexSelector(index: number): string {
   return `[${PAGE_MARKS.attr}="${Math.trunc(index)}"]`;
+}
+
+/** A page expression for the element with this number from the last read_page, inside a shadow root too; null when gone. */
+export function indexedElement(index: number): string {
+  const n = JSON.stringify(String(Math.trunc(index)));
+  return `(document.querySelector(${JSON.stringify(indexSelector(index))}) || (window[${JSON.stringify(PAGE_MARKS.shadow)}] || []).find((m) => m.isConnected && m.getAttribute(${JSON.stringify(PAGE_MARKS.attr)}) === ${n}) || null)`;
 }
 
 /** The wheel of a scroll: `amount` times a viewport share in its direction. */

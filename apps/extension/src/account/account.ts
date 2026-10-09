@@ -9,7 +9,7 @@
  * URL setting changes, the extension is signed out of it. An earlier default
  * address of the same server (currentAccountApiBase) is not a change.
  */
-import { type CloudFolder, currentAccountApiBase, errorMessage, type ExtensionSettings, type GenerateImageRequest, type GenerateImageResponse, type MeBillingResponse, type SignInCodeResponse, type SpeakRequest, type TranscribeResponse, type VoiceEnginesResponse } from "@noa/shared";
+import { type CloudFileList, type CloudFolder, currentAccountApiBase, errorMessage, type ExtensionSettings, type GenerateImageRequest, type GenerateImageResponse, type MeBillingResponse, type SignInCodeResponse, type SpeakRequest, type TranscribeResponse, type VoiceEnginesResponse } from "@noa/shared";
 import { ApiClient } from "../api-client.js";
 import type { StorageLike } from "../engine/kv.js";
 import type { StoredLocalTask } from "../engine/local-task-rules.js";
@@ -176,6 +176,7 @@ export class AccountService {
       apiBase: base,
       dashboardUrl: dashboardUrl(base),
       billingUrl: dashboardUrl(base, "billing"),
+      filesUrl: dashboardUrl(base, "files"),
     };
     const s = this.session();
     if (!s) return view;
@@ -231,6 +232,18 @@ export class AccountService {
     if (!this.todoAllowed()) return false;
     await (await this.api()).uploadFile(blob, filename, folder);
     return true;
+  }
+
+  /** The account's cloud files (GET /v1/files), or null when signed out. Throws ApiRequestError. */
+  async cloudFiles(): Promise<CloudFileList | null> {
+    await this.load();
+    if (!this.session()) return null;
+    return (await this.api()).listFiles();
+  }
+
+  /** A cloud file's download: its URL and the session's Authorization. Throws NotSignedInError. */
+  async cloudFileDownload(id: string): Promise<{ url: string; headers: { name: string; value: string }[] }> {
+    return (await this.api()).fileDownload(id);
   }
 
   /** Hands-free voice: the engines and their prices (public; the account server's answer). */

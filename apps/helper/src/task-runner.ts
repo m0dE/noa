@@ -101,7 +101,8 @@ export interface TaskRunnerDeps {
   browser: BrowserCaller;
   /** Jev key from the helper environment (TYPESAFE_API_KEY), used when the run config has none. */
   envJevKey: string | null;
-  makeJev: (apiKey: string) => JevLike;
+  /** A Jev client: TypeSafe's with a key, or (cloud) Noa's cloud Jev for the session, with the account's token. */
+  makeJev: (apiKey: string, cloud?: { endpoint: string; sessionId: string }) => JevLike;
   makeBrain: () => Brain;
   /** helper.event notifications. */
   notify: (sessionId: string, event: AgentEvent) => void;
@@ -210,7 +211,7 @@ export class TaskRunner {
     const brain = this.deps.makeBrain();
     if (!brain.warm) return false;
     const model = config.model?.trim() || null;
-    const jev = this.jevKey(config) !== null;
+    const jev = this.jevSource(config) !== null;
     const images = config.imageGeneration !== false;
     const thinking = reasoningOf(config).level === "thorough";
     const current = this.spare;
@@ -249,10 +250,14 @@ export class TaskRunner {
     this.spare = null;
   }
 
-  /** The Jev key a run with this config uses, or null (Jev off). */
-  private jevKey(config: RunConfig): string | null {
-    const key = config.jevApiKey?.trim() || this.deps.envJevKey;
-    return config.jevEnabled && key ? key : null;
+  /** The Jev a run with this config uses: the extension's key, else the helper's own, else Noa's cloud Jev; null: Jev off. */
+  private jevSource(config: RunConfig): { kind: "key" | "helper"; key: string } | { kind: "cloud"; key: string; endpoint: string } | null {
+    if (!config.jevEnabled) return null;
+    const key = config.jevApiKey?.trim();
+    if (key) return { kind: "key", key };
+    if (this.deps.envJevKey) return { kind: "helper", key: this.deps.envJevKey };
+    if (config.jevCloud) return { kind: "cloud", key: config.jevCloud.token, endpoint: config.jevCloud.endpoint };
+    return null;
   }
 
   /**
@@ -295,8 +300,8 @@ export class TaskRunner {
     if (previous) this.retire(previous, "replaced by a new run");
     this.makeRoom();
 
-    const jevKey = this.jevKey(config);
-    const jev = jevKey ? this.deps.makeJev(jevKey) : null;
+    const jevSource = this.jevSource(config);
+    const jev = !jevSource ? null : jevSource.kind === "cloud" ? this.deps.makeJev(jevSource.key, { endpoint: jevSource.endpoint, sessionId }) : this.deps.makeJev(jevSource.key);
     // An agent started ahead (prewarm) comes with its run folder; its tool calls carry its own task id.
     const images = config.imageGeneration !== false;
     const spare = this.takeSpare(jev !== null, images);
@@ -354,7 +359,7 @@ export class TaskRunner {
     try {
       const { mcpConfigPath, readDir, allowedTools, systemPrompt } = this.sessionFiles(runDir, toolTaskId, jev !== null, s.persistent, images);
       // The run folder, the MCP config and the prompts, before the agent starts.
-      s.emit({ type: "trace", trace: { t: setup.t, ms: setup.elapsed(), cat: "brain", name: "helper.setup", src: "helper", data: { jev: jev !== null, media: mediaPaths.length, prewarmed: spare !== null } } });
+      s.emit({ type: "trace", trace: { t: setup.t, ms: setup.elapsed(), cat: "brain", name: "helper.setup", src: "helper", data: { jev: jev !== null, ...(jevSource ? { jevSource: jevSource.kind } : {}), media: mediaPaths.length, prewarmed: spare !== null } } });
       s.brainDone = brain
         .run({
           taskId: toolTaskId,

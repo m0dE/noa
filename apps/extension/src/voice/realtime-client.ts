@@ -52,7 +52,7 @@ import {
 } from "@noa/shared";
 import { bytesToBase64 } from "../base64.js";
 import { REALTIME_UNAVAILABLE_TEXT } from "./engine-choice.js";
-import { ECHO_WINDOW_MS, echoesSpoken, echoesUpdate, floor, isNoise, repeatsRequest, requestKind, requestKindOf, speechTurnOf, type ForwardedRequest, type ReplyKind, type SpeechTurn, type SpokenKind } from "./narrator-policy.js";
+import { ECHO_TAIL_MS, ECHO_WINDOW_MS, echoesSpoken, echoesUpdate, floor, isNoise, repeatsRequest, requestKind, type ForwardedRequest, type ReplyKind, type SpokenKind } from "./narrator-policy.js";
 import { transcriptFit, type TranscriptFit } from "./voice-language.js";
 
 /** PCM16 mono at this rate, both ways ("audio/pcm" is 24 kHz). */
@@ -71,8 +71,7 @@ const SERVER_INTERRUPTS_REPLY = false;
 const AWAIT_REPLY_MS = 5_000;
 /**
  * A reply to the user's speech is held (its audio and words not played or shown) until their words are in, and then
- * played (small talk), or dropped (a request: only a tool answers it, and when the reply answered it by itself the
- * user's words go to the agent, forwardWords; noise). The server still starts the reply the moment their turn ends
+ * played (decideHeld), or dropped (noise, echo, other people). The server still starts the reply the moment their turn ends
  * (create_response): a request's send_to_agent is never waited for, and a spoken reply's first audio (550-850 ms after the turn) mostly
  * comes after the words (median 528 ms, 385-763 ms, once 1.1 s in 25 turns), so holding adds nothing to most turns,
  * where waiting for the words before making any reply (create_response off) would add ~530 ms to every turn,
@@ -460,6 +459,8 @@ export interface RealtimeHandlers {
   onClose?(failure: RealtimeFailure | null): void;
   /** The narrator's audio is still playing here (a new line waits for it). */
   playing?(): boolean;
+  /** How long the narrator's audio has been silent here, in ms (0 while it sounds; unknown: it may still be heard). */
+  quietMs?(): number;
   /** The reply being heard answers noise (an empty transcript of a short sound): its audio must stop. */
   onNoise?(): void;
   /**
@@ -518,7 +519,7 @@ interface Speak {
   line: string | null;
 }
 
-/** Input items whose kind of turn (speechTurnOf) is remembered until their reply starts. */
+/** Input items remembered (their words being in, their reply answered, ...) at most. */
 const MAX_TURN_KINDS = 16;
 
 export interface RealtimeClientOptions {
@@ -538,9 +539,6 @@ export interface RealtimeClientOptions {
 
 /** What the transcription made of a user's turn. */
 type TurnWords = { fit: TranscriptFit | "noise" | "echo" | "failed"; text: string };
-
-/** The kind of a user's turn by its words: small talk or a request (speechTurnOf), or unclear (the narrator's reading counts). */
-type TurnKind = SpeechTurn | "unclear";
 
 /** Update notes remembered, to tell a send_to_agent that only passes one on (echoesUpdate). */
 const MAX_REMEMBERED_NOTES = 12;
@@ -592,8 +590,8 @@ export class RealtimeClient {
   private noiseReply = false;
   /** Input items that were noise: their reply is cancelled when it starts. */
   private readonly noise = new Set<string>();
-  /** What each input item's words make its turn (speechTurnOf; unclear or failed transcription: "unclear"). */
-  private readonly turnKinds = new Map<string, TurnKind>();
+  /** Input items whose words are in (clear, unclear or failed): their held reply can be decided. */
+  private readonly wordsKnown = new Set<string>();
   /** What each input item's transcription was (for send_to_agent), and the calls waiting for it. */
   private readonly turnWords = new Map<string, TurnWords>();
   private readonly wordsWaiters = new Map<string, ((w: TurnWords | null) => void)[]>();
@@ -603,6 +601,8 @@ export class RealtimeClient {
   private readonly notes: string[] = [];
   /** What the narrator said aloud lately, with when (a transcript of it is the microphone hearing the speaker). */
   private readonly saidAloud: { text: string; at: number }[] = [];
+  /** Input items whose speech started while the narrator could be heard (ECHO_TAIL_MS): only they may be its echo. */
+  private readonly mayEcho = new Set<string>();
   /** The agent is working on a task of the chat (small talk then gets a short reply). */
   private agentWorking = false;
   /** How the reply being made again is asked for (WORKING_SMALL_TALK_RESPONSE). */
@@ -611,7 +611,7 @@ export class RealtimeClient {
   private held: Held | null = null;
   /** The input whose reply is being cancelled to be made again once it is done (redo). */
   private redoInput: string | null = null;
-  /** The last input whose reply was made again or passed on (forwardWords): once per turn. */
+  /** The last input whose reply was made again (redo): once per turn. */
   private redoneInput: string | null = null;
   /** The audio item of a held reply let go while still being made: truncated to nothing once it is done. */
   private unheardItem: string | null = null;
@@ -1076,9 +1076,13 @@ export class RealtimeClient {
             this.onNoiseInput(id);
             break;
           }
-          // Speech that started over the narrator: even one word of what it says is the speaker heard back.
+          // Speech that started over the narrator: even one word of what it says is the speaker heard back. Speech that
+          // started once it had long been silent is the user's, whatever its words.
           const over = this.talkOver?.inputId === id;
-          if (over ? echoesSpoken(text, [...this.recentlySaid(), ...(this.responding ? [this.narratorText] : [])], 1) : echoesSpoken(text, this.recentlySaid())) {
+          const echo = over
+            ? echoesSpoken(text, [...this.recentlySaid(), ...(this.responding ? [this.narratorText] : [])], 1)
+            : this.mayEcho.has(id) && echoesSpoken(text, this.recentlySaid());
+          if (echo) {
             // The microphone heard the narrator (its line, a result said aloud), not the user: like noise.
             this.traceWords(id, text, ev.usage, false, false, "echo");
             this.trace({ t: Date.now(), cat: "voice", name: "voice.echo", data: { chars: text.length } }, id);
@@ -1102,12 +1106,12 @@ export class RealtimeClient {
             // Not the user's words as said: the narrator's own reading of the audio counts, not these words.
             this.trace({ t: Date.now(), cat: "voice", name: "voice.unclear", data: { chars: text.length } }, id);
             this.heardWords(id, text);
-            this.wordsIn(id, "unclear");
+            this.wordsIn(id);
             break;
           }
           this.clearWordsSinceForward = true;
           this.heardWords(id, text);
-          this.wordsIn(id, speechTurnOf(text));
+          this.wordsIn(id);
         }
         break;
       case "conversation.item.input_audio_transcription.failed":
@@ -1117,7 +1121,7 @@ export class RealtimeClient {
           this.settleWords(str("item_id"), { fit: "failed", text: "" });
           this.talkedOver(str("item_id"), true);
           // Words unknown: the narrator's own reading counts (its reply is heard, as before holding).
-          this.wordsIn(str("item_id"), "unclear");
+          this.wordsIn(str("item_id"));
         }
         break;
       case "response.output_audio_transcript.delta":
@@ -1149,6 +1153,8 @@ export class RealtimeClient {
         const hearing = playing || (this.responding && this.spoke && !this.replyStale && !this.held);
         // A reply held for their last words is talked over before it was heard.
         this.dropHeld();
+        // Started while the narrator could be heard: it may be the speaker heard back (else it is the user's).
+        if (str("item_id") && (playing || (h.quietMs?.() ?? 0) < ECHO_TAIL_MS)) this.remember(this.mayEcho, str("item_id"));
         if (hearing && !this.talkOver && str("item_id")) this.talkOver = { inputId: str("item_id"), reply: this.responding && !this.replyStale ? this.responseId : null, timer: null, text: null };
         else if (this.responding && !this.talkOver) this.bargeIn();
         this.vadTime(str("item_id"), "start", ev.audio_start_ms);
@@ -1402,9 +1408,8 @@ export class RealtimeClient {
   }
 
   /** The user's words of input `inputId` are in: what they make the turn decides what its reply may do. */
-  private wordsIn(inputId: string, turn: TurnKind): void {
-    this.turnKinds.set(inputId, turn);
-    if (this.turnKinds.size > MAX_TURN_KINDS) this.turnKinds.delete(this.turnKinds.keys().next().value!);
+  private wordsIn(inputId: string): void {
+    this.remember(this.wordsKnown, inputId);
     if (this.held?.inputId === inputId) this.decideHeld();
   }
 
@@ -1416,33 +1421,24 @@ export class RealtimeClient {
   }
 
   /**
-   * Small talk: the reply is heard. A request: only a tool answers it, and nothing the reply says is heard (the
-   * narrator's own notes are not the truth about what the agent did or knows; its acknowledgement is the out-of-band
-   * one, ackResponse): a reply that calls a tool goes on unheard; one that speaks instead is let go, and the user's
-   * words go to the agent (forwardWords).
+   * Once the user's words are in (they were not echo, noise or other people), the narrator's own choice stands: a
+   * request goes through its tool call, and a reply without one is its answer to small talk, heard. Its reading was
+   * right where a list of small-talk phrases was not (measured live, test/manual/realtime-forward.live.ts
+   * NOA_LIVE_SCENARIO=turns: with the phrases deciding, 10 of 31 turns were wrong, small talk in Spanish, French and
+   * German and "Thanks, that's great." sent to the agent; with the narrator deciding, 0 of 31). Nothing a reply that
+   * calls a tool says is heard, its acknowledgement is ours (ackResponse): the narrator's own notes are not the truth
+   * about what the agent did or knows (live, 2026-09-27: a made-up answer, then the call). So a reply is heard only
+   * once it is done without a call; while the agent works, a spoken one is made again, capped (a few words at most).
    * Words not in yet: it waits, unless it only called a tool (nothing to hold: its acknowledgement is not delayed).
    */
   private decideHeld(): void {
     const h = this.held;
     if (!h) return;
     const said = h.audio.length > 0 || h.text !== "";
-    const turn = this.turnKinds.get(h.inputId);
-    if (!turn) {
-      if (h.called && !said) this.releaseHeld();
-      return;
-    }
-    // Unclear words: the narrator's own reading of the audio decides (its reply is heard, its tool calls stand).
-    if (turn === "unclear") return this.releaseHeld();
-    if (turn === "small_talk") {
-      // While the agent works, a few words at most: a longer reply is made again, capped.
-      if (this.agentWorking && !h.called && this.redoneInput !== h.inputId && (said || h.done)) return this.redo(h, workingSmallTalkResponse(this.opts.language));
-      if (this.agentWorking && !h.called && this.redoneInput !== h.inputId) return;
-      return this.releaseHeld();
-    }
-    if (h.called || this.redoneInput === h.inputId) return this.dropHeld();
-    if (said) return this.forwardWords(h);
-    // Silent so far: it may still call a tool; done without one, there is nothing to hear.
-    if (h.done) this.dropHeld();
+    if (h.called) return said ? this.dropHeld() : this.releaseHeld();
+    if (!this.wordsKnown.has(h.inputId) || !h.done) return;
+    if (said && this.agentWorking && this.redoneInput !== h.inputId) return this.redo(h, workingSmallTalkResponse(this.opts.language));
+    this.releaseHeld();
   }
 
   private releaseHeld(): void {
@@ -1487,30 +1483,6 @@ export class RealtimeClient {
     this.replyStale = true;
     this.redoInput = h.inputId;
     this.cancelReply();
-  }
-
-  /**
-   * The reply to a request answered it by itself (it spoke, calling no tool): it is let go (cancelled if still being
-   * made), and the user's words go to the agent as they said them, as the narrator's own send_to_agent call. The
-   * reply is not made again with a tool call required: gpt-realtime-2.1 then wrote empty messages instead, 128 of them
-   * in 18 s, in about half the live runs, and the request never went (measured 2026-09-30, "Hey, how you doing?").
-   */
-  private forwardWords(h: Held): void {
-    this.redoneInput = h.inputId;
-    this.dropHeld(false);
-    if (!h.done && this.responding && this.replyInput === h.inputId) {
-      this.replyStale = true;
-      this.cancelReply();
-    }
-    const words = this.turnWords.get(h.inputId)?.text.trim() ?? "";
-    if (words) {
-      const callId = `noa_${h.inputId}`.slice(0, 32);
-      const args = JSON.stringify({ text: words, kind: requestKindOf(words) });
-      this.send({ type: "conversation.item.create", item: { type: "function_call", call_id: callId, name: "send_to_agent", arguments: args } });
-      void this.runTool(callId, "send_to_agent", args, h.inputId, "speech");
-    }
-    // Its turn is over once the reply is (and the call has run).
-    if (h.done) this.turnDone(h.inputId);
   }
 
   /** The reply to input `inputId` again (redoResponse); not when the user has since spoken again (theirs answers). */

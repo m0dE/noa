@@ -108,7 +108,8 @@ export const flush = () => new Promise<void>((r) => setImmediate(r));
 
 /**
  * The Realtime engine's player as the user hears it (`heard`): paused, the audio that comes is kept, and heard only on
- * resume(); stop() drops it. `playing`: set by a test (the narrator's audio still playing here).
+ * resume(); stop() drops it. `playing`: set by a test (the narrator's audio still playing here); `quietMs`: how long
+ * it has been silent (0: it may still be heard, as when the tests began).
  */
 export function fakePlayer() {
   const p = {
@@ -116,6 +117,7 @@ export function fakePlayer() {
     kept: [] as string[],
     paused: false,
     playing: false,
+    quietMs: 0,
     play: vi.fn((b64: string, _itemId: string) => void (p.paused ? p.kept.push(b64) : p.heard.push(b64))),
     pause: vi.fn(() => void (p.paused = true)),
     resume: vi.fn(() => {

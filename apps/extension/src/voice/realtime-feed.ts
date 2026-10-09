@@ -9,10 +9,10 @@
  * (sent()), the agent takes it (a new turn, or its voice message into the running one) and reads it (a new turn at
  * once; a message into a running turn when the brain says so, isMessageRead, or when the turn ends, which it cannot
  * before). What the agent wrote before, an old turn's end or a step's text written before the message was read, stays
- * in the chat and is not said. Only milestones (milestones.ts), the agent's answer or spoken line (spoken-line.ts),
- * errors and approvals are said: never what the agent types or what pages say. Pure.
+ * in the chat and is not said. Only milestones (milestones.ts), the agent's answer (answer_user) or spoken line
+ * (spoken-line.ts), errors and approvals are said: never what the agent types or what pages say. Pure.
  */
-import { isMessageRead, type AgentEvent } from "@noa/shared";
+import { ANSWER_TOOL, isMessageRead, type AgentEvent } from "@noa/shared";
 import { freshMemory, narrationOf, type NarrationMemory, type SpokenKind } from "./narrator-policy.js";
 import { ProgressPacer } from "./milestones.js";
 import { approvalLine } from "./approval-voice.js";
@@ -31,32 +31,6 @@ export type FeedOutput = { say: FeedLine } | { status: string };
 
 /** A request's words as compared with its voice message (the runner sends them trimmed). */
 const words = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
-
-/**
- * What the agent says it does next rather than an answer: "Let me open Dana's email to see…", "I'll check the inbox",
- * "I need to find it first". Written after it read a question, it came before the answer (live, Claude Code).
- */
-const STEP_NARRATION =
-  /(?:^\s*(?:let's|i have to|i'm (?:now )?(?:checking|opening|looking|going)|now i|first,? i|next,? i|(?:checking|opening|looking)\b)|\b(?:let me|i'll|i will|i'm going to|i am going to|i need to)\b)/i;
-export const stepNarration = (text: string): boolean => STEP_NARRATION.test(text);
-
-/**
- * The agent's text without its sentences about what it does next ("The latest email is from Dana Kim. Let me open it
- * to see the agenda." is only its first sentence); "" when nothing else is left.
- */
-export function withoutStepNarration(text: string): string {
-  const sentences = text.replace(/\s+/g, " ").trim().split(/(?<=[.!?]["'”’)\]*]*)\s+/);
-  return sentences
-    .map((x) => x.trim())
-    .filter((x) => x && !stepNarration(x))
-    .join(" ");
-}
-
-/** How long an answer written mid-turn waits for the turn's end, which then says it instead. */
-export const ANSWER_HOLD_MS = 5_000;
-
-/** The turn's line covers the answer held mid-turn when at least this share of the answer's words are in it. */
-export const ANSWER_COVERED_MIN = 0.6;
 
 /** A line with at least this share of its words in lines already said for the request is not said again. */
 export const ALREADY_SAID_MIN = 0.8;
@@ -83,8 +57,6 @@ export class NarratorFeed {
   private read = true;
   /** For the status. */
   private request: string | null = null;
-  /** The agent's answer to a question asked while it works, held ANSWER_HOLD_MS (its turn's end may say it better). */
-  private pendingAnswer: { text: string; at: number } | null = null;
   /** The lines of news said for the latest request (a line whose words were all said already is not said again). */
   private saidLines: string[] = [];
   private step: string | null = null;
@@ -92,8 +64,8 @@ export class NarratorFeed {
   private approval: string | null = null;
 
   /**
-   * A request went to the agent at `now`: `question`, asked while it works (its answer is its next words once it
-   * read it), else an instruction or a new turn (its end says the result). What is said about it starts over.
+   * A request went to the agent at `now`: `question`, asked while it works (it answers with answer_user once it read
+   * it), else an instruction or a new turn (its end says the result). What is said about it starts over.
    */
   sent(text: string, question: boolean, now: number, agentWorking = question): FeedOutput[] {
     this.sentTexts.push(words(text));
@@ -109,9 +81,7 @@ export class NarratorFeed {
     this.request = clip(text, MAX_STATUS_TEXT);
     this.asked = null;
     this.saidLines = [];
-    this.pendingAnswer = null;
-    if (question) this.memory.awaitingAnswer = true;
-    else {
+    if (!question) {
       this.memory = freshMemory(now);
       this.progress.reset(now);
     }
@@ -126,26 +96,13 @@ export class NarratorFeed {
   /** While the agent works: "Still …" after a long silence, else nothing. */
   tick(now: number): FeedOutput[] {
     if (!this.fresh()) return [];
-    // The agent goes on working after its answer: the answer is said now.
-    if (this.pendingAnswer && now - this.pendingAnswer.at >= ANSWER_HOLD_MS) return this.sayAnswer(now);
     const line = this.progress.stillWorking(now);
     return line ? [{ say: { kind: "milestone", line } }] : [];
   }
 
-  /** The answer held (pendingAnswer), said once. */
-  private sayAnswer(now: number): FeedOutput[] {
-    const held = this.pendingAnswer;
-    this.pendingAnswer = null;
-    return held ? this.sayHeld(held, now) : [];
-  }
-
-  private sayHeld(held: { text: string }, now: number): FeedOutput[] {
-    const memory = { ...this.memory, awaitingAnswer: true };
-    const spoken = narrationOf({ type: "assistant_text", text: held.text }, memory, now);
-    this.memory.lastLine = memory.lastLine;
-    this.memory.lastSpokenAt = memory.lastSpokenAt;
-    // Answered: what it writes next goes on with the task.
-    this.memory.awaitingAnswer = false;
+  /** The agent's answer_user call, said once. */
+  private sayAnswer(ev: AgentEvent, now: number): FeedOutput[] {
+    const spoken = narrationOf(ev, this.memory, now);
     if (!spoken || this.alreadySaid(spoken.line)) return [];
     this.saidLines.push(spoken.line);
     this.progress.said(now);
@@ -189,34 +146,17 @@ export class NarratorFeed {
         this.approval = null;
         this.step = null;
         const fresh = this.fresh();
-        const held = fresh ? this.pendingAnswer : null;
-        this.pendingAnswer = null;
         const spoken = narrationOf(ev, this.memory, now);
-        // The answer held mid-turn is said first unless the turn's line covers it (live: Claude's line mostly said
-        // both, whole; a line about the task alone would have lost the answer).
-        const answer = held && !(spoken?.kind === "result" && containedWordShare(held.text, spoken.line) >= ANSWER_COVERED_MIN) ? this.sayHeld(held, now) : [];
-        // The answer said is the turn's end: no bare "Done." after it.
-        if (answer.length && !ev.spoken?.trim() && ev.outcome === "done") return [...answer, this.status()];
         // Its answer said already mid-turn, in other words (live: the same answer twice, 10 s apart).
-        if (!fresh || !spoken || (spoken.kind === "result" && this.alreadySaid(spoken.line))) return [...answer, this.status()];
+        if (!fresh || !spoken || (spoken.kind === "result" && this.alreadySaid(spoken.line))) return [this.status()];
         if (spoken.kind === "result") this.saidLines.push(spoken.line);
         this.progress.said(now);
         if (spoken.kind === "question") this.asked = spoken.line;
-        return [...answer, { say: { kind: spoken.kind, line: spoken.line } }, this.status()];
-      }
-      case "assistant_text": {
-        // Its answer to a question asked while it works: only words written after it read the question, and not
-        // what it says it does next ("Let me open her email to see…": live with Claude Code, said as the answer).
-        // The first such words are its answer (it is told to answer before its next tool call; what it writes after
-        // goes on with the task: live, a step's "Reading it now." took the answer's place). Held ANSWER_HOLD_MS: the
-        // turn's end mostly comes within seconds and says it whole (live, Claude Code: the words mid-turn were often
-        // half an answer, then the end said it again).
-        if (!this.memory.awaitingAnswer || !this.fresh() || this.pendingAnswer) return [];
-        const answer = withoutStepNarration(ev.text);
-        if (answer) this.pendingAnswer = { text: answer, at: now };
-        return [];
+        return [{ say: { kind: spoken.kind, line: spoken.line } }, this.status()];
       }
       case "tool_call": {
+        // Its answer to a message the user sent while it works (answer_user): said at once, if written knowing it.
+        if (ev.name === ANSWER_TOOL) return this.fresh() ? this.sayAnswer(ev, now) : [];
         const line = this.progress.step(ev, now);
         if (!line) return [];
         this.step = line;

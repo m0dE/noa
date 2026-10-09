@@ -1,11 +1,14 @@
 /**
- * The side panel's header: "Noa", the jobs view's tabs (job-list.ts), the Noa folder button (opens Downloads/Noa
- * in the system's file manager) and the account menu (Log in, Settings, Plan & billing, Sign out), and under either
+ * The side panel's header: "Noa", the jobs view's tabs (job-list.ts), the files button (signed in on a plan with
+ * cloud files: the dashboard's Files page; otherwise the Noa folder, Downloads/Noa, in the system's file manager) and
+ * the account menu (Log in, Settings, Plan & billing, the Noa folder on this computer, Sign out), and under either
  * view a one-line problem strip that shows only while something stops jobs for the whole account (no AI set up,
  * out of usage credit, a plan without the TODO list) with the button that fixes it. Jobs are paused one by one
  * (their rows and menus), never all at once from here. The brain in use is the brand's tooltip.
  */
-import { uiRequest, type UiState } from "../ui-protocol.js";
+import { planAllows } from "@noa/shared";
+import { uiRequest, type AccountView, type UiState } from "../ui-protocol.js";
+import { openCloudFiles } from "../ui/billing.js";
 import { createAccountMenu } from "../ui/account-menu.js";
 import { $, busy } from "../ui/dom.js";
 import type { ErrorFixKind } from "./error-help.js";
@@ -51,12 +54,20 @@ export function initHeader(deps: HeaderDeps): Header {
       { id: "acct-login", label: "Log in with Google", show: "signed-out", run: () => deps.onSignIn() },
       { id: "acct-open-settings", label: "Settings", show: "always", run: () => void openSettings() },
       { id: "acct-billing", label: "Plan & billing", show: "signed-in", run: () => deps.onBilling() },
+      { id: "acct-folder", label: "Noa folder on this computer", show: "signed-in", run: (b) => void busy(b, () => uiRequest({ type: "folder.open" }), say) },
       { id: "acct-signout", label: "Sign out", show: "signed-in", tone: "bad", run: (b) => void busy(b, () => request("account.signOut"), say) },
     ],
   });
   $("acct-slot").replaceWith(menu.el);
   const folder = $<HTMLButtonElement>("open-folder");
-  folder.addEventListener("click", () => void busy(folder, () => uiRequest({ type: "folder.open" }), say));
+  folder.addEventListener("click", () =>
+    void busy(folder, () => (hasCloudFiles(last?.account) ? openCloudFiles(last?.account) : uiRequest({ type: "folder.open" })), say),
+  );
+  const renderFolder = (account: AccountView | undefined) => {
+    const label = hasCloudFiles(account) ? "Open your cloud files" : "Open the Noa folder";
+    folder.title = hasCloudFiles(account) ? `${label} (the Noa folder on this computer is in the account menu)` : `${label} (Downloads/Noa)`;
+    folder.setAttribute("aria-label", label);
+  };
 
   function renderStatus(s: UiState): void {
     last = s;
@@ -86,6 +97,7 @@ export function initHeader(deps: HeaderDeps): Header {
     render(s) {
       renderStatus(s);
       menu.render(s.account);
+      renderFolder(s.account);
     },
     setList(facts) {
       if (facts.lockedWaiting === list.lockedWaiting) return;
@@ -97,4 +109,9 @@ export function initHeader(deps: HeaderDeps): Header {
       statusAction.hidden = true;
     },
   };
+}
+
+/** Signed in on a plan with cloud files: the files button opens them (the dashboard's Files page). */
+export function hasCloudFiles(account: AccountView | undefined): boolean {
+  return !!account?.signedIn && !!account.filesUrl && planAllows(account.plan, "todo");
 }

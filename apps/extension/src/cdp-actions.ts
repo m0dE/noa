@@ -6,7 +6,7 @@
 import { type Sleep, type PageSnapshot, type Screenshot } from "@noa/shared";
 import {
   clickElement,
-  indexSelector,
+  indexedElement,
   notFound,
   PAGE_MARKS,
   POLL_MS,
@@ -170,22 +170,26 @@ export class CdpActions {
    * element that takes no files never gets them (and the tab never opens the file).
    */
   async upload(tabId: number, { index, paths }: P<"browser.upload">): Promise<R<"browser.upload">> {
-    const selector = indexSelector(index);
     const kind = await this.evaluate<string>(
       tabId,
-      `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return "missing";
+      `(() => { const el = ${indexedElement(index)}; if (!el) return "missing";
         return el instanceof HTMLInputElement && el.type === "file" ? "file" : "notfile"; })()`,
     );
     if (kind === "missing") throw notFound(index);
     if (kind === "file") {
-      const doc = await this.send<{ root: { nodeId: number } }>(tabId, "DOM.getDocument", { depth: 0 });
-      const found = await this.send<{ nodeId: number }>(tabId, "DOM.querySelector", { nodeId: doc.root.nodeId, selector });
-      if (!found.nodeId) throw notFound(index);
-      await this.send(tabId, "DOM.setFileInputFiles", { files: paths, nodeId: found.nodeId });
+      // By object, not DOM.querySelector: that cannot reach an input inside a shadow root.
+      const found = await this.send<{ result: { objectId?: string } }>(tabId, "Runtime.evaluate", { expression: indexedElement(index) });
+      const objectId = found.result?.objectId;
+      if (!objectId) throw notFound(index);
+      try {
+        await this.send(tabId, "DOM.setFileInputFiles", { files: paths, objectId });
+      } finally {
+        await this.send(tabId, "Runtime.releaseObject", { objectId }).catch(() => undefined);
+      }
       return { ok: true };
     }
     if (await this.dropFiles(tabId, index, paths)) return { ok: true, via: "drop" };
-    if (await this.pasteFiles(tabId, selector, paths)) return { ok: true, via: "paste" };
+    if (await this.pasteFiles(tabId, index, paths)) return { ok: true, via: "paste" };
     throw new Error(
       `element ${index} took neither a drop nor a paste of the files: upload to an <input type=file>, a drop zone or an editor that accepts files`,
     );
@@ -222,7 +226,7 @@ export class CdpActions {
    * The files pasted into the element: set on an input the page never sees (not in the document), then given to
    * the element as a paste event's clipboard data. True when the page took them (preventDefault).
    */
-  private async pasteFiles(tabId: number, selector: string, paths: string[]): Promise<boolean> {
+  private async pasteFiles(tabId: number, index: number, paths: string[]): Promise<boolean> {
     const made = await this.send<{ result: { objectId?: string } }>(tabId, "Runtime.evaluate", {
       expression: `(() => { const i = document.createElement("input"); i.type = "file"; i.multiple = true; return i; })()`,
     });
@@ -233,7 +237,7 @@ export class CdpActions {
       const res = await this.send<EvaluateResult<boolean>>(tabId, "Runtime.callFunctionOn", {
         objectId,
         functionDeclaration: `function () {
-          const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false;
+          const el = ${indexedElement(index)}; if (!el) return false;
           const data = new DataTransfer(); for (const f of this.files) data.items.add(f);
           if (typeof el.focus === "function") el.focus();
           const e = new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true, composed: true });
@@ -329,7 +333,7 @@ export class CdpActions {
   private async centerOf(tabId: number, index: number): Promise<{ x: number; y: number }> {
     const pos = await this.evaluate<{ x: number; y: number } | null>(
       tabId,
-      `(() => { const el = document.querySelector(${JSON.stringify(indexSelector(index))}); if (!el) return null;
+      `(() => { const el = ${indexedElement(index)}; if (!el) return null;
         el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
         const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`,
     );

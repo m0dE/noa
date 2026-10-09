@@ -109,11 +109,10 @@ function panel(shownTab: number, opts: { id?: string; engine?: VoiceEngineId; be
     onSpeaking: () => {},
     keepSpoken: () => {},
     keepHeard: () => {},
-    settings: () => ({ voiceEngine: opts.engine ?? "realtime", realtimeCostNoticed: true }) as ExtensionSettings,
+    settings: () => ({ voiceEngine: opts.engine ?? "realtime" }) as ExtensionSettings,
     account: () => undefined,
     engines: async () => ENGINES,
     saveSettings: async () => {},
-    openVoiceSettings: () => {},
     createEngine: (id, events, o) => {
       const n = engines.length;
       const e = new FakeEngine(id, events, o?.takeover ?? false, opts.begin && (() => opts.begin!(n)), opts.audio ?? true);
@@ -230,6 +229,44 @@ describe("hands-free voice in the panel that runs it, while the user looks at an
     expect(t.hf.active).toBe(false);
     expect(t.engines[0]!.stopped).toBe(true);
     expect(t.reports.at(-1)).toEqual([false, null, null]);
+  });
+});
+
+describe("voice off and the task's Stop", () => {
+  beforeAll(installMiniDom);
+
+  it("the Voice button (or the key) ends voice only: the task goes on", async () => {
+    const t = panel(1);
+    const stopTask = vi.fn(async () => "Stopped the task.");
+    t.deps.stopTask = stopTask;
+    t.deps.chatOf = (tab) => (tab === 1 ? "s-voice" : null);
+    t.hf.toggle("button");
+    await settle();
+    t.hf.setRunning(["s-voice"]);
+    t.hf.toggle("button");
+    expect(t.hf.active).toBe(false);
+    expect(stopTask).not.toHaveBeenCalled();
+  });
+
+  it("the task's Stop ends voice too, when voice talks to that chat or listens for the tab shown (or Stop stops everything)", async () => {
+    const t = panel(1);
+    t.deps.chatOf = (tab) => (tab === 1 ? "s-voice" : null);
+    t.hf.toggle("button");
+    await settle();
+    t.hf.endWith("s-voice");
+    expect(t.hf.active).toBe(false);
+
+    t.hf.toggle("button");
+    await settle();
+    t.hf.endWith(null);
+    expect(t.hf.active).toBe(false);
+
+    // Voice listens for tab 1 while the user stops a task in tab 2: voice goes on.
+    t.hf.toggle("button");
+    await settle();
+    t.show(2);
+    t.hf.endWith("s-other");
+    expect(t.hf.active).toBe(true);
   });
 });
 
@@ -738,7 +775,7 @@ describe("Whisper keeps the user informed on a long run (the owner's report: sil
 describe("Deepgram said the greeting twice (the owner's trace, session d8fbe33c)", () => {
   beforeAll(installMiniDom);
 
-  it("the opening text said as the plan is not said again by the spoken line that starts with it", async () => {
+  it("the greeting is said once: the opening the turn's end follows at once is not said as a plan", async () => {
     vi.useFakeTimers();
     try {
       const t = panel(1, { engine: "deepgram" });
@@ -767,7 +804,7 @@ describe("Deepgram said the greeting twice (the owner's trace, session d8fbe33c)
         t.hf.onEvent({ ...ev, sessionId: "s-1", ts: new Date().toISOString() } as never);
       }
       await vi.advanceTimersByTimeAsync(10_000);
-      expect(said).toEqual(["I'm doing well, thanks for asking!", "What can I help you with?"]);
+      expect(said).toEqual(["I'm doing well, thanks for asking! What can I help you with?"]);
       t.hf.toggle("button");
     } finally {
       vi.useRealTimers();

@@ -64,7 +64,7 @@ async function started() {
     createSource: () => new FakeMic(),
     events,
     openSocket: () => socket,
-    player: { play: vi.fn(), stop: vi.fn(() => ({ itemId: "a1", playedMs: 0 })), close: vi.fn(), playing: false, pause: vi.fn(() => false), resume: vi.fn(), level: () => 0 },
+    player: { play: vi.fn(), stop: vi.fn(() => ({ itemId: "a1", playedMs: 0 })), close: vi.fn(), playing: false, pause: vi.fn(() => false), resume: vi.fn(), level: () => 0, quietMs: 0 },
   });
   const start = engine.start();
   await settle();

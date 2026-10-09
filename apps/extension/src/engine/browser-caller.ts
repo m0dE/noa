@@ -19,13 +19,26 @@ export interface ImagesLike {
   generate(params: BrowserMethods["media.generateImage"]["params"]): Promise<BrowserMethods["media.generateImage"]["result"]>;
 }
 
+/** Lists the user's Noa folder for list_files (noa-folder.ts NoaFiles). */
+export interface FilesLike {
+  list(params: BrowserMethods["files.list"]["params"]): Promise<BrowserMethods["files.list"]["result"]>;
+  /** upload's paths, each on this computer (a listed cloud file is downloaded first). */
+  fetch(paths: string[]): Promise<string[]>;
+  /** save_file (file-saver.ts); screenshot: the session's tab. */
+  save(
+    params: BrowserMethods["files.save"]["params"],
+    ctx: { screenshot: () => Promise<{ base64: string; mimeType: string }> },
+  ): Promise<BrowserMethods["files.save"]["result"]>;
+}
+
 interface Targets {
   driver: DriverLike;
   vault: VaultLike;
   images?: ImagesLike | undefined;
+  files?: FilesLike | undefined;
 }
 
-/** Every browser.*, vault.* and media.* method, performed by the driver, the vault and the image maker. */
+/** Every browser.*, vault.*, files.* and media.* method, performed by the driver, the vault, the Noa folder and the image maker. */
 const METHODS: { [M in BrowserMethod]: (t: Targets, params: BrowserMethods[M]["params"]) => Promise<BrowserMethods[M]["result"]> } = {
   "browser.navigate": ({ driver }, p) => driver.navigate(p),
   "browser.readPage": ({ driver }, p) => driver.readPage(p ?? {}),
@@ -35,7 +48,7 @@ const METHODS: { [M in BrowserMethod]: (t: Targets, params: BrowserMethods[M]["p
   "browser.paste": ({ driver }, p) => driver.paste(p),
   "browser.pressKey": ({ driver }, p) => driver.pressKey(p),
   "browser.scroll": ({ driver }, p) => driver.scroll(p),
-  "browser.upload": ({ driver }, p) => driver.upload(p),
+  "browser.upload": async ({ driver, files }, p) => driver.upload(files ? { ...p, paths: await files.fetch(p.paths) } : p),
   "browser.clickXAccountEntry": ({ driver }, p) => driver.clickXAccountEntry(p),
   "browser.currentUrl": ({ driver }, p) => driver.currentUrl(p),
   "browser.openTabs": ({ driver }, p) => driver.openTabs(p),
@@ -45,6 +58,14 @@ const METHODS: { [M in BrowserMethod]: (t: Targets, params: BrowserMethods[M]["p
   "browser.waitFor": ({ driver }, p) => driver.waitFor(p),
   "browser.handleDialog": ({ driver }, p) => driver.handleDialog(p),
   "vault.getCredential": ({ driver, vault }, p) => credentialForCurrentTab(driver, vault, p.site),
+  "files.list": async ({ files }, p) => {
+    if (!files) throw new Error("The user's Noa folder cannot be listed here.");
+    return files.list(p ?? {});
+  },
+  "files.save": async ({ driver, files }, p) => {
+    if (!files) throw new Error("Files cannot be saved here.");
+    return files.save(p, { screenshot: () => driver.screenshot({}) });
+  },
   "media.generateImage": async ({ images }, p) => {
     if (!images) throw new Error("Image generation is not available here.");
     return images.generate(p);
@@ -73,8 +94,8 @@ function perform<M extends BrowserMethod>(t: Targets, method: M, params: Browser
 }
 
 /** BrowserCaller for the in-extension (Claude API) brain and the post verifier. */
-export function createBrowserCaller(driver: DriverLike, vault: VaultLike, images?: ImagesLike): BrowserCaller {
-  return { call: (method, params) => perform({ driver, vault, images }, method, params) };
+export function createBrowserCaller(driver: DriverLike, vault: VaultLike, images?: ImagesLike, files?: FilesLike): BrowserCaller {
+  return { call: (method, params) => perform({ driver, vault, images, files }, method, params) };
 }
 
 /**
@@ -137,6 +158,10 @@ function resultSize(method: BrowserMethod, r: unknown): Record<string, TraceValu
       return typeof o.url === "string" ? { host: hostOf(o.url) } : {};
     case "browser.openTabs":
       return Array.isArray(o.tabs) ? { tabs: o.tabs.length } : {};
+    case "files.save":
+      return typeof o.size === "number" ? { bytes: o.size, cloud: String(o.cloud) } : {};
+    case "files.list":
+      return Array.isArray(o.files) ? { files: o.files.length, ...(o.partial ? { partial: true } : {}) } : {};
     case "media.generateImage":
       return typeof o.chargedCents === "number" ? { chargedCents: o.chargedCents } : {};
     default:

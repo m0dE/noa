@@ -5,8 +5,8 @@
  * the extension builds dashboard URLs.
  */
 
-/** "" is the dashboard's home (usage). */
-export type DashboardPage = "" | "billing";
+/** "" is the dashboard's home (usage); "files" the account's cloud files. */
+export type DashboardPage = "" | "billing" | "files";
 
 /** The dashboard page of the account server `apiBase` ("" when apiBase is not a URL). */
 export function dashboardUrl(apiBase: string, page: DashboardPage = ""): string {

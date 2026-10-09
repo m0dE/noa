@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@noa/shared";
 import { PROGRESS } from "../../src/voice/milestones.js";
-import { ANSWER_HOLD_MS, NarratorFeed, withoutStepNarration, type FeedLine, type FeedOutput } from "../../src/voice/realtime-feed.js";
+import { NarratorFeed, type FeedLine, type FeedOutput } from "../../src/voice/realtime-feed.js";
 
 const call = (name: string, args: unknown = {}): AgentEvent => ({ type: "tool_call", id: "1", name, args });
 const GAP = PROGRESS.stepGapMs;
@@ -12,6 +12,8 @@ const statusOf = (out: FeedOutput[]): string | undefined => out.flatMap((o) => (
 /** The brains' trace: the model read the message sent into its running turn. */
 const read: AgentEvent = { type: "trace", trace: { t: 0, src: "engine", cat: "user", name: "interjection", data: { route: "request", count: 1 } } };
 const end = (spoken: string): AgentEvent => ({ type: "task_end", outcome: "done", summary: spoken, spoken });
+/** The agent's answer to a message sent while it works. */
+const answer = (text: string): AgentEvent => call("answer_user", { text });
 
 /** A feed whose agent runs the voice request `text` (sent, then its turn started with the voice message). */
 function working(text = "Check my inbox.", now = 0): NarratorFeed {
@@ -104,22 +106,21 @@ describe("NarratorFeed: what the realtime narrator says, word for word, and its 
  * agent's words written before it read the new question were passed on as the answer to it.
  */
 describe("NarratorFeed: only what the agent wrote knowing the user's latest request is said", () => {
-  it("a question sent into the running turn: the step's text written before the agent read it is not the answer; the first words after are", () => {
+  it("a question sent into the running turn: an answer written before the agent read it is not said; its answer_user after is, at once and once", () => {
     const feed = working("What's the latest email in my inbox?");
     feed.push(call("read_page"), 1_000);
     feed.sent("What did she say about the agenda?", true, 2_000);
     feed.push({ type: "user_message", text: "What did she say about the agenda?", voice: true }, 2_100);
     // Written while the question was on its way (live: "Let me check your inbox." said as the answer to it).
-    expect(says(feed.push({ type: "assistant_text", text: "The page is open; reading the messages now." }, 2_500))).toEqual([]);
+    expect(says(feed.push(answer("The latest email is from Dana Kim."), 2_500))).toEqual([]);
     expect(feed.fresh()).toBe(false);
     feed.push(read, 3_000);
     expect(feed.fresh()).toBe(true);
-    // Its answer is held for the turn's end, and said when the agent goes on working (ANSWER_HOLD_MS).
-    expect(says(feed.push({ type: "assistant_text", text: "She wants to go over the onboarding flow first, then the pricing page." }, 3_500))).toEqual([]);
-    expect(says(feed.tick(3_500 + ANSWER_HOLD_MS - 1))).toEqual([]);
-    expect(says(feed.tick(3_500 + ANSWER_HOLD_MS))).toEqual([{ kind: "result", line: "She wants to go over the onboarding flow first, then the pricing page." }]);
+    expect(says(feed.push(answer("She wants to go over the onboarding flow first, then the pricing page."), 3_500))).toEqual([
+      { kind: "result", line: "She wants to go over the onboarding flow first, then the pricing page." },
+    ]);
     // Said once.
-    expect(says(feed.push({ type: "assistant_text", text: "Now opening the next message." }, 9_000))).toEqual([]);
+    expect(says(feed.push(answer("She wants to go over the onboarding flow first, then the pricing page."), 9_000))).toEqual([]);
     expect(says(feed.tick(20_000)).filter((l) => l.kind === "result")).toEqual([]);
   });
 
@@ -192,71 +193,34 @@ describe("NarratorFeed: only what the agent wrote knowing the user's latest requ
     expect(says(feed.push(end("Yes, Marco replied."), 35_000))).toEqual([{ kind: "result", line: "Yes, Marco replied." }]);
   });
 
-  it("after a question is read, what the agent says it does next is not the answer; its answer is (live, Claude Code)", () => {
+  it("after a question is read, the agent's text is never the answer, whatever its words; answer_user is, whole (live, Claude Code: its step text said as the answer, and an answer starting \"Yes, I'll\" cut)", () => {
     const feed = asked();
-    for (const step of [
+    for (const text of [
       "Let me open Dana Kim's email to see what she said about the agenda.",
-      "I'll check Dana's email thread to see her agenda comments.",
-      "I need to check the inbox first.",
-      "I haven't opened the latest email yet, so let me check the inbox now to see what she said.",
+      "That click didn't open the email. Let me try again.",
+      "She wants the onboarding flow first, then the pricing page.",
     ]) {
-      feed.push({ type: "assistant_text", text: step }, 2_000);
-      expect(says(feed.tick(2_000 + ANSWER_HOLD_MS)), step).toEqual([]);
+      expect(says(feed.push({ type: "assistant_text", text }, 2_000)), text).toEqual([]);
+      expect(says(feed.tick(30_000)).filter((l) => l.kind === "result"), text).toEqual([]);
     }
-    feed.push({ type: "assistant_text", text: "She wants the onboarding flow first, then the pricing page." }, 10_000);
-    expect(says(feed.tick(10_000 + ANSWER_HOLD_MS))).toEqual([{ kind: "result", line: "She wants the onboarding flow first, then the pricing page." }]);
-  });
-
-  it("the turn's end soon after the answer that covers it says it instead (live: half an answer mid-turn, then the whole one at the end)", () => {
-    const feed = asked();
-    feed.push({ type: "assistant_text", text: "Dana said the agenda is the onboarding flow first, then the pricing page." }, 2_000);
-    expect(says(feed.push(end("Dana's agenda is the new onboarding flow first, then the pricing page, and bring your mocks."), 4_000))).toEqual([
-      { kind: "result", line: "Dana's agenda is the new onboarding flow first, then the pricing page, and bring your mocks." },
-    ]);
-    expect(says(feed.tick(30_000)).filter((l) => l.kind === "result")).toEqual([]);
-    // A turn's end with no line of its own: the answer held is said then.
-    const other = asked();
-    other.push({ type: "assistant_text", text: "I'm signed in as @acme." }, 2_000);
-    expect(says(other.push({ type: "task_end", outcome: "done", summary: "" }, 3_000))).toEqual([{ kind: "result", line: "I'm signed in as @acme." }]);
-  });
-
-  it("a turn's end about the task alone does not swallow the answer held: the answer, then the end", () => {
-    const feed = asked();
-    feed.push({ type: "assistant_text", text: "She wants to go over the onboarding flow first, then the pricing page." }, 2_000);
-    expect(says(feed.push(end("The latest email is from Dana Kim, moving Friday's design review to 3 PM."), 3_000))).toEqual([
-      { kind: "result", line: "She wants to go over the onboarding flow first, then the pricing page." },
-      { kind: "result", line: "The latest email is from Dana Kim, moving Friday's design review to 3 PM." },
+    expect(says(feed.push(answer("Yes, I'll open and summarize all four emails, including the Stripe one."), 10_000))).toEqual([
+      { kind: "result", line: "Yes, I'll open and summarize all four emails, including the Stripe one." },
     ]);
   });
 
   it("a turn's end after the answer was said is not said again when it repeats it; with news of its own it is", () => {
     const feed = asked();
-    feed.push({ type: "assistant_text", text: "Dana said the agenda is first the new onboarding flow, then the pricing page, and she asked everyone to bring their mocks." }, 2_000);
-    expect(says(feed.tick(2_000 + ANSWER_HOLD_MS))).toHaveLength(1);
+    expect(says(feed.push(answer("Dana said the agenda is first the new onboarding flow, then the pricing page, and she asked everyone to bring their mocks."), 2_000))).toHaveLength(1);
     expect(says(feed.push(end("Dana's agenda is the new onboarding flow first, then the pricing page, and she wants everyone to bring their mocks."), 30_000))).toEqual([]);
     const other = asked();
-    other.push({ type: "assistant_text", text: "I'm on @acme." }, 2_000);
-    expect(says(other.tick(2_000 + ANSWER_HOLD_MS))).toHaveLength(1);
+    expect(says(other.push(answer("I'm on @acme."), 2_000))).toHaveLength(1);
     expect(says(other.push(end("Posted your thread on X from @acme."), 30_000))).toEqual([{ kind: "result", line: "Posted your thread on X from @acme." }]);
   });
 
-  it("the facts of an answer are kept, its sentences about what it does next dropped; the first answer is kept, not the steps after it", () => {
-    expect(withoutStepNarration('The latest email is from Dana Kim, titled "Design review moved to Friday 3 PM." Let me open it to see the agenda.')).toBe(
-      'The latest email is from Dana Kim, titled "Design review moved to Friday 3 PM."',
-    );
-    expect(withoutStepNarration("Let me open it. I'll read it next.")).toBe("");
+  it("an answer to the question before, written after a new request went out, is not said", () => {
     const feed = asked();
-    feed.push({ type: "assistant_text", text: "She wants the onboarding flow first, then the pricing page." }, 2_000);
-    // Live (scripted agent): its next step's words took the answer's place, and the answer was never said.
-    feed.push({ type: "assistant_text", text: "Reading it now." }, 4_000);
-    expect(says(feed.tick(2_000 + ANSWER_HOLD_MS))).toEqual([{ kind: "result", line: "She wants the onboarding flow first, then the pricing page." }]);
-  });
-
-  it("a new request lets go of the answer held for the one before", () => {
-    const feed = asked();
-    feed.push({ type: "assistant_text", text: "She wants the onboarding flow first." }, 2_000);
     feed.sent("Never mind, check my calendar.", false, 3_000, true);
-    expect(says(feed.tick(30_000)).filter((l) => l.kind === "result")).toEqual([]);
+    expect(says(feed.push(answer("She wants the onboarding flow first."), 3_500))).toEqual([]);
   });
 });
 

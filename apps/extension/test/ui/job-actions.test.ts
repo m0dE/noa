@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionInfo, TaskStatus } from "@noa/shared";
-import { jobActions } from "../../src/sidepanel/job-actions.js";
+import { jobActions, STOP_ELSEWHERE_TITLE } from "../../src/sidepanel/job-actions.js";
 import { buildJobs, type JobTask } from "../../src/sidepanel/jobs.js";
 
 const NOW = Date.parse("2026-09-27T12:00:00Z");
@@ -64,10 +64,18 @@ describe("a task's menu", () => {
     const waiting = jobActions(buildJobs({ sessions: [], running: [], tasks: [task("pending")] }, NOW)[0]!, "local");
     expect(waiting.find((a) => a.id === "hold")).toMatchObject({ label: "Pause", title: "Keep it from running, with its repeats, until you resume it" });
   });
-  it("running here: Pause, Raw; running elsewhere in the account's queue: nothing to do but wait", () => {
+  it("running here: Pause, Raw; running elsewhere in the account's queue (or under a runner that is gone): Pause or Cancel it there", () => {
     const run = live(session("r", { source: "local", taskId: "t" }));
     expect(labels({ tasks: [task("running")], sessions: [run], running: [run] })).toEqual(["Pause", "Raw", "Rename"]);
-    expect(labels({ tasks: [task("running")] }, "account")).toEqual([]);
+    expect(labels({ tasks: [task("running")], sessions: [run], running: [run] }, "account")).toEqual(["Pause", "Raw", "Rename"]);
+    const elsewhere = jobActions(buildJobs({ sessions: [], running: [], tasks: [task("running", { repeat: { cron: "40 9 * * *", tz: "UTC" } })] }, NOW)[0]!, "account");
+    expect(elsewhere.map((a) => [a.id, a.label])).toEqual([
+      ["hold", "Pause"],
+      ["cancel", "Cancel"],
+    ]);
+    expect(elsewhere[0]!.title).toBe(STOP_ELSEWHERE_TITLE);
+    // This browser's own task is never run by another one: one left running with no run here can be deleted.
+    expect(labels({ tasks: [task("running")] }, "local")).toEqual(["Delete"]);
   });
   it("over: Raw, Rename and Delete; failed: Run now too", () => {
     const run = session("r", { source: "local", taskId: "t" });

@@ -1,6 +1,7 @@
 import type { JsDialog } from "./dialog.js";
 import type { ImageQuality, ImageSize } from "./images.js";
 import type { WaitCheck, WaitCheckParams } from "./wait.js";
+import type { NoaFileList, SavedFile, SaveFileParams } from "./noa-files.js";
 
 /**
  * Browser primitives the extension performs on the agent tab, and the page
@@ -205,6 +206,16 @@ export type BrowserMethods = {
    * as a PNG in the user's Noa folder (Downloads/Noa/images/<name>.png). path: that file, absolute. preview: a smaller
    * JPEG of it for the model and the chat (the PNG itself can be larger than a native message may carry).
    */
+  /**
+   * list_files: the files in the user's Noa folder (noa-files.ts), newest first; search: only names containing it (any
+   * case).
+   */
+  "files.list": { params: { search?: string }; result: NoaFileList };
+  /**
+   * save_file: keeps a file in the user's Noa folder (Downloads/Noa/<folder>/<name>) and, on a plan with cloud files,
+   * in the account's cloud files (file-saver.ts). Rejects when the source cannot be read.
+   */
+  "files.save": { params: SaveFileParams; result: SavedFile };
   "media.generateImage": {
     params: { prompt: string; name?: string; size?: ImageSize; quality?: ImageQuality; transparent?: boolean };
     result: { path: string; preview: { base64: string; mimeType: string }; size: ImageSize; quality: ImageQuality; chargedCents: number };

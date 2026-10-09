@@ -1,6 +1,7 @@
 /** Runner job sources: local tasks, cloud claims, one-off runs. */
 import { describe, expect, it, vi } from "vitest";
-import { automationPromptLine, localTimeZone, type AgentEvent } from "@noa/shared";
+import { automationPromptLine, localTimeZone, USER_STOP_REASON, type AgentEvent } from "@noa/shared";
+import { ApiRequestError } from "../../src/http-client.js";
 import { Runner } from "../../src/engine/runner.js";
 import { claimFixture } from "../fixtures.js";
 import { env, harness, runAll, setupRunnerTests } from "./harness.js";
@@ -101,6 +102,44 @@ describe("Runner: the account's tasks", () => {
     h.brain.script = () => ({ outcome: "paused", reason: "2FA" });
     await runAll(h);
     expect(h.results[0]!.body).toMatchObject({ outcome: "paused", reason: "2FA", retryAfterMinutes: 30 });
+  });
+
+  it("a cloud task paused or cancelled from the account (the heartbeat is refused) stops its run, as Stop here does", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const h = harness({}, { signedIn: true });
+    h.claims.push(claimFixture("c6"));
+    const beats: string[] = [];
+    h.accountQueue.heartbeat = async (taskId) => {
+      beats.push(taskId);
+      throw new ApiRequestError(409, "task is not running under this runner's lease");
+    };
+    h.brain.script = () => "hang";
+    void h.runner.runDue("manual");
+    await vi.waitFor(() => expect(h.brain.starts).toHaveLength(1));
+    expect(h.brain.ctls[0]!.aborts).toEqual([]);
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    expect(h.brain.ctls[0]!.aborts).toEqual([{ reason: USER_STOP_REASON, outcome: "paused" }]);
+    await h.runner.idle();
+    // No more heartbeats once it is lost; nothing to tell the user (they stopped it).
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(beats).toEqual(["c6"]);
+    expect(h.notifications).toEqual([]);
+  });
+
+  it("a heartbeat that fails on the network keeps the run going", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const h = harness({}, { signedIn: true });
+    h.claims.push(claimFixture("c7"));
+    h.accountQueue.heartbeat = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    h.brain.script = () => "hang";
+    void h.runner.runDue("manual");
+    await vi.waitFor(() => expect(h.brain.starts).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    expect(h.brain.ctls[0]!.aborts).toEqual([]);
+    h.runner.stop();
+    await h.runner.idle();
   });
 
   it("done and failed cloud results carry no retry delay", async () => {

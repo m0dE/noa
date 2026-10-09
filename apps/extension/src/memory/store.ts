@@ -71,6 +71,8 @@ export interface NewEpisode {
   /** A task run: its task (the episode stays global: it answers "what did we do" from anywhere). */
   taskKey?: string;
   taskTitle?: string;
+  /** The user stopped the conversation before it finished (MemoryEntry.stopped). */
+  stopped?: boolean;
 }
 
 /** A fact about one thing, filed under its key (normalized: memoryRecordKey) in a repeating task's records or the user's. */
@@ -170,7 +172,9 @@ export class MemoryStore {
         const byId = new Map(current.map((e) => [e.id, e]));
         for (const e of entries) {
           const here = byId.get(e.id);
-          if (here && here.updatedAt > e.updatedAt) continue;
+          // The same version (its own write coming back) stays as this computer has it: a server on an older schema
+          // sends it back without the fields it does not know (e.g. an episode's stopped).
+          if (here && here.updatedAt >= e.updatedAt) continue;
           try {
             byId.set(e.id, this.checked({ ...e, ...(here?.lastUsedAt ? { lastUsedAt: here.lastUsedAt } : {}) }));
           } catch {
@@ -247,6 +251,7 @@ export class MemoryStore {
         ...(entities.length ? { entities } : {}),
         ...(ep.taskKey ? { taskKey: ep.taskKey } : {}),
         ...(ep.taskTitle ? { taskTitle: ep.taskTitle } : {}),
+        ...(ep.stopped ? { stopped: true as const } : {}),
         source,
         updatedAt: now,
       });
@@ -264,6 +269,20 @@ export class MemoryStore {
       const { pinned: _p, ...rest } = before;
       const after = this.checked({ ...rest, ...(pinned ? { pinned: true as const } : {}), updatedAt: this.now().toISOString() });
       return { entries: entries.map((e) => (e.id === id ? after : e)), result: { before, after } };
+    });
+  }
+
+  /** Marks the episodes `ids` as of conversations the user stopped (MemoryEntry.stopped); other entries are left as they are. */
+  async markStopped(ids: readonly string[]): Promise<number> {
+    const marked = new Set(ids);
+    return this.mutate((entries) => {
+      let n = 0;
+      const next = entries.map((e) => {
+        if (!marked.has(e.id) || e.kind !== "episode" || e.stopped) return e;
+        n++;
+        return this.checked({ ...e, stopped: true as const, updatedAt: this.now().toISOString() });
+      });
+      return { entries: next, result: n };
     });
   }
 

@@ -1,5 +1,5 @@
 /** Pure view models for agent events in a job's conversation. */
-import { describeSchedule, dialogLine, localTimeZone, SCREEN_HELP_TEXT, type AgentEvent, type AttachmentRef, type Chip, type SessionInfo, type TaskSource, type TodoChange } from "@noa/shared";
+import { ANSWER_TOOL, describeSchedule, dialogLine, localTimeZone, SCREEN_HELP_TEXT, type AgentEvent, type AttachmentRef, type Chip, type SessionInfo, type TaskSource, type TodoChange } from "@noa/shared";
 import { repeatsPausedCard } from "../approval/paused.js";
 import { clip, isLongSummary, toolArgsSummary } from "../text.js";
 import { speakable } from "../voice/spoken-line.js";
@@ -167,8 +167,12 @@ export function describeEvent(ev: AgentEvent, turn: TurnContext = {}): EventView
     case "assistant_text_delta":
       // Live text is shown by the chat as it streams (see chat.ts); as an event it is its block's text so far.
       return { kind: "text", text: ev.text, id: ev.id };
-    case "tool_call":
+    case "tool_call": {
+      // An answer to the user's message (answer_user) is the agent's words to them, not a step.
+      const answer = ev.name === ANSWER_TOOL ? (ev.args as { text?: unknown } | undefined)?.text : undefined;
+      if (typeof answer === "string") return { kind: "text", text: answer.trim() };
       return { kind: "tool", id: ev.id, name: ev.name, args: toolArgsSummary(ev.name, ev.args) };
+    }
     case "tool_result": {
       const full = ev.text ?? "";
       const preview = clip(full, 90) || (ev.thumbnail ? "image" : ev.isError ? "error" : "ok");

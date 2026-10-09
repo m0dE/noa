@@ -10,7 +10,7 @@ const engines: VoiceEngine[] = [
   { id: "deepgram", name: "Deepgram", model: "nova-3 + aura-2-en", approxCentsPerMinute: 1.1, assumption: "Per minute of conversation.", available: true },
   { id: "standard", name: "Standard", model: "whisper", approxCentsPerMinute: 0.05, assumption: "Per minute of speech transcribed.", available: true },
 ];
-const base: AccountView = { signedIn: true, signInConfigured: true, apiBase: "https://api.test", dashboardUrl: "https://api.test/", billingUrl: "https://api.test/billing" };
+const base: AccountView = { signedIn: true, signInConfigured: true, apiBase: "https://api.test", dashboardUrl: "https://api.test/", billingUrl: "https://api.test/billing", filesUrl: "https://api.test/files" };
 const PLUS: AccountView = { ...base, plan: { id: "plus", status: "active", currentPeriodEnd: null, cancelAtPeriodEnd: false } };
 const FREE: AccountView = { ...base, plan: { id: "free", status: "none", currentPeriodEnd: null, cancelAtPeriodEnd: false } };
 

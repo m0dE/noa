@@ -89,7 +89,7 @@ const spokenArg = z
   .max(MAX_SPOKEN_CHARS)
   .optional()
   .describe(
-    `One or two short sentences, read aloud to a user who talks to Noa hands-free, at most ${MAX_SPOKEN_CHARS} characters: the result, or the question they must answer. Natural speech, as you would say it to them, in the first person as Noa ("I…"), never "the agent": no Markdown, lists, URLs or IDs (e.g. "Done. You have four unread emails, and Jordan needs your signature by Friday.").`,
+    `One or two short sentences, read aloud to a user who talks to Noa hands-free, at most ${MAX_SPOKEN_CHARS} characters: the result, or the question they must answer, never again what you already told them with answer_user in this turn. Natural speech, as you would say it to them, in the first person as Noa ("I…"), never "the agent": no Markdown, lists, URLs or IDs (e.g. "Done. You have four unread emails, and Jordan needs your signature by Friday.").`,
   );
 
 /** Longest draft (task_complete / task_pause `draft`): an email or post the user reviews before it goes anywhere. */
@@ -138,7 +138,7 @@ export const ToolArgs = {
   }),
   upload: z.object({
     index: z.number().int().describe("Index from read_page of an <input type=file>, a drop zone, or an editor that takes dropped or pasted images"),
-    paths: z.array(z.string()).min(1).describe("Local file paths from the task's media list"),
+    paths: z.array(z.string()).min(1).describe("Absolute local file paths: from the task's media list, the attached files, generate_image or list_files"),
   }),
   open_tabs: z.object({
     urls: z.array(z.string().describe("Absolute URL")).min(1).max(MAX_TABS_PER_CALL).describe("URLs to open, each in its own new tab"),
@@ -158,6 +158,18 @@ export const ToolArgs = {
   wait_for: WaitForArgs,
   switch_x_account: z.object({ handle: z.string().describe("Account handle, e.g. @myhandle") }),
   get_credential: z.object({ site: z.string().describe("Hostname, e.g. example.com") }),
+  list_files: z.object({
+    search: z.string().trim().min(1).max(100).optional().describe("Only files whose name or subfolder contains this text (any case). Default: all files"),
+  }),
+  save_file: z.object({
+    url: z.string().optional().describe("Save the file at this address (a link's href from read_page); the browser's sign-ins apply"),
+    text: z.string().optional().describe("Save this text you wrote; give name with its extension"),
+    screenshot: z.boolean().optional().describe("true: save a picture of the current tab"),
+    path: z.string().optional().describe("Save this file from this computer: a path list_files, the task's media, an attachment or generate_image gave"),
+    download: z.boolean().optional().describe("true: save the file the browser downloaded last: for a file the page makes itself when you click its download or export button, which has no link to save by url"),
+    name: z.string().trim().min(1).max(120).optional().describe("File name with its extension. Default: from the source"),
+    folder: z.string().trim().max(60).optional().describe("One folder, named for the kind of file. Default: the top"),
+  }),
   generate_image: z.object({
     prompt: z
       .string()
@@ -179,6 +191,16 @@ export const ToolArgs = {
   forget: ForgetArgs,
   search_history: SearchHistoryArgs,
   check_similar: CheckSimilarArgs,
+  answer_user: z.object({
+    text: z
+      .string()
+      .trim()
+      .min(1)
+      .max(MAX_SPOKEN_CHARS)
+      .describe(
+        `Your answer, in one or two short sentences, at most ${MAX_SPOKEN_CHARS} characters, in the first person as Noa ("I…"), never "the agent": natural speech, no Markdown, lists, URLs or IDs (e.g. "Yes, I'm including the Stripe email too.").`,
+      ),
+  }),
   task_complete: z.object({
     summary: z
       .string()
@@ -234,6 +256,10 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   wait_for: WAIT_FOR_DESCRIPTION,
   switch_x_account: "Switch X (Twitter) to another signed-in account using X's account switcher. It checks that the switcher shows the new account before it answers.",
   get_credential: "Get the stored username and password for a site. Never use this for X.",
+  list_files:
+    "List the files the user keeps for Noa: their Noa folder (Downloads/Noa on their computer) and, when they are signed in, their Noa cloud files; newest first, with each one's absolute path, size and date. Any listed path can be given to upload (a cloud file is downloaded to it first).",
+  save_file:
+    "Keep a file for the user: it is saved in their Noa folder (Downloads/Noa/<folder>) and, when they are signed in on a plan with cloud files, in their Noa cloud files (cloud storage), where list_files and their other computers find it later. Give exactly one source: url, text, screenshot, path or download. A file with a link is saved by its url; a file the page makes itself when a button is clicked (an export or download button with no link to the file) is saved in two steps: click that button, then call save_file with download: true. The result gives its path, which upload takes.",
   generate_image:
     "Create a new picture (an icon, illustration, banner, photo-like image) from a text description, with Noa AI's image model, paid from the user's Noa usage credit. It is saved as a PNG in the user's Noa folder (Downloads/Noa/images); the result gives its path, which upload takes, and shows you the picture. Use it only when the user wants an image made, not to find existing ones.",
   schedule_task: SCHEDULE_TASK_DESCRIPTION,
@@ -245,6 +271,8 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   forget: FORGET_DESCRIPTION,
   search_history: SEARCH_HISTORY_DESCRIPTION,
   check_similar: CHECK_SIMILAR_DESCRIPTION,
+  answer_user:
+    'Answer a message the user sent while you work (it starts with "The user just said:"): a question or a remark. Call it as soon as you know the answer: at once when you already do, else right after the step that finds it out. It is shown in the chat and said aloud to a user who talks hands-free; then go on with the task. Only for those messages, never for progress or the task\'s result.',
   task_complete:
     "Finish the task successfully. Call exactly once when the task is fully done. For questions and information tasks, write the full answer to the user as normal message text first (Markdown is rendered), then call this with a one-line summary; never put the answer or long text in the summary. Add a suggestion only when a next step is clearly likely.",
   task_fail: "Finish the task as failed when it cannot be done. Add a suggestion only when a next request would clearly help (e.g. 'Try again after I sign in').",
@@ -310,6 +338,9 @@ export type PipeMethods = {
   "tool.list": { params: { token: string; taskId: string }; result: { names: ToolName[]; jev?: boolean } };
 }
 
+/** The tool that answers a message the user sent while the agent works (said aloud in hands-free voice). */
+export const ANSWER_TOOL = "answer_user" satisfies ToolName;
+
 /** Tools that end a task. Not offered to the user's own Claude Code (mcp-server --attach). */
 export const TASK_END_TOOLS: readonly ToolName[] = ["task_complete", "task_fail", "task_pause"];
 
@@ -327,9 +358,9 @@ export type MemoryToolName = (typeof MEMORY_TOOLS)[number];
 /**
  * Tools offered to the user's own Claude Code through mcp-server --attach (no task to end, no conversation), and
  * never get_credential: saved passwords go only to Noa's own task sessions, not to whatever an attached
- * session was told to do.
+ * session was told to do. No answer_user either: no Noa user sends it messages.
  */
-export const INTERACTIVE_TOOL_NAMES: ToolName[] = TOOL_NAMES.filter((n) => !TASK_END_TOOLS.includes(n) && !CONVERSATION_TOOLS.includes(n) && n !== "get_credential");
+export const INTERACTIVE_TOOL_NAMES: ToolName[] = TOOL_NAMES.filter((n) => !TASK_END_TOOLS.includes(n) && !CONVERSATION_TOOLS.includes(n) && n !== "get_credential" && n !== ANSWER_TOOL);
 
 /**
  * Tools offered to the model. act (batched steps) always replaces click and

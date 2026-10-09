@@ -46,6 +46,11 @@ export function openBilling(account: Pick<AccountView, "billingUrl"> | null | un
   return openDashboardPage(account?.billingUrl);
 }
 
+/** The dashboard's Files page: the account's cloud files. */
+export function openCloudFiles(account: Pick<AccountView, "filesUrl"> | null | undefined): Promise<void> {
+  return openDashboardPage(account?.filesUrl);
+}
+
 /** The dashboard's home (usage). */
 export function openDashboard(account: Pick<AccountView, "dashboardUrl"> | null | undefined): Promise<void> {
   return openDashboardPage(account?.dashboardUrl);

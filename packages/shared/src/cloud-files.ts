@@ -25,9 +25,26 @@ export const MAX_CLOUD_FILES = 5000;
 export const DEFAULT_CLOUD_FILES_QUOTA_BYTES = 2 * 1024 * 1024 * 1024;
 export const MAX_CLOUD_FILE_NAME_CHARS = 255;
 
-/** Where a file sits, as in the Noa folder: "" its top, "images" the pictures generate_image made. */
-export const CloudFolder = z.enum(["", "images"]);
+export const MAX_CLOUD_FOLDER_CHARS = 60;
+/** A folder name: letters, digits, spaces, - and _, not starting or ending with a space. */
+const FOLDER_NAME = /^(?:[\p{L}\p{N}_-](?:[\p{L}\p{N} _-]*[\p{L}\p{N}_-])?)?$/u;
+
+/**
+ * Where a file sits, as in the Noa folder (one level, no subfolders): "" its top, "images" the pictures generate_image
+ * made, any other name a folder the user or the agent's save_file chose (e.g. "invoices", "documents").
+ */
+export const CloudFolder = z.string().max(MAX_CLOUD_FOLDER_CHARS).regex(FOLDER_NAME, "a folder name is letters, digits, spaces, - and _");
 export type CloudFolder = z.infer<typeof CloudFolder>;
+
+/** A folder name CloudFolder accepts, from anything ("Invoices/2026" -> "Invoices 2026"); "" for none. */
+export function cloudFolderName(raw: string | undefined): CloudFolder {
+  return (raw ?? "")
+    .replace(/[^\p{L}\p{N} _-]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_CLOUD_FOLDER_CHARS)
+    .trim();
+}
 
 export const CloudFile = z.object({
   id: z.string(),

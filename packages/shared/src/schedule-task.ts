@@ -60,7 +60,7 @@ export const UpdateScheduledTaskArgs = z
 export type UpdateScheduledTaskArgs = z.infer<typeof UpdateScheduledTaskArgs>;
 
 export const UPDATE_SCHEDULED_TASK_DESCRIPTION =
-  "Change a waiting task in the user's TODO list: its instructions, when it runs, or its account. Give only what changes. To move a task to another time, change its schedule here; never cancel it and schedule a new one. The chat shows a card with Undo. Changing a task this chat did not schedule may first wait for the user's OK on an approval card: do not ask in words first.";
+  "Change a waiting task in the user's TODO list: its instructions, when it runs, or its account. Give only what changes. A repeating task can be changed while it runs: the change is what its next runs do. To move a task to another time, change its schedule here; never cancel it and schedule a new one. The chat shows a card with Undo. Changing a task this chat did not schedule may first wait for the user's OK on an approval card: do not ask in words first.";
 
 export const CancelScheduledTaskArgs = z.object({ task_id: TaskId });
 export type CancelScheduledTaskArgs = z.infer<typeof CancelScheduledTaskArgs>;
@@ -101,6 +101,15 @@ export type TodoChange = "updated" | "cancelled";
 export const WAITING_TASK_STATUSES = ["pending", "paused", "running"] as const satisfies readonly LocalTask["status"][];
 /** Of those, the ones the TODO list lets change (the API edits and cancels only these). */
 export const CHANGEABLE_TASK_STATUSES = ["pending", "paused"] as const satisfies readonly LocalTask["status"][];
+
+/**
+ * Whether the TODO list takes `change` of `task` now: a waiting task, either change; a repeating one while it runs,
+ * an update (its next run is copied from it when this one ends, so the update is what the coming runs do).
+ */
+export function canChangeTask(task: Pick<LocalTask, "status" | "repeat">, change: TodoChange): boolean {
+  if ((CHANGEABLE_TASK_STATUSES as readonly string[]).includes(task.status)) return true;
+  return change === "updated" && task.status === "running" && !!task.repeat;
+}
 /** Most tasks list_scheduled_tasks names (the soonest first). */
 export const MAX_LISTED_TASKS = 50;
 /** Longest first line a listed task shows. */

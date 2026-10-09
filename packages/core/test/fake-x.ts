@@ -73,6 +73,8 @@ export class FakeX {
   files: string[] = [];
   posts: FakePost[];
   calls: { method: string; params: unknown }[] = [];
+  /** URLs of the tabs browser.openTabs left behind, untouched (the fake models one live tab: the current one). */
+  leftTabs: string[] = [];
   credentials: Record<string, { username: string; password: string }>;
   vaultLocked: boolean;
   private actions: Action[] = [];
@@ -247,6 +249,14 @@ export class FakeX {
         this.newPageLoad();
         this.snapshot();
         return { url: this.url, title: this.title() };
+      case "browser.openTabs": {
+        this.leftTabs.push(this.url);
+        this.url = p.urls[0];
+        this.menuOpen = false;
+        this.newPageLoad();
+        this.snapshot();
+        return { tabs: [{ id: `t${this.leftTabs.length + 1}`, url: this.url, title: this.title(), current: p.background === false }] };
+      }
       case "browser.readPage":
         return this.snapshot();
       case "browser.screenshot":

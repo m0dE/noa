@@ -7,7 +7,7 @@
 import { CLAUDE_MODELS, errorMessage, isClaudeModel, modelHint, OUT_OF_CREDIT, type ExtensionSettings } from "@noa/shared";
 import { uiRequest, type UiState } from "../ui-protocol.js";
 import { $, h } from "../ui/dom.js";
-import { modelChip, type ModelChipInfo } from "./format.js";
+import { jevHint, modelChip, type ModelChipInfo } from "./format.js";
 import { modelLabel } from "../ui/labels.js";
 import { openSettings } from "./open-settings.js";
 import type { ChatMemoryView } from "./chat-memory.js";
@@ -141,7 +141,7 @@ export function initModelPicker(opts: {
           "span.mm-text",
           null,
           h("span.mm-label", null, "Jev"),
-          h("span.mm-hint", null, info.hosted ? "Faster clicks and typing, included" : info.jevPossible ? "Faster clicks and typing" : "Add a Jev key in settings"),
+          h("span.mm-hint", null, jevHint(info)),
         ),
         h("span.mm-switch", { "aria-hidden": "true", "data-on": String(jevOn) }),
       ),

@@ -204,12 +204,12 @@ export const OPTION_CASES = [
     ["on the AI section", async () => (await p.getAttribute("#tab-ai", "aria-selected")) === "true"],
     ["no Speed section in the sidebar", async () => (await p.locator("#tab-speed").count()) === 0],
     ["hash normalised", async () => (await p.evaluate(() => location.hash)) === "#ai"],
-    ["AI tabs: Source, Speed, Voice, Images (automation is on Permission)", async () =>
-      (await p.locator("#ai-tabs [role=tab]").allTextContents()).join(" | ") === "Source | Speed | Voice | Images"],
-    ["on the Speed tab, only its panel shown", async () =>
+    ["AI tabs: Source, Jev, Voice, Images (automation is on Permission)", async () =>
+      (await p.locator("#ai-tabs [role=tab]").allTextContents()).join(" | ") === "Source | Jev | Voice | Images"],
+    ["on the Jev tab, only its panel shown", async () =>
       (await p.getAttribute("#ai-tab-speed", "aria-selected")) === "true" && (await shown(p, "#jev-group")) && !(await shown(p, "#source-group")) && !(await shown(p, "#voice-group"))],
     ["groups per tab: Source and Model | Jev | Voice | Image generation", async () =>
-      (await p.evaluate(() => [...document.querySelectorAll("#panel-ai > .subpanel")].map((sp) => [...sp.querySelectorAll(":scope > .group > h3")].map((e) => e.textContent).join(", ")).join(" | "))) === "Source, Model | Speed (Jev) | Voice | Image generation"],
+      (await p.evaluate(() => [...document.querySelectorAll("#panel-ai > .subpanel")].map((sp) => [...sp.querySelectorAll(":scope > .group > h3")].map((e) => e.textContent).join(", ")).join(" | "))) === "Source, Model | Jev: clicking and classifying | Voice | Image generation"],
     ["Jev key shown", () => shown(p, "[data-secret=jevApiKey]")],
     ["threshold shown", () => shown(p, "#f-jevThreshold")],
   ]],

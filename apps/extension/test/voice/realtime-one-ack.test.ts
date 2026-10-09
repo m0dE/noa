@@ -98,11 +98,10 @@ async function panel() {
     onSpeaking: () => {},
     keepSpoken: () => {},
     keepHeard: () => {},
-    settings: () => ({ voiceEngine: "realtime", realtimeCostNoticed: true }) as ExtensionSettings,
+    settings: () => ({ voiceEngine: "realtime" }) as ExtensionSettings,
     account: () => undefined,
     engines: async () => ENGINES,
     saveSettings: async () => {},
-    openVoiceSettings: () => {},
     createEngine: (_id, events) =>
       new RealtimeEngine({
         ticket: async () => ({ url: "wss://x/v1/ai/realtime", token: "t" }),
@@ -115,7 +114,7 @@ async function panel() {
           });
           return socket;
         },
-        player: { play: () => {}, stop: () => null, close: () => {}, playing: false, pause: () => false, resume: () => {}, level: () => 0 },
+        player: { play: () => {}, stop: () => null, close: () => {}, playing: false, pause: () => false, resume: () => {}, level: () => 0, quietMs: 0 },
       }),
     stopTask: async () => "",
     answerApproval: async () => true,

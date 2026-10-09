@@ -8,7 +8,9 @@
  * the browser voice is Chrome's own speech (chrome.tts, from the background),
  * which also says a line the other voices could not. Nothing is heard while a
  * hands-free session is on: it speaks for itself, and its microphone would
- * take the line for the user's words. In the language picked in Settings
+ * take the line for the user's words. Nothing is heard either while the screen
+ * is locked (closing a laptop's lid locks it): the notification still shows,
+ * for when the user is back. In the language picked in Settings
  * (phrases.ts), shown and said; Deepgram's English voices leave a line in
  * another language to Chrome's speech.
  */
@@ -36,6 +38,8 @@ export interface NotifierDeps {
   >;
   /** A hands-free voice session is on. */
   voiceOn(): boolean;
+  /** The screen is locked (chrome.idle): notices are shown, not heard. */
+  locked?(): Promise<boolean>;
   notifications?: Pick<typeof chrome.notifications, "create">;
   tts?: Tts;
   /** Plays a Realtime or Deepgram line, or the chime (the offscreen document); rejects when it could not. */
@@ -72,7 +76,11 @@ export function notifier(deps: NotifierDeps): Notify {
   // One after the other, like chrome.tts's enqueue.
   let queue: Promise<unknown> = Promise.resolve();
   const play = (sound: NoticeSound): Promise<void> => {
-    const next = queue.then(() => deps.play!(sound));
+    // A notice queued before the screen locked is not heard after it.
+    const next = queue.then(async () => {
+      if (await isLocked(deps)) return;
+      return deps.play!(sound);
+    });
     queue = next.catch(() => {});
     return next;
   };
@@ -125,8 +133,11 @@ export function noticeSound(s: NoticeSettings, line: string): NoticeSound | "tts
   }
 }
 
+/** The screen is locked; when that cannot be told, it is not. */
+const isLocked = (deps: NotifierDeps): Promise<boolean> => deps.locked?.().catch(() => false) ?? Promise.resolve(false);
+
 async function say(deps: NotifierDeps, line: string, play: NonNullable<NotifierDeps["play"]>): Promise<void> {
-  if (deps.voiceOn()) return;
+  if (deps.voiceOn() || (await isLocked(deps))) return;
   const s = await deps.settings();
   const sound = noticeSound(s, line);
   if (!sound) return;

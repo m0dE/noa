@@ -32,6 +32,8 @@ export class PcmPlayer {
   private item: { id: string; startedAt: number } | null = null;
   /** Paused: what is left to play, in order, how much of the item was heard, and whether it was playing then. */
   private paused: { left: { data: Float32Array; itemId: string }[]; cut: { itemId: string; playedMs: number } | null; wasPlaying: boolean } | null = null;
+  /** When the last sound stopped (epoch ms; never: -Infinity). */
+  private quietAt = -Infinity;
 
   constructor(
     private readonly sampleRate: number,
@@ -65,11 +67,18 @@ export class PcmPlayer {
     this.sources.add(s);
     node.onended = () => {
       this.sources.delete(s);
-      if (!this.sources.size) this.events.onIdle?.();
+      if (this.sources.size) return;
+      this.quietAt = Date.now();
+      this.events.onIdle?.();
     };
     node.start(startAt);
     this.nextAt = startAt + buffer.duration;
     if (wasIdle) this.events.onStart?.();
+  }
+
+  /** How long nothing has sounded, in ms: 0 while something does (paused counts as quiet), Infinity if nothing ever did. */
+  get quietMs(): number {
+    return this.sources.size ? 0 : Date.now() - this.quietAt;
   }
 
   /** Audio is playing, or paused with some left to play. */
@@ -150,6 +159,7 @@ export class PcmPlayer {
   }
 
   private halt(): void {
+    if (this.sources.size) this.quietAt = Date.now();
     for (const s of this.sources) {
       s.node.onended = null;
       try {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { clipEventText, MAX_ACT_STEPS, MAX_EVENT_TEXT, OUT_OF_CREDIT, type TaskRunResult } from "@noa/shared";
 import { createToolExecutor, SecretRedactor } from "../src/index.js";
 import { REDACTED } from "../src/redact.js";
-import { picksEvent } from "../src/executor.js";
+import { formatFileList, formatSavedFile, picksEvent } from "../src/executor.js";
 import { OutOfCreditError } from "../src/api-errors.js";
 import { goalKey, rankCandidates } from "../src/act.js";
 import { formatElementsInWords } from "../src/page-format.js";
@@ -840,5 +840,111 @@ describe("createToolExecutor: generate_image", () => {
     const r = await exec.call("generate_image", { prompt: "a cat" });
     expect(r).toEqual({ text: "generate_image failed: You are out of Noa usage credit.", isError: true });
     expect((await exec.call("generate_image", { prompt: "a cat", size: "auto" })).text).toMatch(/Invalid arguments for generate_image: size/);
+  });
+});
+
+describe("createToolExecutor: list_files", () => {
+  const folder = "C:\\Users\\me\\Downloads\\Noa";
+  const resume = `${folder}\\Resume 2026.pdf`;
+  const listing = {
+    folder,
+    files: [
+      { path: resume, name: "Resume 2026.pdf", size: 48_210, modified: "2026-10-01T09:00:00.000Z" },
+      { path: `${folder}\\images\\logo.png`, name: "images/logo.png", size: 900, modified: "2026-09-12T09:00:00.000Z" },
+    ],
+    total: 5,
+  };
+  const filesBrowser = (x: FakeX, calls: unknown[], result: unknown = listing): BrowserCaller => ({
+    call: async (method, params) => {
+      if (method !== "files.list") return x.caller().call(method, params);
+      calls.push(params);
+      return result as never;
+    },
+  });
+
+  it("lists the Noa folder with each file's path, and lets upload take those paths", async () => {
+    const x = new FakeX();
+    const calls: unknown[] = [];
+    const { exec } = setup(x, { browser: filesBrowser(x, calls) });
+    await exec.call("read_page", {});
+    // Before it is listed, a file there is refused, and the refusal says how to get it.
+    const refused = await exec.call("upload", { index: 3, paths: [resume] });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain("call list_files first");
+
+    const r = await exec.call("list_files", { search: "resume" });
+    expect(calls).toEqual([{ search: "resume" }]);
+    expect(r.isError).toBeUndefined();
+    expect(r.text).toContain(`The user's Noa folder: ${folder}`);
+    expect(r.text).toContain(`- ${resume} (47 KB, 2026-10-01)`);
+    expect(r.text).toContain("the newest 2 of 5");
+
+    const up = await exec.call("upload", { index: 3, paths: [resume.toLowerCase()] });
+    expect(up.isError).toBeUndefined();
+    expect(x.calls.find((c) => c.method === "browser.upload")!.params).toEqual({ index: 3, paths: [resume] });
+  });
+
+  it("says when the folder is empty, and when only Chrome's own downloads could be listed", () => {
+    expect(formatFileList({ folder, files: [], total: 0 }, "cv")).toBe(
+      `The user's Noa folder: ${folder}\nIt has no files matching "cv". The user can put files there (or attach them to the message) for you to use.`,
+    );
+    expect(formatFileList({ ...listing, total: 2, partial: true })).toMatch(/Only the files Chrome saved there itself are listed/);
+    const cloud = { path: `${folder}\\images\\banner.png`, name: "images/banner.png", size: 2048, modified: "2026-09-30T10:00:00.000Z", cloud: true as const };
+    expect(formatFileList({ folder, files: [cloud], total: 1 })).toContain(`- ${cloud.path} (2 KB, 2026-09-30, in the user's cloud files: saved to this path when you upload it)`);
+  });
+});
+
+describe("createToolExecutor: save_file", () => {
+  const kept = { path: "C:\\Users\\me\\Downloads\\Noa\\invoices\\neon-2026-09.pdf", name: "neon-2026-09.pdf", folder: "invoices", size: 48_210, contentType: "application/pdf", cloud: "saved" as const };
+  const saveBrowser = (x: FakeX, calls: unknown[], result: unknown = kept): BrowserCaller => ({
+    call: async (method, params) => {
+      if (method !== "files.save") return x.caller().call(method, params);
+      calls.push(params);
+      return result as never;
+    },
+  });
+
+  it("keeps a link's file, says where, and lets upload take its path", async () => {
+    const x = new FakeX();
+    const calls: unknown[] = [];
+    const { exec } = setup(x, { browser: saveBrowser(x, calls) });
+    const r = await exec.call("save_file", { url: " https://console.neon.tech/api/invoices/NEON-2026-09.pdf ", name: "neon-2026-09.pdf", folder: "invoices" });
+    expect(calls).toEqual([{ url: "https://console.neon.tech/api/invoices/NEON-2026-09.pdf", name: "neon-2026-09.pdf", folder: "invoices" }]);
+    expect(r.text).toContain(`Saved neon-2026-09.pdf (47 KB) in the user's Noa folder: ${kept.path}`);
+    expect(r.text).toContain("A copy is in their cloud files, invoices folder.");
+    await exec.call("read_page", {});
+    expect((await exec.call("upload", { index: 3, paths: [kept.path] })).isError).toBeUndefined();
+  });
+
+  it("needs exactly one source; text needs a name; a url must be a web address", async () => {
+    const x = new FakeX();
+    const calls: unknown[] = [];
+    const { exec } = setup(x, { browser: saveBrowser(x, calls) });
+    expect((await exec.call("save_file", { name: "a.pdf" })).text).toMatch(/exactly one source: url, text, screenshot, path or download \(got none\)/);
+    expect((await exec.call("save_file", { url: "https://a.test/x.pdf", screenshot: true })).text).toMatch(/\(got url, screenshot\)/);
+    expect((await exec.call("save_file", { text: "notes" })).text).toMatch(/needs a name/);
+    expect((await exec.call("save_file", { url: "file:///etc/passwd" })).text).toMatch(/must be an http\(s\) address/);
+    expect(calls).toEqual([]);
+    await exec.call("save_file", { screenshot: true });
+    await exec.call("save_file", { download: true, folder: "documents" });
+    expect(calls).toEqual([{ screenshot: true }, { download: true, folder: "documents" }]);
+  });
+
+  it("a path only when the agent was given that file: never any file on the computer", async () => {
+    const x = new FakeX();
+    const calls: unknown[] = [];
+    const { exec } = setup(x, { browser: saveBrowser(x, calls), mediaPaths: ["C:\\media\\photo.jpg"] });
+    const r = await exec.call("save_file", { path: "C:\\Users\\me\\.ssh\\id_rsa" });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/is not a file you were given/);
+    await exec.call("save_file", { path: "c:/media/PHOTO.jpg", folder: "images" });
+    expect(calls).toEqual([{ path: "C:\\media\\photo.jpg", folder: "images" }]);
+  });
+
+  it("says why the cloud has no copy", () => {
+    expect(formatSavedFile({ ...kept, cloud: "no-plan" })).toMatch(/No cloud copy: the user's plan has no cloud files/);
+    expect(formatSavedFile({ ...kept, cloud: "signed-out" })).toMatch(/not signed in to a Noa account/);
+    expect(formatSavedFile({ ...kept, cloud: "failed", cloudError: "full" })).toMatch(/storing it failed \(full\)/);
+    expect(formatSavedFile({ ...kept, cloudFolder: "" })).toMatch(/top folder \(the account server does not take the folder "invoices" yet\)/);
   });
 });

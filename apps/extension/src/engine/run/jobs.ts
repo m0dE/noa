@@ -3,6 +3,7 @@
  * requests ("do this now"), and the next turn of a conversation.
  */
 import { errorMessage, isXTask, SCREEN_HELP_TEXT, type AgentTask, type ClaimResponse, type MediaInfo, type ResultInput, type SessionInfo, type TaskAbout } from "@noa/shared";
+import { ApiRequestError } from "../../http-client.js";
 import type { LocalStore } from "../local-store.js";
 import type { StoredLocalTask } from "../local-task-rules.js";
 import type { IncomingAttachment } from "../attachment-store.js";
@@ -179,10 +180,20 @@ export function localTaskOf(job: Job): StoredLocalTask | null {
   return job.source === "local" || job.source === "turn" ? job.task : null;
 }
 
-/** Keeps a claimed cloud task's lease while it runs. Returns the function that stops it. */
-export function startHeartbeat(job: CloudJob, log: (message: string) => void): () => void {
+/**
+ * Keeps a claimed cloud task's lease while it runs. onLost: the account no longer has the task running under this
+ * runner (the user paused, cancelled or deleted it, e.g. from another browser): the run should stop. Returns the
+ * function that stops the heartbeat.
+ */
+export function startHeartbeat(job: CloudJob, log: (message: string) => void, onLost: () => void = () => {}): () => void {
   const t = setInterval(() => {
-    job.api.heartbeat(job.claim.task.id, job.runnerId).catch((err) => log(`heartbeat failed: ${errorMessage(err)}`));
+    job.api.heartbeat(job.claim.task.id, job.runnerId).catch((err) => {
+      log(`heartbeat failed: ${errorMessage(err)}`);
+      if (err instanceof ApiRequestError && (err.status === 409 || err.status === 404)) {
+        clearInterval(t);
+        onLost();
+      }
+    });
   }, HEARTBEAT_MS);
   return () => clearInterval(t);
 }

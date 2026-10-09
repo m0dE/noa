@@ -152,7 +152,7 @@ export class LocalStore {
     return out;
   }
 
-  /** Edits a task that is not running. */
+  /** Edits a task that is not running, or a repeating one that is (its next occurrence is copied from it when the run ends). */
   async update(id: string, patch: TaskPatch): Promise<StoredLocalTask> {
     const clean: Partial<StoredLocalTask> = {};
     if (patch.instructions !== undefined) clean.instructions = cleanInstructions(patch.instructions);
@@ -160,13 +160,15 @@ export class LocalStore {
     const at = patch.notBefore === undefined ? undefined : cleanTime(patch.notBefore);
     const repeat = patch.repeat === undefined ? undefined : cleanRepeat(patch.repeat);
     return this.updateOne(id, (t) => {
-      if (t.status === "running") throw new Error("The task is running; stop it first");
+      if (t.status === "running" && !t.repeat) throw new Error("The task is running; stop it first");
       // A schedule change is settled like a new task's (a rule without a first time runs at its next time).
       const schedule =
         at === undefined && repeat === undefined ? {} : settleSchedule(at === undefined ? t.notBefore : at, repeat === undefined ? t.repeat : repeat, this.now());
       // Who wrote the instructions (TaskPatch.agentAuthored): as said, or the user when they change without a word on it.
       const authored = patch.agentAuthored ?? (clean.instructions !== undefined && clean.instructions !== t.instructions ? false : t.agentAuthored);
-      return { ...t, ...clean, ...schedule, ...(authored === undefined ? {} : { agentAuthored: authored }), updatedAt: this.now().toISOString() };
+      // A running task's updatedAt is when its run started (crash recovery reads it): an edit leaves it.
+      const updatedAt = t.status === "running" ? t.updatedAt : this.now().toISOString();
+      return { ...t, ...clean, ...schedule, ...(authored === undefined ? {} : { agentAuthored: authored }), updatedAt };
     });
   }
 

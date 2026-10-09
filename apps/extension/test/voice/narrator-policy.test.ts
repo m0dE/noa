@@ -17,10 +17,8 @@ import {
   narrationOf,
   NOISE_MAX_SPEECH_MS,
   echoesSpoken,
-  requestKindOf,
   repeatsRequest,
   requestKind,
-  speechTurnOf,
   type Floor,
 } from "../../src/voice/narrator-policy.js";
 import {
@@ -33,15 +31,17 @@ import {
   progressResponse,
   NARRATOR_TOOLS,
   type RealtimeSocketLike,
+  workingSmallTalkResponse,
 } from "../../src/voice/realtime-client.js";
 import { RealtimeEngine } from "../../src/voice/realtime-engine.js";
-import { ANSWER_HOLD_MS } from "../../src/voice/realtime-feed.js";
 import { PROGRESS } from "../../src/voice/milestones.js";
 import { fakePlayer } from "./fakes.js";
 
 const GAP = PROGRESS.stepGapMs;
 /** The brains' trace: the model read a message sent into its running turn. */
 const READ: AgentEvent = { type: "trace", trace: { t: 0, src: "helper", cat: "user", name: "interjection" } };
+/** The agent's answer to a message sent while it works (answer_user). */
+const ANSWER = (text: string): AgentEvent => ({ type: "tool_call", id: "ans", name: "answer_user", args: { text } });
 const nav = (url: string): AgentEvent => ({ type: "tool_call", id: "t", name: "navigate", args: { url } });
 
 describe("narrationOf: what may make the narrator speak", () => {
@@ -395,47 +395,6 @@ const cancels = (s: FakeSocket) => s.sent.filter((e) => e.type === "response.can
 const truncations = (s: FakeSocket) => s.sent.filter((e) => e.type === "conversation.item.truncate").map((e) => [e.item_id, e.audio_end_ms]);
 
 describe("the owner's trace of 2026-09-27, gpt-realtime-2.1 with Claude Code: the narrator answering by itself", () => {
-  const CORRECTION = "No, you're being a jerk. I'm talking about like yesterday.";
-  const MADE_UP = "Yesterday, I told you about two Chrome Web Store emails";
-
-  it("(1, 5) a correction the narrator starts answering from its own notes: never heard or shown, cancelled, and the user's words reach the agent at once", async () => {
-    const t = await started();
-    userTurn(t.s, "in3", "r3", 3_500);
-    speaks(t.s, "r3", MADE_UP);
-    transcribed(t.s, "in3", CORRECTION);
-    await settle();
-    expect(t.played()).toEqual([]);
-    expect(t.shown).toEqual([]);
-    expect(cancels(t.s)).toBe(1);
-    // Not asked again (a tool call required looped on empty messages): the user's words go, as the narrator's own call.
-    expect(t.forwarded).toEqual([CORRECTION]);
-    expect(t.paired).toEqual([[CORRECTION, CORRECTION]]);
-    expect(t.s.sent.filter((e) => e.type === "conversation.item.create" && e.item.type === "function_call")).toEqual([
-      { type: "conversation.item.create", item: { type: "function_call", call_id: "noa_in3", name: "send_to_agent", arguments: JSON.stringify({ text: CORRECTION, kind: "instruction" }) } },
-    ]);
-    t.s.event({ type: "response.done", response: { id: "r3", status: "cancelled" } });
-    // What it began is out of its memory too (nothing of it was heard); then the one short acknowledgement.
-    expect(truncations(t.s)).toEqual([["a_r3", 0]]);
-    expect(t.creates()).toEqual([{ type: "response.create", response: ackResponse(CORRECTION) }]);
-    expect(t.played()).toEqual([]);
-  });
-
-  it("(5) the words arriving after that reply is done: it is still never heard, and the words go at once", async () => {
-    const t = await started();
-    userTurn(t.s, "in3", "r3");
-    speaks(t.s, "r3", "It asked you to add a privacy policy.");
-    t.s.event({ type: "response.done", response: { id: "r3", status: "completed" } });
-    expect(t.played()).toEqual([]);
-    expect(t.words).toEqual([]);
-    transcribed(t.s, "in3", "What did the second email say exactly?");
-    await settle();
-    expect(t.played()).toEqual([]);
-    expect(t.shown).toEqual([]);
-    expect(truncations(t.s)).toEqual([["a_r3", 0]]);
-    expect(t.forwarded).toEqual(["What did the second email say exactly?"]);
-    // A question: no acknowledgement (its answer is the reply).
-    expect(t.creates()).toEqual([]);
-  });
 
   it("a request whose reply says a made-up answer and then calls send_to_agent (live, 2026-09-27): the call goes, nothing it said is heard, the acknowledgement is ours", async () => {
     for (const wordsFirst of [true, false]) {
@@ -493,6 +452,9 @@ describe("the owner's trace of 2026-09-27, gpt-realtime-2.1 with Claude Code: th
     speaks(t.s, "r2", "I can hear you.", "BBBB");
     expect(t.played()).toEqual([]);
     transcribed(t.s, "in2", "Can you hear me?");
+    // Heard once it is done without a tool call (one that calls a tool is not heard).
+    expect(t.played()).toEqual([]);
+    t.s.event({ type: "response.done", response: { id: "r2", status: "completed" } });
     expect(t.played()).toEqual(["AAAA", "BBBB"]);
     expect(t.shown).toEqual(["Yes, I can hear you."]);
   });
@@ -543,15 +505,16 @@ describe("the owner's trace of 2026-09-27, gpt-realtime-2.1 with Claude Code: th
     expect(t.played()).toEqual(["RRRR"]);
   });
 
-  it("(3) the words of a reply talked over are not shown past the point it was cut", async () => {
+  it("(3) a reply talked over before it was done is neither heard nor shown", async () => {
     const t = await started();
     userTurn(t.s, "in2", "r2");
     transcribed(t.s, "in2", "Hello?");
     speaks(t.s, "r2", "Hi! I'm");
     t.s.event({ type: "input_audio_buffer.speech_started", item_id: "in5", audio_start_ms: 9_000 });
     speaks(t.s, "r2", " still here and");
-    expect(t.shown).toEqual(["Hi! I'm"]);
-    expect(t.played()).toEqual(["AAAA"]);
+    t.s.event({ type: "response.done", response: { id: "r2", status: "cancelled" } });
+    expect(t.shown).toEqual([]);
+    expect(t.played()).toEqual([]);
   });
 
   it("(4) three replies to noise: none heard or shown, none made again, nothing sent; each cancelled", async () => {
@@ -567,70 +530,6 @@ describe("the owner's trace of 2026-09-27, gpt-realtime-2.1 with Claude Code: th
     expect(t.shown).toEqual([]);
     expect(t.creates()).toEqual([]);
     expect(t.words).toEqual([]);
-  });
-});
-
-describe("speechTurnOf: what the narrator may answer by itself", () => {
-  // Small talk only: it answers these itself (no agent turn). Everything else must go through a tool.
-  const smallTalk = [
-    "Hey, can you hear me?",
-    "Hello?",
-    "Hi there.",
-    "Can you hear me now?",
-    "Are you still there?",
-    "Testing, testing.",
-    "Thanks!",
-    "Thank you so much.",
-    "Okay.",
-    "Okay, cool.",
-    "Got it, thanks.",
-    "Um...",
-    "Hold on.",
-    "What are you doing right now?",
-    "Good morning!",
-    "여보세요, 들려요?",
-    "",
-  ];
-  // The owner's trace (2026-09-27) and the kinds of words that must reach the agent (or a tool).
-  const requests = [
-    "No, you're being a jerk. I'm talking about like yesterday.",
-    "I'm talking about yesterday.",
-    "What did the second email say exactly?",
-    "What did you find?",
-    "Do you remember what I asked you this morning?",
-    "No, the other inbox.",
-    "Hey, open my Gmail.",
-    "Thanks, and now check my calendar.",
-    "Stop.",
-    "Cancel that.",
-    "Yes.",
-    "No.",
-    "Goodbye.",
-    "Use this tab.",
-    "What's on this page?",
-    "Check my inbox.",
-  ];
-
-  it("small talk is answered by the narrator; nothing of it starts an agent turn (false-forward risk: 0 of the corpus)", () => {
-    const forwarded = smallTalk.filter((w) => speechTurnOf(w) !== "small_talk");
-    expect(forwarded).toEqual([]);
-  });
-
-  it("anything about what the agent did, knows or remembers, a follow-up or correction, a question for the browser, a command: a tool call is required (0 answered alone)", () => {
-    const answeredAlone = requests.filter((w) => speechTurnOf(w) !== "request");
-    expect(answeredAlone).toEqual([]);
-  });
-});
-
-describe("speechTurnOf: what the agent is doing, or whether the assistant is there (the owner's trace: these restarted the agent)", () => {
-  it("is answered by the narrator from the latest update, whatever the fillers and swearing", () => {
-    const status = ["What are you doing bro", "I'm asking you what the fuck are you doing", "I'm asking you a question", "Are you there? Hello?", "What's going on?", "Hey, what are you working on right now?", "Are you done yet?"];
-    expect(status.filter((w) => speechTurnOf(w) !== "small_talk")).toEqual([]);
-  });
-
-  it("what it did, found or remembers still goes to the agent", () => {
-    const requests = ["What did you do bro?", "I'm asking you what you found", "What are you doing on Gmail? Stop that.", "Tell me what the second email said", "So what did it post?"];
-    expect(requests.filter((w) => speechTurnOf(w) !== "request")).toEqual([]);
   });
 });
 
@@ -650,22 +549,6 @@ describe("echoesSpoken: the microphone hearing the assistant's own voice (the ow
     expect(echoesSpoken("What you like.", [line])).toBe(true);
     expect(echoesSpoken("Stop.", [line], 1)).toBe(false);
     expect(echoesSpoken("Up.", [line], 1)).toBe(false);
-  });
-});
-
-describe("requestKindOf: the user's words passed on as they said them, a question or an instruction", () => {
-  it("a question mark, or words that start like a question; else an instruction", () => {
-    expect(["Hey, how you doing?", "What did the second email say exactly", "너 한국어 가능해?", "can you check my calendar"].map(requestKindOf)).toEqual([
-      "question",
-      "question",
-      "question",
-      "question",
-    ]);
-    expect(["Post gm on X.", "No, you're being a jerk. I'm talking about like yesterday.", "Herring's Landing. Give me one second here."].map(requestKindOf)).toEqual([
-      "instruction",
-      "instruction",
-      "instruction",
-    ]);
   });
 });
 
@@ -713,17 +596,16 @@ describe("the owner's report of 2026-09-27: 'can you speak Korean?' while the ag
       t.engine.agentEvent({ type: "user_message", text: question, voice: true }, T0);
       // The brain read it at its next step (its "interjection" trace).
       t.engine.agentEvent(READ, T0 + 500);
-      t.engine.agentEvent({ type: "assistant_text", text: answer }, T0 + 1_000);
-      // Held for the turn's end a few seconds (ANSWER_HOLD_MS); the agent goes on working, so it is said.
-      t.engine.tick(T0 + 1_000 + ANSWER_HOLD_MS - 1);
+      // Its text is not the answer (what it does next, live: "Let me open her email to see…"); answer_user is, said at once.
+      t.engine.agentEvent({ type: "assistant_text", text: "Let me check which email is open." }, T0 + 800);
       expect(t.creates()).toEqual([]);
-      t.engine.tick(T0 + 1_000 + ANSWER_HOLD_MS);
+      t.engine.agentEvent(ANSWER(answer), T0 + 1_000);
       expect(t.creates().map(lineOf)).toEqual([answer.replace(/\.$/, "")]);
       expect(notes(t.s).every((n) => n.startsWith("Status"))).toBe(true);
       t.serve();
-      // Its next words go on with the task: not said.
+      // Its next words go on with the task: not said; the same answer again is not said twice.
       t.engine.agentEvent({ type: "assistant_text", text: "Clicking Send on the refund email." }, T0 + 2_000);
-      t.engine.agentEvent({ type: "assistant_text", text: answer }, T0 + 3_000);
+      t.engine.agentEvent(ANSWER(answer), T0 + 3_000);
       expect(t.creates()).toHaveLength(1);
       // The task's end is said as usual.
       t.engine.agentEvent({ type: "task_end", outcome: "done", summary: "Sent", spoken: "Sent the refund request to Streamlabs." }, T0 + 20_000);
@@ -731,23 +613,17 @@ describe("the owner's report of 2026-09-27: 'can you speak Korean?' while the ag
     });
   }
 
-  it("the narrator answering '너 한국어 가능해?' by itself (live, 2026-09-27: '응, 가능해. 한국어로 편하게 말해줘.'): never heard, its words passed on as a question, no acknowledgement", async () => {
+  it("the narrator answering '너 한국어 가능해?' by itself while the agent works (live, 2026-09-27: '응, 가능해. 한국어로 편하게 말해줘.'): its own choice stands, nothing is passed on, the reply is made again capped", async () => {
     const t = await started();
     t.engine.setAgentWorking(true);
     userTurn(t.s, "in1", "r1", 1_500);
     speaks(t.s, "r1", "응, 가능해. 한국어로 편하게 말해줘.");
     transcribed(t.s, "in1", "너 한국어 가능해?");
-    t.s.event({ type: "response.done", response: { id: "r1", status: "cancelled" } });
+    t.s.event({ type: "response.done", response: { id: "r1", status: "completed" } });
     await settle();
-    // Its words go as they were said, a question (no acknowledgement).
-    expect(t.forwarded).toEqual(["너 한국어 가능해?"]);
-    expect(t.creates()).toEqual([]);
+    expect(t.forwarded).toEqual([]);
     expect(t.played()).toEqual([]);
-    t.engine.agentEvent({ type: "user_message", text: "너 한국어 가능해?", voice: true }, Date.now());
-    t.engine.agentEvent(READ, Date.now());
-    t.engine.agentEvent({ type: "assistant_text", text: "네, 한국어 가능해요!" }, Date.now());
-    t.engine.tick(Date.now() + ANSWER_HOLD_MS);
-    expect(t.creates().map(lineOf)).toEqual(["네, 한국어 가능해요!"]);
+    expect(t.creates()).toEqual([{ type: "response.create", response: workingSmallTalkResponse(null) }]);
   });
 
   it("the user's correction ('아니, 저는 그냥 한국어 가능한지 물어본 거예요') is a question too: no acknowledgement", async () => {

@@ -137,6 +137,28 @@ function contOpts(events: AgentEvent[], extra: Partial<BrainContinueOptions> = {
   };
 }
 
+describe("ClaudeCodeBrain: Noa's cloud Jev", () => {
+  // Bug: "even if im using local claude code, if JEV is lacking, then have me use JEV from cloud service".
+  it("sends the cloud Jev with each run when no Jev key is set here (the helper uses its own key first)", () => {
+    const f = fakeHelper();
+    const cloud = { token: "bt_s_tok", apiBase: "https://api.test/" };
+    const brain = new ClaudeCodeBrain(f.helper, { cloudJev: () => cloud });
+    const config = { maxToolCalls: 10, maxTaskMinutes: 5, jevEnabled: true, jevThreshold: 0.8, isRetry: false };
+    brain.start(opts([], { config }));
+    brain.prewarm(config);
+    brain.start(opts([], { sessionId: "s2", config: { ...config, jevApiKey: "jk" } }));
+    brain.start(opts([], { sessionId: "s3", config: { ...config, jevEnabled: false } }));
+    const sent = f.calls.map((c) => c.params.config.jevCloud);
+    expect(sent).toEqual([{ endpoint: "https://api.test/v1/ai/jev", token: "bt_s_tok" }, { endpoint: "https://api.test/v1/ai/jev", token: "bt_s_tok" }, undefined, undefined]);
+  });
+
+  it("sends none while the cloud Jev cannot be used (signed out, no credit)", () => {
+    const f = fakeHelper();
+    new ClaudeCodeBrain(f.helper, { cloudJev: () => null }).start(opts([], { config: { maxToolCalls: 10, maxTaskMinutes: 5, jevEnabled: true, jevThreshold: 0.8, isRetry: false } }));
+    expect(f.calls[0]!.params.config.jevCloud).toBeUndefined();
+  });
+});
+
 describe("ClaudeCodeBrain: conversations", () => {
   it("tracks the helper's open sessions (hello, helper.sessions, disconnect)", () => {
     const f = fakeHelper();
@@ -290,6 +312,14 @@ describe("ApiBrain", () => {
     run.abort("login", "paused");
     expect(session.abort).toHaveBeenCalledWith("login", "paused");
     expect(await run.done).toEqual({ outcome: "done" });
+  });
+
+  it("uses Noa's cloud Jev without a key here, tied to the session; never when Jev is off", () => {
+    const core = { createJev: vi.fn(() => ({ decide: vi.fn() })), startApiAgent: vi.fn(() => ({ sessionId: "s", sendUserMessage() {}, abort() {}, done: new Promise<never>(() => {}) })) };
+    const brain = new ApiBrain({ core, browser: { call: vi.fn() as never }, cloudJev: () => ({ token: "bt_s_tok", apiBase: "https://api.test" }) });
+    brain.start(opts([], { settings: { ...DEFAULT_SETTINGS, anthropicApiKey: "sk", jevApiKey: "" } }));
+    brain.start(opts([], { sessionId: "s2", settings: { ...DEFAULT_SETTINGS, anthropicApiKey: "sk", jevApiKey: "", jevEnabled: false } }));
+    expect(core.createJev.mock.calls).toEqual([["bt_s_tok", { endpoint: "https://api.test/v1/ai/jev", headers: { "X-Noa-Session": "s1" } }]]);
   });
 
   it("no Jev without a key or when disabled", () => {

@@ -13,7 +13,7 @@ import {
   taskNextTime,
 } from "@noa/shared";
 import { FIXES } from "../../src/sidepanel/error-help.js";
-import { accountLabel, bytesToBase64, clockLabel, firstLine, modelChip, statusLine, todoGate } from "../../src/sidepanel/format.js";
+import { accountLabel, bytesToBase64, clockLabel, firstLine, jevHint, modelChip, statusLine, todoGate } from "../../src/sidepanel/format.js";
 import { modelLabel } from "../../src/ui/labels.js";
 
 const NOW = new Date(2026, 8, 24, 12, 0, 0).getTime(); // local noon
@@ -154,8 +154,14 @@ describe("model chip", () => {
     expect(modelChip(state({ settings: { ...DEFAULT_SETTINGS, jevApiKey: "set" } })).jevPossible).toBe(true);
     const helper = { version: "1", jevAvailable: true, claudePath: "c", logDir: "l", ptyAvailable: true };
     expect(modelChip(state({}, { helper })).jevPossible).toBe(true);
-    expect(modelChip(state({}, { jevActive: true })).jevPossible).toBe(true);
+    expect(modelChip(state({}, { jevActive: true, jevSource: "cloud" })).jevPossible).toBe(true);
     expect(modelChip(state({ settings: { ...DEFAULT_SETTINGS, jevEnabled: false } })).jevEnabled).toBe(false);
+  });
+
+  it("the Jev switch says where Jev comes from: Noa's cloud Jev bills the usage credit", () => {
+    expect(jevHint(modelChip(state({}, { jevActive: true, jevSource: "cloud" })))).toBe("Faster clicks and typing, from Noa's cloud (usage credit)");
+    expect(jevHint(modelChip(state({}, { jevActive: true, jevSource: "helper" })))).toBe("Faster clicks and typing");
+    expect(jevHint(modelChip(state()))).toBe("Add a Jev key or log in");
   });
 });
 
@@ -165,7 +171,7 @@ describe("hosted AI in the status line and the model chip", () => {
     signInConfigured: true,
     apiBase: "https://api.test",
     dashboardUrl: "https://api.test/",
-    billingUrl: "https://api.test/billing",
+    billingUrl: "https://api.test/billing", filesUrl: "https://api.test/files",
     user: { email: "ada@example.com", name: "Ada", pictureUrl: null },
     credit: { subscriptionCents: 421, topupCents: 1000, totalCents: 1421, periodGrantCents: 500, periodEnd: null },
     ...over,
@@ -222,7 +228,7 @@ describe("TODO tab gate (the TODO list is a paid feature)", () => {
     signInConfigured: true,
     apiBase: "https://api.test",
     dashboardUrl: "https://api.test/",
-    billingUrl: "https://api.test/billing",
+    billingUrl: "https://api.test/billing", filesUrl: "https://api.test/files",
     ...(plan ? { plan: { id: plan, status: plan === "free" ? "none" : "active", currentPeriodEnd: null, cancelAtPeriodEnd: false } as const } : {}),
   });
   it("signed out: Log in; Free: Get a plan; a paid plan: the list", () => {

@@ -162,6 +162,7 @@ export class TaskSession {
       this.controller.abort(new Error("time limit"));
     }, minutes * 60_000);
     this.turn = turn;
+    this.interjections.newTurn();
     this.lastTurnAt = Date.now();
     return turn;
   }

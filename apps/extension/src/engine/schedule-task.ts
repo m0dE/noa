@@ -33,7 +33,7 @@
  */
 import {
   CancelScheduledTaskArgs,
-  CHANGEABLE_TASK_STATUSES,
+  canChangeTask,
   changedTaskText,
   describeSchedule,
   errorMessage,
@@ -203,7 +203,11 @@ export class TaskScheduler {
     if (args.schedule?.at !== undefined) patch.notBefore = args.schedule.at === null ? null : new Date(args.schedule.at).toISOString();
     if (args.schedule?.repeat !== undefined) patch.repeat = args.schedule.repeat;
     const { before, after } = await this.withTodo(sessionId, "changed", async (todo) => {
-      const before = await this.changeable(todo, args.task_id);
+      const before = await this.changeable(todo, args.task_id, "updated");
+      // A run under way keeps its time: its next one comes from the repeat rule when it ends.
+      if (before.status === "running" && patch.notBefore) {
+        throw new TodoRefusal(`Task ${before.id} is running now, so its next run follows its repeat rule: change its repeat rule or instructions, or give the new time once this run ends. Nothing was changed.`);
+      }
       const reviewed = await this.isAbout(sessionId, before);
       const allowed = await this.approveChange(sessionId, before, "updated", this.previewOf(before, patch, now), reviewed);
       // New words from the agent are the agent's, whoever wrote the task (Task.agentAuthored), unless the user allowed
@@ -221,7 +225,7 @@ export class TaskScheduler {
   async cancel(sessionId: string, rawArgs: unknown): Promise<ScheduledTask> {
     const args = parseArgs(CancelScheduledTaskArgs, rawArgs, "cancel_scheduled_task", "changed");
     const task = await this.withTodo(sessionId, "changed", async (todo) => {
-      const task = await this.changeable(todo, args.task_id);
+      const task = await this.changeable(todo, args.task_id, "cancelled");
       await this.approveChange(sessionId, task, "cancelled");
       await todo.cancel(task.id);
       return task;
@@ -296,12 +300,13 @@ export class TaskScheduler {
     }
   }
 
-  /** The task `id` as the TODO list has it now, when it may still change. */
-  private async changeable(todo: TodoSource, id: string): Promise<LocalTask> {
+  /** The task `id` as the TODO list has it now, when `change` of it may still be made. */
+  private async changeable(todo: TodoSource, id: string, change: TodoChange): Promise<LocalTask> {
     const task = (await todo.list()).tasks.find((t) => t.id === id);
     if (!task) throw new TodoRefusal(`There is no task ${id} in the user's TODO list: call list_scheduled_tasks for the ids. Nothing was changed.`);
-    if (!(CHANGEABLE_TASK_STATUSES as readonly string[]).includes(task.status)) {
-      throw new TodoRefusal(`Task ${id} is ${task.status}: only a task that waits to run (pending or paused) can be changed. Nothing was changed.`);
+    if (!canChangeTask(task, change)) {
+      const which = change === "updated" ? "a task that waits to run (pending or paused), or a repeating task while it runs," : "a task that waits to run (pending or paused)";
+      throw new TodoRefusal(`Task ${id} is ${task.status}: only ${which} can be ${change}. Nothing was changed.`);
     }
     return task;
   }

@@ -32,7 +32,7 @@ describe("testClaude", () => {
 });
 
 describe("testJev", () => {
-  const onApi = { effective: "claude-api", helper: null } as const;
+  const onApi = { jevSource: "key" } as const;
   const HOSTED = { token: "bt_s_tok", apiBase: "https://api.test/" };
   const deps = (createJev: TestJevDeps["core"]["createJev"], hosted: TestJevDeps["hosted"] = null): TestJevDeps => ({ core: { createJev }, hosted });
 
@@ -47,29 +47,28 @@ describe("testJev", () => {
   });
 
   it("fails without a key or when Jev throws", async () => {
-    expect(await testJev(DEFAULT_SETTINGS, onApi, deps(vi.fn()))).toEqual({ ok: false, detail: "No Jev key set" });
+    expect((await testJev(DEFAULT_SETTINGS, {}, deps(vi.fn()))).detail).toMatch(/^No Jev: set a Jev key, or log in/);
     const createJev = () => ({ decide: async () => Promise.reject(new Error("401 bad key")) });
     expect(await testJev({ ...DEFAULT_SETTINGS, jevApiKey: "jk" }, onApi, deps(createJev))).toEqual({ ok: false, detail: "Jev test failed: 401 bad key" });
   });
 
   // Bug: "if it's using Noa AI, then it shouldn't be asking for JEV api key".
   it("does not ask for a Jev key when the brain is Noa AI (the server provides Jev)", async () => {
-    const r = await testJev({ ...DEFAULT_SETTINGS, brain: "noa", jevApiKey: "" }, { effective: "noa", helper: null }, deps(vi.fn()));
+    const r = await testJev({ ...DEFAULT_SETTINGS, brain: "noa", jevApiKey: "" }, { jevSource: "cloud" }, deps(vi.fn()));
     expect(r.detail).not.toMatch(/Jev key/i);
   });
 
-  it("on Noa AI tests the account's Jev (the server's /v1/ai/jev), even with a key set here", async () => {
+  it("with the cloud as the source (Noa AI, even with a key set here) tests the account's Jev (the server's /v1/ai/jev)", async () => {
     const decide = vi.fn(async () => ({ operation: "click" as const, index: 1, confidence: 0.9 }));
     const createJev = vi.fn(() => ({ decide }));
-    const r = await testJev({ ...DEFAULT_SETTINGS, jevApiKey: "jk" }, { effective: "noa", helper: null }, deps(createJev, HOSTED));
+    const r = await testJev({ ...DEFAULT_SETTINGS, jevApiKey: "jk" }, { jevSource: "cloud" }, deps(createJev, HOSTED));
     expect(createJev).toHaveBeenCalledWith("bt_s_tok", { endpoint: "https://api.test/v1/ai/jev" });
-    expect(r).toMatchObject({ ok: true, detail: expect.stringMatching(/^Noa AI's Jev answered in \d+ ms: click element 1/) });
-    expect((await testJev(DEFAULT_SETTINGS, { effective: "noa", helper: null }, deps(vi.fn()))).detail).toMatch(/Sign in/);
+    expect(r).toMatchObject({ ok: true, detail: expect.stringMatching(/^Noa's cloud Jev answered in \d+ ms: click element 1/) });
+    expect((await testJev(DEFAULT_SETTINGS, { jevSource: "cloud" }, deps(vi.fn()))).detail).toMatch(/Sign in/);
   });
 
   it("on local Claude Code with the helper's own key and none here: says the helper's key is used", async () => {
-    const helper = { version: "2", jevAvailable: true, claudePath: "C", logDir: "L" };
-    const r = await testJev(DEFAULT_SETTINGS, { effective: "claude-code", helper }, deps(vi.fn()));
+    const r = await testJev(DEFAULT_SETTINGS, { jevSource: "helper" }, deps(vi.fn()));
     expect(r.detail).toMatch(/helper's own/);
   });
 });

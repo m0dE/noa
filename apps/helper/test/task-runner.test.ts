@@ -148,6 +148,18 @@ describe("TaskRunner with ScriptedBrain", () => {
     expect(keys).toEqual(["env-key", "cfg-key"]);
   });
 
+  it("uses Noa's cloud Jev when no key is set, and a key before it", async () => {
+    const x = new FakeX();
+    const made: unknown[][] = [];
+    const brain = () => customBrain(async () => {});
+    const makeJev = (...a: unknown[]) => (made.push(a), fakeJev);
+    const jevCloud = { endpoint: "https://api.noa.test/v1/ai/jev", token: "session-token" };
+    await setup(x, { brain, makeJev, envJevKey: null }).runner.run(params({}, { sessionId: "S-CLOUD", config: { ...CONFIG, jevCloud } }));
+    await setup(x, { brain, makeJev }).runner.run(params({}, { config: { ...CONFIG, jevCloud } }));
+    await setup(x, { brain, makeJev, envJevKey: null }).runner.run(params({}, { config: { ...CONFIG, jevEnabled: false, jevCloud } }));
+    expect(made).toEqual([["session-token", { endpoint: jevCloud.endpoint, sessionId: "S-CLOUD" }], ["env-key"]]);
+  });
+
   it("offers generate_image unless image generation is turned off (config.imageGeneration)", async () => {
     const seen: string[][] = [];
     const brain = () => customBrain(async (ctx) => void seen.push(ctx.allowedTools));

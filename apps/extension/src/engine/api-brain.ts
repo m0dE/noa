@@ -4,9 +4,10 @@
  * the user's Anthropic API key (claude-api) and the hosted Noa AI
  * (Noa, see hosted-brain.ts).
  */
-import type { AgentSession, ApiAgentOptions, ApiAttachment, BrowserCaller, JevLike } from "@noa/core";
-import { errorMessage, type AgentEvent, type ExtensionSettings, type MemoryToolName, type TodoToolName, type TodoToolResult } from "@noa/shared";
+import { withoutCreditPause, type AgentSession, type ApiAgentOptions, type ApiAttachment, type BrowserCaller, type JevLike } from "@noa/core";
+import { errorMessage, SESSION_HEADER, type AgentEvent, type ExtensionSettings, type MemoryToolName, type TodoToolName, type TodoToolResult } from "@noa/shared";
 import { callSafely } from "../listeners.js";
+import { hostedJevEndpoint } from "./hosted-brain.js";
 import { endedRun, failedRun, type Brain, type BrainContinueOptions, type BrainRun, type BrainStartOptions, type CoreApi, type TurnAttachment } from "./brains.js";
 
 /** Where a conversation's current turn goes: the runner's event handler and the turn's tab. */
@@ -37,13 +38,20 @@ export interface ApiBackend {
   afterTurn?(): void;
 }
 
-/** The user's own Anthropic API key, with Jev when it is on and a Jev key is set. */
-export function claudeApiBackend(core: Pick<CoreApi, "createJev">, fetchFn?: typeof fetch): ApiBackend {
+/**
+ * The user's own Anthropic API key. Jev, when it is on: the Jev key set here, else Noa's cloud Jev while
+ * `cloudJev` gives the account's session (jevSourceFor); a run it has no credit for goes on without it.
+ */
+export function claudeApiBackend(core: Pick<CoreApi, "createJev">, fetchFn?: typeof fetch, cloudJev?: () => { token: string; apiBase: string } | null): ApiBackend {
+  const fetchOpt = fetchFn ? { fetch: fetchFn } : {};
   return {
     kind: "claude-api",
     label: "Claude API",
-    connect(s) {
-      const jev = s.jevEnabled && s.jevApiKey ? core.createJev(s.jevApiKey, fetchFn ? { fetch: fetchFn } : undefined) : null;
+    connect(s, sessionId) {
+      let jev: JevLike | null = null;
+      const cloud = s.jevEnabled && !s.jevApiKey ? cloudJev?.() : null;
+      if (s.jevEnabled && s.jevApiKey) jev = core.createJev(s.jevApiKey, fetchFn ? { fetch: fetchFn } : undefined);
+      else if (cloud) jev = withoutCreditPause(core.createJev(cloud.token, { endpoint: hostedJevEndpoint(cloud.apiBase), headers: { [SESSION_HEADER]: sessionId }, ...fetchOpt }));
       return { agent: { apiKey: s.anthropicApiKey, model: s.anthropicModel }, jev };
     },
   };
@@ -69,13 +77,15 @@ export class ApiBrain implements Brain {
       onSessionsChanged?: () => void;
       /** Default: the Anthropic API key in the settings. */
       backend?: ApiBackend;
+      /** The default backend's Noa cloud Jev: the account's session while it can be used, else null. */
+      cloudJev?: () => { token: string; apiBase: string } | null;
       /** The TODO tools for a conversation (the TODO list's TaskScheduler). Absent: the tools are refused. */
       todoTool?: (sessionId: string, tool: TodoToolName, args: unknown) => Promise<TodoToolResult>;
       /** remember / recall / forget for a conversation (the extension's memory). Absent: the tools are refused. */
       memoryTool?: (sessionId: string, tool: MemoryToolName, args: unknown) => Promise<{ text: string; isError?: boolean }>;
     },
   ) {
-    this.backend = deps.backend ?? claudeApiBackend(deps.core, deps.fetch);
+    this.backend = deps.backend ?? claudeApiBackend(deps.core, deps.fetch, deps.cloudJev);
     this.kind = this.backend.kind;
   }
 

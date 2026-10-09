@@ -25,8 +25,17 @@ export const HOLD_TITLE = "Keep it from running, with its repeats, until you res
 /** Resume on a paused job. */
 export const RELEASE_TITLE = "Put it back on its schedule";
 
+/** Pause on an account task running in another browser (or under a runner that is gone). */
+export const STOP_ELSEWHERE_TITLE = "Stop this run and keep it from running, with its repeats, until you resume it";
+
 /** A task that waits (pending or paused) can still be changed. */
 const waits = (job: Job) => job.task?.status === "pending" || job.task?.status === "paused";
+
+/**
+ * The account's task runs, but not in this browser (another browser runs it, or its runner is gone while the task
+ * still counts as running): the account stops it (the runner loses its lease).
+ */
+const runsElsewhere = (job: Job, source: "local" | "account") => source === "account" && !job.running && job.task?.status === "running";
 
 /**
  * source: where the TODO list lives (the signed-in account's queue, or this browser). Running tasks of the account's
@@ -44,6 +53,7 @@ export function jobActions(job: Job, source: "local" | "account"): JobAction[] {
   if (job.held) out.push({ id: "release", label: "Resume", title: RELEASE_TITLE });
   // A job that waits for its time can be paused (one that needs the user has Resume for that instead).
   else if (t && !job.running && t.status === "pending") out.push({ id: "hold", label: "Pause", title: HOLD_TITLE });
+  else if (runsElsewhere(job, source)) out.push({ id: "hold", label: "Pause", title: STOP_ELSEWHERE_TITLE });
   if (!job.running && !job.held && job.state === "needs" && canResume(job, source)) {
     out.push({ id: "resume", label: "Resume", title: source === "account" && t ? "Put it back in the queue to run now" : "Pick up where it stopped" });
   }
@@ -56,6 +66,7 @@ export function jobActions(job: Job, source: "local" | "account"): JobAction[] {
   // A task's name is its series' (a run that keeps its instructions carries it; older runs are named by the task).
   if (s && (job.kind === "chat" ? s.source === "adhoc" : !!s.instructions)) out.push({ id: "rename", label: "Rename", title: "Give this job your own name" });
   if (t && source === "account" && waits(job)) out.push({ id: "cancel", label: "Cancel", title: "It will not run" });
+  else if (t && runsElsewhere(job, source)) out.push({ id: "cancel", label: "Cancel", title: "Stop this run; it will not run again" });
   if (!job.running && !(t?.status === "running" && source === "account")) {
     out.push({ id: "delete", label: "Delete", title: job.kind === "task" ? "Delete the task and its runs" : "Delete this chat", danger: true });
   }

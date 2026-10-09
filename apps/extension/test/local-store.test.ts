@@ -186,7 +186,7 @@ describe("LocalStore", () => {
     expect((chrome.storage.local.data[LOCAL_TASKS_KEY] as StoredLocalTask[])[0]!.repeat).toEqual({ cron: "0 9 * * *", tz: TZ });
   });
 
-  it("update and delete refuse running tasks", async () => {
+  it("update and delete refuse running tasks; a repeating one that runs can be updated", async () => {
     const t = await store.add({ instructions: "x" });
     expect(await store.update(t.id, { instructions: "y", account: "@a", repeat: daily("07:00") })).toMatchObject({
       instructions: "y",
@@ -194,9 +194,13 @@ describe("LocalStore", () => {
       repeat: daily("07:00"),
       notBefore: local(2026, 9, 25, 7, 0).toISOString(),
     });
-    await store.markStarted(t.id);
-    await expect(store.update(t.id, { instructions: "z" })).rejects.toThrow(/running/);
+    const started = await store.markStarted(t.id);
+    // Repeating: the edit is what its next runs do; when the run started stays (crash recovery reads it).
+    expect(await store.update(t.id, { instructions: "z" })).toMatchObject({ status: "running", instructions: "z", updatedAt: started.updatedAt });
     await expect(store.delete(t.id)).rejects.toThrow(/running/);
+    const once = await store.add({ instructions: "once" });
+    await store.markStarted(once.id);
+    await expect(store.update(once.id, { instructions: "z" })).rejects.toThrow(/running/);
     await expect(store.update("nope", {})).rejects.toThrow(/No task/);
     expect(await store.delete("nope")).toBe(false);
   });

@@ -126,6 +126,18 @@ describe("switchXAccount", () => {
     neverClicksACell(x);
   });
 
+  it("started on another site (the CrazyGames game page, Oct 1): switches in a new tab and leaves that page as it was", async () => {
+    const page = "https://developer.crazygames.com/games/12345/edit";
+    const x = new FakeX({ ...OWNER, url: page });
+    const r = await switchXAccount(x.caller(), "@mecharoyalecom", { sleep: noSleep });
+    expect(r.text).toMatch(/^Switched to @mecharoyalecom/);
+    expect(r.text).toContain(page);
+    expect(x.account).toBe("mecharoyalecom");
+    expect(x.leftTabs).toEqual([page]);
+    expect(x.calls.find((c) => c.method === "browser.openTabs")!.params).toEqual({ urls: ["https://x.com/home"], background: false });
+    neverClicksACell(x);
+  });
+
   it("stops at a lock or login page: the user must act", async () => {
     const x = new FakeX({ url: "https://x.com/account/access", account: "alice" });
     const r = await switchXAccount(x.caller(), "bob", { sleep: noSleep });

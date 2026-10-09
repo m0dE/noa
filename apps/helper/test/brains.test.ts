@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { DeltaBatcher, type AgentEvent } from "@noa/shared";
 import { UserInput } from "../src/brains/brain.js";
 import { extractPostText, extractStartUrl } from "../src/brains/scripted.js";
@@ -47,7 +48,7 @@ describe("ClaudeCodeBrain helpers", () => {
     expect(
       buildClaudeArgs({
         systemPrompt: "rules",
-        mcpConfigPath: "C:\\run\\mcp-config.json",
+        mcpConfigPath: join("run", "mcp-config.json"),
         allowedTools: ["mcp__noa__click", "mcp__noa__task_complete"],
         model: "sonnet",
       }),
@@ -62,12 +63,13 @@ describe("ClaudeCodeBrain helpers", () => {
       "--replay-user-messages",
       "--strict-mcp-config",
       "--mcp-config",
-      "C:\\run\\mcp-config.json",
+      join("run", "mcp-config.json"),
       "--allowedTools",
       "mcp__noa__click,mcp__noa__task_complete",
       "--append-system-prompt-file",
       // In the run folder, named by the prompt's content (see systemPromptFile).
-      "C:\\run\\system-prompt-6c621d1a05138a78.txt",
+      // The prompt file sits next to the MCP config, in the run folder.
+      join("run", "system-prompt-6c621d1a05138a78.txt"),
       "--tools",
       "",
       "--setting-sources",

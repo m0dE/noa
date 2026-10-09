@@ -1768,7 +1768,7 @@ export const PANEL_CASES = [
         await p.click(mic);
         await waitPill(p, "listening");
         await waitVoice(p, "handsfree");
-        if ((await p.getAttribute(mic, "title")) !== `End voice mode · ${VOICE_SHORTCUT_LABEL}`) fail(`mic tooltip while on "${await p.getAttribute(mic, "title")}"`);
+        if ((await p.getAttribute(mic, "title")) !== `Turn voice off · the task keeps running · ${VOICE_SHORTCUT_LABEL}`) fail(`mic tooltip while on "${await p.getAttribute(mic, "title")}"`);
         if ((await listeningReported(p)) !== true) fail("the mic's hands-free not reported to the background");
         if (await p.evaluate(() => window.__requests.some((r) => r.type === "voice.realtime"))) fail("Standard asked for the realtime relay");
         const problems = await orbCheck(p);
@@ -1888,7 +1888,7 @@ export const PANEL_CASES = [
         want2(look.buttons === 0 && look.height <= 30, "a slim strip without buttons");
         want2(look.meter, "meter");
         want2(look.placeholder === "Listening · go ahead" && look.glow, "listening box");
-        want2(look.micTitle === `End voice mode · ${VOICE_SHORTCUT_LABEL}` && look.micPressed === "true", "mic ends voice");
+        want2(look.micTitle === `Turn voice off · the task keeps running · ${VOICE_SHORTCUT_LABEL}` && look.micPressed === "true", "mic ends voice");
         want2(look.micFill !== "rgba(0, 0, 0, 0)" && look.micText === "Voice" && look.waves === 1, "Voice filled, still \"Voice\", its sound-wave icon");
         want2(JSON.stringify(look.mute) === JSON.stringify(["false", "Mute the microphone · Alt+M", "Mute the microphone · Alt+M", "", "live", 1, 28]), "Mute in the composer: a mic icon, named");
         want2(look.reported?.listening === true && look.reported?.tabId === 1, "listening reported with the tab (badge)");
@@ -1927,7 +1927,6 @@ export const PANEL_CASES = [
       "panel-handsfree-sending",
       "panel-handsfree-speaking",
       "panel-handsfree-working",
-      "panel-handsfree-cost",
       "panel-handsfree-narrator",
       "panel-handsfree-heard",
       "panel-handsfree-unavailable",
@@ -2039,12 +2038,12 @@ export const PANEL_CASES = [
         await p.evaluate(() => window.__ttsRelease());
         await waitPhase(p, "working");
         if (!(await barSays(p, "Agent working", "Hearing you"))) fail(`working bar "${await barTitle(p)}"`);
-        // The task's Stop and the mic that ends voice: two different buttons, named apart.
+        // The task's Stop (red; it ends voice too) and Voice (the accent; voice off, the task goes on): named apart.
         const stops = await p.evaluate(() => ({
           task: [!document.getElementById("now-stop").hidden, document.getElementById("now-stop").title, !!document.querySelector("#now-stop svg")],
           voice: document.querySelector("#now-actions .voice-mic").title,
         }));
-        if (JSON.stringify(stops.task) !== JSON.stringify([true, "Stop the task", true]) || !/^End voice/.test(stops.voice)) fail(`the two stops ${JSON.stringify(stops)}`);
+        if (JSON.stringify(stops.task) !== JSON.stringify([true, "Stop the task", true]) || !/^Turn voice off · the task keeps running/.test(stops.voice)) fail(`the two stops ${JSON.stringify(stops)}`);
         // Said: the line is kept in its chat (compact: the agent's text above starts with it), no longer playing.
         await p.waitForFunction(() => document.querySelector("#chat-log .ev-spoken:not(.live)"));
         const kept = await p.evaluate(() => ({
@@ -2093,22 +2092,15 @@ export const PANEL_CASES = [
         await p.close();
       }
 
-      // Realtime: the cost notice the first time, the narrator talking (caption), and its send_to_agent starting a task.
-      if (["cost", "narrator", "heard", "elsewhere-heard"].some((n) => want(`panel-handsfree-${n}`, size, scheme))) {
-        const p = await openPanel(ctx, "account", undefined, { edit: (d) => (d.state.settings.realtimeCostNoticed = false), init: [installVoiceFakes] });
+      // Realtime: no cost notice, the narrator talking (caption), and its send_to_agent starting a task.
+      if (["narrator", "heard", "elsewhere-heard"].some((n) => want(`panel-handsfree-${n}`, size, scheme))) {
+        const p = await openPanel(ctx, "account", undefined, { init: [installVoiceFakes] });
         await p.evaluate(() => window.__push({ type: "panel.voice" }));
         await waitPhase(p, "listening");
-        await p.waitForSelector("#now-notice:not([hidden])");
-        const tip = await p.textContent("#now-notice:not([hidden])");
-        if (!/^Realtime voice uses about 6\.1¢ of usage credit a minute\. Deepgram and the browser voice cost much less\.Voice settings×$/.test(tip)) fail(`cost notice "${tip}"`);
-        if (!(await p.evaluate(() => window.__requests.some((r) => r.type === "settings.save" && r.settings.realtimeCostNoticed === true)))) fail("the cost notice is not remembered");
+        if (await p.evaluate(() => !document.querySelector("#now-notice").hidden)) fail(`a notice on starting Realtime "${await p.textContent("#now-notice")}"`);
         const rt = await p.evaluate(() => ({ protocols: window.__rt.protocols, sent: window.__rt.sent.map((e) => e.type), first: window.__rt.sent[0] }));
         if (JSON.stringify(rt.protocols) !== JSON.stringify(["noa", "bt.tok"])) fail(`subprotocols ${JSON.stringify(rt.protocols)}`);
         if (rt.first?.type !== "session.update" || rt.first.session.model !== undefined) fail(`first event ${JSON.stringify(rt.first)?.slice(0, 120)}; sent ${rt.sent.slice(0, 5)}`);
-        if (!(await p.evaluate(() => !document.querySelector("#voice-bar").hidden))) fail("the cost notice took the bar's place");
-        await checkLayout(p, `handsfree-cost ${label}`);
-        await shoot(p, "panel-handsfree-cost", size, scheme);
-        await p.click("#now-notice:not([hidden]) .notice-close");
 
         // The narrator says hello: its words under the orb while its audio plays.
         await p.evaluate(() => {
@@ -2667,8 +2659,10 @@ export const PANEL_CASES = [
       want(unmuted.muted === null && unmuted.pressed === "false" && unmuted.icon === "live" && unmuted.state !== "muted" && unmuted.reported?.muted === undefined, "Alt+M did not unmute", unmuted);
       const at = await appends();
       await p.waitForFunction((n) => window.__rt.sent.filter((e) => e.type === "input_audio_buffer.append").length > n, at, { timeout: 5000 }).catch(() => fail(`unmuted ${label}: no audio streamed`));
-      await p.evaluate(() => window.__push({ type: "panel.voice" }));
-      await p.waitForFunction(() => document.querySelector("#voice-bar").hidden);
+      // The task's Stop stops the task and ends voice with it: one press stops both.
+      await p.click("#now-stop");
+      await p.waitForFunction(() => window.__requests.some((r) => r.type === "run.stop" && r.sessionId === "s-new"), null, { timeout: 5000 }).catch(() => fail(`stop ${label}: no run.stop`));
+      await p.waitForFunction(() => document.querySelector("#voice-bar").hidden, null, { timeout: 5000 }).catch(() => fail(`stop ${label}: voice still on`));
       reportErrors(p, `handsfree-muted ${label}`);
       await p.close();
     },

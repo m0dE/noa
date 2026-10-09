@@ -5,9 +5,11 @@
  *
  * - The Voice button (a small sound wave and the word) and the voice shortcut do the
  *   same: start a hands-free session (hands-free.ts) with the engine picked in
- *   Settings, or end the one that is on, wherever it listens. The session
- *   shows itself on the button (still "Voice", pressed: filled in the live
- *   colour, a ring following the voice; its tooltip says it ends voice mode),
+ *   Settings, or end the one that is on, wherever it listens; the task goes
+ *   on (the composer's Stop ends both). The session shows itself on the
+ *   button (still "Voice", pressed: filled in the accent, so the task's red
+ *   Stop is the only red one, a ring following the voice; its tooltip says
+ *   it turns voice off and the task keeps running),
  *   the orb, and the box (a glow and "Listening · go ahead" while it listens
  *   for this tab; muted, no glow and a placeholder that says so); the status
  *   strip at the top is hands-free.ts's. Until it really listens (starting,
@@ -15,7 +17,8 @@
  *   the orb is grey, the box says "Not listening yet" without its glow.
  * - While a session runs here: Mute (a mic icon, slashed while muted; a
  *   toggle, Alt+M) left of Voice. A line being said is cut off by Esc or by
- *   talking. The task's own Stop is the composer's (a square), apart from these.
+ *   talking. The task's own Stop is the composer's (a square): it stops the
+ *   task and ends voice.
  * - Plans without voice (and signed out) see a lock that explains, with a
  *   way to pick a plan. The microphone is asked for on mic-permission.html,
  *   since a side panel cannot show Chrome's prompt.
@@ -36,10 +39,10 @@ export type VoiceUiState = "locked" | "idle" | "handsfree";
 /** From the plan catalog, e.g. "Voice needs the Plus or Pro plan". */
 export const LOCKED_TEXT = `Voice needs ${plansWithText("voice")}`;
 
-/** The Voice button's tooltip and accessible name: it starts voice mode, or (on) ends it. */
+/** The Voice button's tooltip and accessible name: it starts voice mode, or (on) ends it (the task goes on). */
 export function micButtonTitle(state: VoiceUiState, shortcut: string | null): string {
   if (state === "locked") return LOCKED_TEXT;
-  const base = state === "handsfree" ? "End voice mode" : "Voice mode";
+  const base = state === "handsfree" ? "Turn voice off · the task keeps running" : "Voice mode";
   return shortcut ? `${base} · ${shortcut}` : base;
 }
 

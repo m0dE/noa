@@ -58,6 +58,8 @@ const ENTRY_ROLES = new Set(["button", "menuitem"]);
 const DELEGATE_NAME = /^act as\b/i;
 /** X's confirm page for acting as a delegate (x.com/i/delegate/switch, seen in the owner's run logs). */
 const DELEGATE_SWITCH_URL = /^https:\/\/(x|twitter)\.com\/i\/delegate\/switch\b/i;
+/** A tab with nothing on it to lose: X is loaded in it rather than in a new tab. */
+const BLANK_TAB = /^(about:blank|chrome:\/\/new-?tab(-page)?\/?)$|^$/i;
 const HANDLE_IN =/@([A-Za-z0-9_]{1,15})(?![A-Za-z0-9_])/g;
 
 /** Buttons that publish on X as the signed-in account: Post (compose box, inline; Reply in a reply box) and Repost's confirm. */
@@ -97,13 +99,15 @@ export interface SwitchDeps {
 export async function switchXAccount(browser: BrowserCaller, rawHandle: string, deps: SwitchDeps): Promise<ToolResult> {
   const handle = normalizeHandle(rawHandle);
   if (handle === "@") return { text: "switch_x_account needs a handle like @name.", isError: true };
+  /** Set when the switch opened its own tab: where the tab the agent was on is, for every answer. */
+  let leftTab = "";
   // What happened, as facts for the agent to decide on; what it may not do on X is enforced where it acts (wrongXAccountRefusal).
   const fail = (step: string): ToolResult => ({
-    text: `switch_x_account did not switch to ${handle}: ${step}. X is not on ${handle}, so nothing on X can be done as ${handle} yet.`,
+    text: `switch_x_account did not switch to ${handle}: ${step}. X is not on ${handle}, so nothing on X can be done as ${handle} yet.${leftTab}`,
     isError: true,
   });
   const needsUser = (s: PageSnapshot, reason: string): ToolResult => ({
-    text: `switch_x_account cannot switch to ${handle}: ${reason} (${s.url}). X is not on ${handle}. Only the user can sign in to X accounts or get past this.`,
+    text: `switch_x_account cannot switch to ${handle}: ${reason} (${s.url}). X is not on ${handle}. Only the user can sign in to X accounts or get past this.${leftTab}`,
     isError: true,
   });
   const readPage = () => browser.call("browser.readPage", {});
@@ -136,19 +140,27 @@ export async function switchXAccount(browser: BrowserCaller, rawHandle: string, 
   if (blockedNow) return needsUser(page, blockedNow);
   if (shows(page, handle)) return { text: `Already on ${handle}.` };
 
+  // The current tab is on another site (e.g. a form the user is half way through): leave it as it is and switch in a
+  // new tab, which becomes the current one. Reloading X home in it would throw that page away.
+  if (!isXUrl(page.url) && !BLANK_TAB.test(page.url)) {
+    await browser.call("browser.openTabs", { urls: [X_HOME_URL], background: false });
+    leftTab = ` X was opened in a new tab (now the current tab); the tab you were on is still on ${page.url}: switch_tab back to it (list_tabs) to carry on there.`;
+  }
+
   let flipped = 0;
   let unopened = 0;
   /** The page ignored its own click on the entry once: a real mouse press from then on. */
   let press = false;
   for (let attempt = 1; attempt <= SWITCH_ATTEMPTS; attempt++) {
-    // A fresh page load: the menu X opens first lists the personal accounts (see the top of this file).
-    await browser.call("browser.navigate", { url: X_HOME_URL });
+    // A fresh page load: the menu X opens first lists the personal accounts (see the top of this file). A tab just
+    // opened on X home is one already.
+    if (attempt > 1 || !leftTab) await browser.call("browser.navigate", { url: X_HOME_URL });
     page = (await pollUntil(readPage, (s) => !!findSwitcher(s) || !!pauseReasonForUrl(s.url), { ...LOAD_POLL, sleep })).value;
     const blocked = pauseReasonForUrl(page.url);
     if (blocked) return needsUser(page, blocked);
     const switcher = findSwitcher(page);
     if (!switcher) return fail(`the account switcher button (testid=${X_SWITCHER_TEST_ID}) was not found on ${page.url}`);
-    if (shows(page, handle)) return { text: `Already on ${handle}.` };
+    if (shows(page, handle)) return { text: `Already on ${handle}.${leftTab}` };
 
     await browser.call("browser.click", { index: switcher.index });
     let pick = await browser.call("browser.clickXAccountEntry", { handle, waitMs: MENU_WAIT_MS, ...(press ? { press } : {}) });
@@ -182,7 +194,7 @@ export async function switchXAccount(browser: BrowserCaller, rawHandle: string, 
     }
     const stop = pauseReasonForUrl(switched.value.url);
     if (stop) return needsUser(switched.value, stop);
-    if (shows(switched.value, handle)) return { text: `Switched to ${handle}. Current URL: ${switched.value.url}` };
+    if (shows(switched.value, handle)) return { text: `Switched to ${handle}. Current URL: ${switched.value.url}${leftTab}` };
     const now = activeXAccount(switched.value);
     return fail(`chose ${handle} in X's account menu, but after ${SWITCH_POLL.timeoutMs / 1000} s the switcher still shows ${now ?? "no account"}`);
   }

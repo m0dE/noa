@@ -23,7 +23,7 @@ import { stopwatch } from "@noa/shared";
 /** How the model gets an interjection: the framing both brains use. */
 export function interjectionText(texts: readonly string[]): string {
   const said = texts.map((t) => `"${t.trim()}"`).join(", then: ");
-  return `The user just said: ${said}. Act on it now: a question or remark, answer it in a short reply before your next tool call (in the same message) and go on with the task; otherwise it changes the current task (keep doing what it does not change), or replaces or stops it if that is what it says.`;
+  return `The user just said: ${said}. Act on it now: a question or remark, answer it with answer_user (at once when you know the answer, else right after the step that finds it out) and go on with the task; otherwise it changes the current task (keep doing what it does not change), or replaces or stops it if that is what it says.`;
 }
 
 /** Start of the answer to a task_* call made while a message from the user was still unread. */
@@ -51,6 +51,8 @@ export class Interjections {
   /** Handed to a message of their own that the model has not read yet (Claude Code's stdin). */
   private handedOff: { framed: string; since: () => number; route: InterjectionRoute; count: number }[] = [];
   private readonly listeners: ((text: string) => void)[] = [];
+  /** Messages the model got in the running turn (answer_user answers them). */
+  private deliveredThisTurn = 0;
 
   /** delivered: each time the model got messages, with how long the oldest one waited (for the trace). */
   constructor(private readonly delivered?: (route: InterjectionRoute, waitedMs: number, count: number) => void) {}
@@ -92,6 +94,16 @@ export class Interjections {
   /** Messages the model has not read yet: the turn must not end. */
   get unseen(): boolean {
     return this.queued.length > 0 || this.handedOff.length > 0;
+  }
+
+  /** The model got a message from the user in the running turn: it may answer it with answer_user. */
+  get answerable(): boolean {
+    return this.deliveredThisTurn > 0;
+  }
+
+  /** A turn starts: the messages the model got so far were for the turns before. */
+  newTurn(): void {
+    this.deliveredThisTurn = 0;
   }
 
   /** Messages handed off and not read yet. */
@@ -136,6 +148,7 @@ export class Interjections {
   }
 
   private report(route: InterjectionRoute, waitedMs: number, count: number): void {
+    this.deliveredThisTurn += count;
     try {
       this.delivered?.(route, waitedMs, count);
     } catch {

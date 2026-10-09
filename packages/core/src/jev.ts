@@ -5,11 +5,23 @@
  */
 import { TypeSafeClient, type EntryType, type Logger } from "@typesafe-ai/sdk";
 import type { PageSnapshot } from "@noa/shared";
-import { errorDetail, outOfCreditError, parseJsonBody } from "./api-errors.js";
+import { errorDetail, outOfCreditError, OutOfCreditError, parseJsonBody } from "./api-errors.js";
 import type { JevDecision, JevLike, JevOperation } from "./types.js";
 
 export const JEV_OPERATIONS: readonly JevOperation[] = ["click", "type", "scroll", "press_key", "wait", "done", "blocked"];
 export const JEV_MAX_ELEMENTS = 250;
+/**
+ * Input tokens a Jev request may use. TypeSafe answers 400 max_tokens_exceeded
+ * past about 32k; measured (jev-1.13.0, 2026-10): about 121 tokens per element
+ * plus 0.165 per byte of the request, so a dense page (a dashboard's 240
+ * elements with links) failed every pick. The rest is margin for the estimate; text that takes more tokens per
+ * character (Japanese, Korean) can still go over, and is sent again with half (see jevFromClient).
+ */
+export const JEV_TOKEN_BUDGET = 28_000;
+const JEV_TOKENS_PER_ELEMENT = 121;
+const JEV_TOKENS_PER_BYTE = 0.165;
+/** Bytes of a request besides its elements: the questions' instructions and criteria, and JSON framing. */
+const JEV_FIXED_BYTES = 2_500;
 export const JEV_TIMEOUT_MS = 15_000;
 
 /** One systemOne request: the step's state and the two questions Jev answers. */
@@ -77,8 +89,11 @@ export interface JevStepInfo {
   previousStep?: string;
 }
 
-/** Trimmed state for Jev: at most `max` elements; those in an open dialog first, then in-viewport ones, then the rest (each part in page order). */
-export function buildJevState(goal: string, snapshot: PageSnapshot, max = JEV_MAX_ELEMENTS, step: JevStepInfo = {}): JevState {
+/**
+ * Trimmed state for Jev: at most `max` elements, and no more than fit in `budget` tokens; those in an open dialog
+ * first, then in-viewport ones, then the rest (each part in page order).
+ */
+export function buildJevState(goal: string, snapshot: PageSnapshot, max = JEV_MAX_ELEMENTS, step: JevStepInfo = {}, budget = JEV_TOKEN_BUDGET): JevState {
   // Occurrence among elements with the same role and name, in page order.
   const keyOf = (e: PageSnapshot["elements"][number]) => `${e.role}\u0000${e.name}`;
   const totals = new Map<string, number>();
@@ -103,23 +118,32 @@ export function buildJevState(goal: string, snapshot: PageSnapshot, max = JEV_MA
     url: snapshot.url,
     title: snapshot.title,
     pageText: snapshot.text.slice(0, JEV_PAGE_TEXT),
-    elements: chosen.map((e) => {
-      const out: JevElement = { index: e.index, role: e.role || e.tag, name: e.name.slice(0, 120), tag: e.tag, inViewport: e.inViewport };
-      if (e.text && e.text !== e.name) out.text = e.text.slice(0, 80);
-      if (e.type) out.type = e.type;
-      if (e.testId) out.testId = e.testId;
-      if (e.href) out.href = shortHref(e.href, snapshot.url);
-      if (e.value) out.value = e.value.slice(0, 60);
-      if (e.options?.length) out.options = e.options.join(", ").slice(0, 200);
-      if (e.disabled) out.disabled = true;
-      if (e.inDialog) out.inDialog = true;
-      const occ = occurrence.get(e.index);
-      if (occ) out.occurrence = occ;
-      return out;
-    }),
+    elements: [],
   };
   if (step.previousStep) state.previousStep = step.previousStep;
+  // Each element is sent twice: in the state and as its target option.
+  let tokens = (JSON.stringify(state).length + JEV_FIXED_BYTES) * JEV_TOKENS_PER_BYTE;
+  for (const e of chosen) {
+    const el = jevElement(e, snapshot.url, occurrence.get(e.index));
+    tokens += JEV_TOKENS_PER_ELEMENT + (JSON.stringify(el).length + describeJevElement(el).length) * JEV_TOKENS_PER_BYTE;
+    if (tokens > budget) break;
+    state.elements.push(el);
+  }
   return state;
+}
+
+function jevElement(e: PageSnapshot["elements"][number], pageUrl: string, occ: string | undefined): JevElement {
+  const out: JevElement = { index: e.index, role: e.role || e.tag, name: e.name.slice(0, 120), tag: e.tag, inViewport: e.inViewport };
+  if (e.text && e.text !== e.name) out.text = e.text.slice(0, 80);
+  if (e.type) out.type = e.type;
+  if (e.testId) out.testId = e.testId;
+  if (e.href) out.href = shortHref(e.href, pageUrl);
+  if (e.value) out.value = e.value.slice(0, 60);
+  if (e.options?.length) out.options = e.options.join(", ").slice(0, 200);
+  if (e.disabled) out.disabled = true;
+  if (e.inDialog) out.inDialog = true;
+  if (occ) out.occurrence = occ;
+  return out;
 }
 
 /** One-line summary of an element: the description of its option in the target question. */
@@ -200,11 +224,18 @@ export function jevFromClient(client: JevClientLike, opts: { model?: string } = 
       const step: JevStepInfo = {};
       if (typesText !== undefined) step.typesText = typesText;
       if (previousStep !== undefined) step.previousStep = previousStep;
-      const state = buildJevState(goal, snapshot, JEV_MAX_ELEMENTS, step);
-      const request: JevRequest = { state, questions: buildJevQuestions(state) };
-      if (opts.model) request.model = opts.model;
-      const res = await client.systemOne(request, { timeout: JEV_TIMEOUT_MS });
-      return parseJevAnswers(res.answers);
+      for (let budget = JEV_TOKEN_BUDGET; ; budget /= 2) {
+        const state = buildJevState(goal, snapshot, JEV_MAX_ELEMENTS, step, budget);
+        const request: JevRequest = { state, questions: buildJevQuestions(state) };
+        if (opts.model) request.model = opts.model;
+        try {
+          const res = await client.systemOne(request, { timeout: JEV_TIMEOUT_MS });
+          return parseJevAnswers(res.answers);
+        } catch (err) {
+          // Still too long for TypeSafe: again with half the budget (at most three tries).
+          if (!(err instanceof Error && err.message.includes("max_tokens_exceeded")) || budget <= JEV_TOKEN_BUDGET / 4) throw err;
+        }
+      }
     },
   };
 }
@@ -282,4 +313,25 @@ export function createJev(apiKey: string, opts: CreateJevOptions = {}): JevLike 
   const jevOpts: { model?: string } = {};
   if (opts.model) jevOpts.model = opts.model;
   return jevFromClient(sdk, jevOpts);
+}
+
+/**
+ * Noa's cloud Jev for a run whose AI is not Noa AI (local Claude Code, the Claude API): an empty
+ * usage credit must not pause that run, as it does Noa AI's (the AI itself is not billed). The first
+ * refusal turns it off for the run instead; act then leaves each step to the model.
+ */
+export function withoutCreditPause(jev: JevLike): JevLike {
+  let noCredit: string | null = null;
+  return {
+    async decide(input) {
+      if (noCredit) throw new Error(noCredit);
+      try {
+        return await jev.decide(input);
+      } catch (err) {
+        if (!(err instanceof OutOfCreditError)) throw err;
+        noCredit = `Noa's cloud Jev: ${err.message}`;
+        throw new Error(noCredit);
+      }
+    },
+  };
 }

@@ -10,7 +10,7 @@ import { keyEvents } from "./keys.js";
 import { pageIndicators, type HiddenPart, type PageIndicators } from "./page-indicator.js";
 import { leavingDocument, readWhenDrawn, stillLoadingNote, waitForUsablePage, type LoadProbe } from "./page-load.js";
 import { WAIT_MIN_GAP_MS, WAIT_POLL_MS, type PageWait, type PageWaitArgs } from "./page-wait.js";
-import { isDebuggerBlocked, isDebuggerDetached, isRestrictedError, restrictedToolError } from "./restricted.js";
+import { isDebuggerBlocked, isDebuggerDetached, isRestrictedError, isRestrictedUrl, RESTRICTED_TAB, restrictedToolError } from "./restricted.js";
 import type { PageResult } from "./scroll-probe.js";
 import { shrinkScreenshot } from "./screenshot-size.js";
 
@@ -259,6 +259,7 @@ export class Driver {
         const loaded = await this.waitForTab(t.tabId);
         const info: AgentTabInfo = { id: t.id, url: loaded.url || urls[i]!, title: loaded.title, current: t.tabId === current };
         if (loaded.error) info.error = loaded.error;
+        if (isRestrictedUrl(info.url)) info.error = RESTRICTED_TAB;
         return info;
       }),
     );
@@ -438,9 +439,11 @@ export class Driver {
     const fresh = await this.agent.takeNewTabs().catch(() => []);
     const answered = this.dialogs?.takeNotes() ?? [];
     if (!fresh.length && !answered.length) return result;
-    const lines = fresh.map(
-      (t) =>
-        `A new tab opened from the page: ${t.id} ${JSON.stringify(t.title)} ${t.url}. Your current tab is still the one you were in: use switch_tab ${t.id} to work in the new one (read_page, act and screenshot work there).`,
+    // A tab on a page Chrome keeps extensions out of (the Web Store's dashboard) is no place to look: say so, never "read it".
+    const lines = fresh.map((t) =>
+      isRestrictedUrl(t.url)
+        ? `A new tab opened from the page: ${t.id} ${JSON.stringify(t.title)} ${t.url}. Chrome doesn't allow extensions to see or control it, so it can't be read, captured or clicked: work in your other tabs.`
+        : `A new tab opened from the page: ${t.id} ${JSON.stringify(t.title)} ${t.url}. Your current tab is still the one you were in: use switch_tab ${t.id} to work in the new one (read_page, act and screenshot work there).`,
     );
     return { ...result, note: [result.note, ...answered, ...lines].filter(Boolean).join("\n") };
   }

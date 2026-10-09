@@ -62,10 +62,12 @@
   transition: height 80ms linear;
 }
 
-/* The Voice button while a session is on (pressed; it ends voice mode): filled in the live colour, a ring breathing out
-   of it and one following the voice (off, it stays an outline). */
+/* The Voice button while a session is on (pressed; it ends voice mode, the task goes on): a toggle tinted in the accent,
+   not the live red (the task's Stop beside it is the only red button) nor filled (Send is); a ring breathing out of it
+   and one following the voice (off, it stays an outline). */
+.voice-mic { --live: var(--accent); }
 .now-bar .voice-mic[data-state="handsfree"],
-.now-bar .voice-mic[data-state="handsfree"]:hover { color: var(--on-live); background: var(--live); border-color: var(--live); filter: none; }
+.now-bar .voice-mic[data-state="handsfree"]:hover { color: var(--live); background: color-mix(in srgb, var(--live) 16%, transparent); border-color: var(--live); filter: none; }
 .voice-mic[data-state="handsfree"]::after { border-color: color-mix(in srgb, var(--live) 60%, transparent); }
 .voice-mic::before {
   content: ""; position: absolute; inset: 0; border-radius: var(--radius); pointer-events: none;

@@ -1,6 +1,7 @@
 /** Headless Claude Code in the helper, behind the Brain interface. */
 import { ATTACHMENT_CHUNK_BYTES, errorMessage, HelperErrorCode, rpcErrorCode, type AgentAttachment, type AgentEvent, type HelperInfo, type HelperMethods, type HelperNotifications, type RunConfig, type TaskRunResult, type TraceEvent } from "@noa/shared";
 import { HELPER_CALL_TIMEOUT_MS } from "../helper-link.js";
+import { hostedJevEndpoint } from "./hosted-brain.js";
 import { bytesToBase64 } from "../base64.js";
 import { endedRun, SessionEndedError, type Brain, type BrainContinueOptions, type BrainRun, type BrainStartOptions, type TurnAttachment } from "./brains.js";
 
@@ -37,6 +38,8 @@ export class ClaudeCodeBrain implements Brain {
        * timing is sent); Claude Code's own summary of the turn (claude.result) comes later still.
        */
       onLateTrace?: (sessionId: string, trace: TraceEvent) => void;
+      /** The signed-in account's session while Noa's cloud Jev can be used (cloudJevUsable), else null. */
+      cloudJev?: () => { token: string; apiBase: string } | null;
     } = {},
   ) {
     helper.onNotification("helper.event", (p) => {
@@ -57,7 +60,7 @@ export class ClaudeCodeBrain implements Brain {
           sessionId,
           task: opts.task,
           mediaPaths: opts.mediaPaths,
-          config: opts.config,
+          config: this.withCloudJev(opts.config),
           ...(attachments.length ? { attachments: attachments.map(agentAttachment) } : {}),
         }),
       ),
@@ -72,7 +75,7 @@ export class ClaudeCodeBrain implements Brain {
     return this.run(sessionId, opts.onEvent, () =>
       this.after(this.send(sessionId, attachments.filter((a) => a.fresh)), () =>
         this.helper
-          .call("helper.continueSession", { sessionId, text: opts.text, config: opts.config, ...(attachments.length ? { attachments: attachments.map(agentAttachment) } : {}) })
+          .call("helper.continueSession", { sessionId, text: opts.text, config: this.withCloudJev(opts.config), ...(attachments.length ? { attachments: attachments.map(agentAttachment) } : {}) })
           .catch((err: unknown) => {
             if (rpcErrorCode(err) === HelperErrorCode.sessionEnded) throw new SessionEndedError();
             throw err;
@@ -84,6 +87,13 @@ export class ClaudeCodeBrain implements Brain {
   /** `call` once `sending` is done; at once when nothing was sent (the turn starts without waiting a tick). */
   private after<T>(sending: Promise<void> | null, call: () => Promise<T>): Promise<T> {
     return sending ? sending.then(call) : call();
+  }
+
+  /** Noa's cloud Jev for the helper, used when neither a key here nor its own is set (jevSourceFor). */
+  private withCloudJev(config: RunConfig): RunConfig {
+    if (!config.jevEnabled || config.jevApiKey) return config;
+    const s = this.opts.cloudJev?.();
+    return s ? { ...config, jevCloud: { endpoint: hostedJevEndpoint(s.apiBase), token: s.token } } : config;
   }
 
   /** Sends files to the helper in pieces of ATTACHMENT_CHUNK_BYTES (native messaging keeps messages small); null: none. */
@@ -104,7 +114,7 @@ export class ClaudeCodeBrain implements Brain {
   }
 
   prewarm(config: RunConfig): void {
-    this.helper.call("helper.prewarm", { config }, { timeoutMs: HELPER_CALL_TIMEOUT_MS }).catch(() => {});
+    this.helper.call("helper.prewarm", { config: this.withCloudJev(config) }, { timeoutMs: HELPER_CALL_TIMEOUT_MS }).catch(() => {});
   }
 
   isOpen(sessionId: string): boolean {

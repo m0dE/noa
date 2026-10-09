@@ -5,6 +5,7 @@ import {
   BOOKMARKS_SYNC_PATH,
   BookmarkSyncResponse,
   CloudFile,
+  CloudFileList,
   type CloudFolder,
   FILES_PATH,
   type BookmarkSyncInput,
@@ -170,6 +171,16 @@ export class AccountApi {
     form.append("file", blob, filename);
     form.append("folder", folder);
     return this.http.json(CloudFile, "POST", FILES_PATH, form);
+  }
+
+  /** GET /v1/files: the account's cloud files, newest first (any plan: what a past plan kept stays listed). */
+  listFiles(): Promise<CloudFileList> {
+    return this.http.json(CloudFileList, "GET", FILES_PATH);
+  }
+
+  /** GET /v1/files/{id} as a download: its URL and the Authorization it needs. */
+  fileDownload(id: string): { url: string; headers: { name: string; value: string }[] } {
+    return { url: `${this.http.base}${FILES_PATH}/${encodeURIComponent(id)}`, headers: this.http.authHeaders() };
   }
 
   /** GET /v1/billing/voice-engines (public): the hands-free voice engines and what a minute of each costs. */

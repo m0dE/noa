@@ -349,7 +349,7 @@ describe("UiHub", () => {
 describe("UiRouter: account", () => {
   function withAccount(signedIn: boolean) {
     const t = setup();
-    const view = { signedIn, signInConfigured: true, apiBase: "https://api.test", dashboardUrl: "https://api.test/", billingUrl: "https://api.test/billing" };
+    const view = { signedIn, signInConfigured: true, apiBase: "https://api.test", dashboardUrl: "https://api.test/", billingUrl: "https://api.test/billing", filesUrl: "https://api.test/files" };
     const account = {
       view: vi.fn(async () => view),
       signIn: vi.fn(async () => void (view.signedIn = true)),

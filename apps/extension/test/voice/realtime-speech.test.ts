@@ -45,7 +45,7 @@ class FakeSocket implements RealtimeSocketLike {
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 /** A client for a user who speaks English (the browser's languages), with what reaches the panel. */
-function client(languages = ["en"]) {
+function client(languages = ["en"], extra: Partial<RealtimeHandlers> = {}) {
   let socket!: FakeSocket;
   const tools: [string, Record<string, unknown>, string | null, string[]][] = [];
   const audio: string[] = [];
@@ -56,6 +56,7 @@ function client(languages = ["en"]) {
     onAudio: (b64) => void audio.push(b64),
     onHeard: (w) => void heard.push(w),
     onTrace: (e) => void traces.push(e.name),
+    ...extra,
   };
   const c = new RealtimeClient({ url: "wss://x/v1/ai/realtime", token: "t", languages, open: () => (socket = new FakeSocket()), handlers });
   c.connect();
@@ -162,13 +163,14 @@ describe("other people talking nearby in another language", () => {
 });
 
 describe("the narrator passing on its own update (the owner's trace, turn 5)", () => {
-  const RESULT =
-    'Your update (finished): The task is done. Tell the user in one to three short sentences, in the first person: "Done. Mecha Royale, Rooftop, Bounty and ARRR will each post three times a day."';
-  const ECHO = "Tell the user the result: Done. Mecha Royale, Rooftop, Bounty and ARRR will each post three times a day.";
+  // The line the narrator said for the agent (say()), and the narrator passing it on as a request.
+  const RESULT = "Done. Mecha Royale, Rooftop, Bounty and ARRR will each post three times a day.";
+  const ECHO = "Done. Mecha Royale, Rooftop, Bounty and ARRR will each post three times a day.";
 
   it("on a turn of background speech: refused, the narrator told it was an update, nothing acknowledged", async () => {
     const t = client();
-    t.c.setStatus(RESULT);
+    t.c.say("result", RESULT);
+    const line = t.creates().length;
     t.turn("bg5");
     t.words("bg5", "我这胖，我的刚刚刚。");
     t.calls("bg5", ECHO);
@@ -176,10 +178,11 @@ describe("the narrator passing on its own update (the owner's trace, turn 5)", (
     await flush();
     expect(t.tools).toEqual([]);
     expect(t.outputs()).toHaveLength(1);
-    expect(t.creates()).toEqual([]);
+    // Nothing made for it after the line itself.
+    expect(t.creates()).toHaveLength(line);
   });
 
-  it("on a reply to the update itself, or on a clear turn of the user's: refused as an update (without its wording too)", async () => {
+  it("on a reply to the update itself, or on a clear turn of the user's: refused as an update (in other words too)", async () => {
     const t = client();
     t.c.say("result", RESULT);
     t.s.event({ type: "response.created", response: { id: "ours" } });
@@ -187,7 +190,7 @@ describe("the narrator passing on its own update (the owner's trace, turn 5)", (
     await flush();
     t.turn("in2");
     t.words("in2", "okay, what now?");
-    t.calls("in2", "Done. Mecha Royale, Rooftop, Bounty and ARRR will each post three times a day.");
+    t.calls("in2", "Mecha Royale, Rooftop, Bounty and ARRR will each post three times a day now.");
     await flush();
     expect(t.tools).toEqual([]);
     expect(t.outputs()).toEqual([NOT_A_REQUEST_OUTPUT.echo, NOT_A_REQUEST_OUTPUT.echo]);
@@ -203,12 +206,10 @@ describe("the narrator passing on its own update (the owner's trace, turn 5)", (
     expect(t.tools.map((x) => x[1])).toEqual([{ text: "Yes, post it" }]);
   });
 
-  it("echoesUpdate: the feed's wording, or mostly an update's words and not the user's", () => {
-    expect(echoesUpdate(ECHO, [], null)).toBe(true);
-    expect(echoesUpdate("Agent update: done", [], "anything")).toBe(true);
-    expect(echoesUpdate("Your update (finished): done", [], "anything")).toBe(true);
-    // The user's own words that begin like it are theirs.
-    expect(echoesUpdate("your update was wrong, post it again", [], "your update was wrong, post it again")).toBe(false);
+  it("echoesUpdate: mostly the words of what the narrator was given, and not the user's", () => {
+    expect(echoesUpdate(ECHO, [RESULT], null)).toBe(true);
+    expect(echoesUpdate(ECHO, [], null)).toBe(false);
+    expect(echoesUpdate("your update was wrong, post it again", [RESULT], "your update was wrong, post it again")).toBe(false);
     expect(echoesUpdate("Mecha Royale, Rooftop, Bounty and ARRR will each post three times a day", [RESULT], null)).toBe(true);
     expect(echoesUpdate("Mecha Royale, Rooftop, Bounty and ARRR will each post three times a day", [RESULT], "make Mecha Royale Rooftop Bounty and ARRR each post three times a day")).toBe(false);
     expect(echoesUpdate("Post gm on X", [RESULT], null)).toBe(false);
@@ -216,6 +217,24 @@ describe("the narrator passing on its own update (the owner's trace, turn 5)", (
 });
 
 describe("the microphone hearing the narrator (echo)", () => {
+  for (const answer of ["Yes, post it.", "No, don't post it."])
+    it(`the user's answer right after the approval line ("${answer}"), started once it was silent, is theirs, not the line heard back`, async () => {
+      // The line ended 2 s before they spoke: the microphone cannot have heard it then.
+      const t = client(["en"], { quietMs: () => 2_000 });
+      const line = 'Approval needed: Click "Post" on x.com; it publishes. Say yes to allow it, or no.';
+      t.s.event({ type: "response.created", response: { id: "ours" } });
+      t.s.event({ type: "response.output_audio_transcript.delta", item_id: "a_ours", delta: line });
+      t.s.event({ type: "response.output_audio.delta", item_id: "a_ours", response_id: "ours", delta: "AAAA" });
+      t.s.event({ type: "response.done", response: { id: "ours", status: "completed" } });
+      t.turn("in1");
+      t.words("in1", answer);
+      t.calls("in1", answer);
+      t.done("in1");
+      await flush();
+      expect(t.traces).not.toContain("voice.echo");
+      expect(t.tools.map((x) => x[1])).toEqual([{ text: answer }]);
+    });
+
   it("its line heard back right after it said it is not the user: no reply heard, no request, nothing kept", async () => {
     const t = client();
     // The narrator says a line (a reply we asked for), heard here.

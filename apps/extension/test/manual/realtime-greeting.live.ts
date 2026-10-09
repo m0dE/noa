@@ -2,7 +2,9 @@
  * Live reproduction of the owner's Realtime trace (session 4b99459b): "Hey, how you doing?", the agent answers with a
  * text and a spoken line, and the narrator's own voice leaks back into the microphone at low volume (a Mac's speakers
  * and microphone). The extension's real RealtimeEngine against OpenAI's Realtime model; the user's words by OpenAI TTS.
- * Prints each line the user heard; fails when anything other than the agent's spoken line was said after it.
+ * Prints each line the user heard; fails when anything was said after the one answer to the greeting (the narrator's
+ * own, or the agent's spoken line when it passed the greeting on). NOA_LIVE_SCENARIO=talk-over: a request first, and the
+ * user talks over its result.
  *
  * It costs money. From apps/extension:
  *   set -a; . /app/data/home/noa-mono/.env; set +a; NOA_LIVE=1 npx vitest run --config test/manual/live.config.ts test/manual/realtime-greeting.live.ts
@@ -159,6 +161,10 @@ class LiveMic implements AudioSource {
 
 const SPOKEN = "I'm doing well, thanks! Let me know what you'd like help with.";
 
+/** NOA_LIVE_SCENARIO=talk-over: a request first, whose result (from the agent) the user talks over. */
+const REQUEST = "What's my latest email?";
+const REQUEST_SPOKEN = "Your latest email is from Dana Kim, moving Friday's design review to 3 PM, and she wants everyone to bring their mocks.";
+
 /** What the user says over the result line (NOA_LIVE_SCENARIO=talk-over). */
 const TALK_OVER = "Wait, stop. What time is it in Tokyo?";
 
@@ -167,7 +173,7 @@ describe.skipIf(!KEY || !process.env.NOA_LIVE)("live: Realtime says the agent's 
   it(talkOver ? "the user talking over the result cuts it off, and their request goes to the agent" : "'Hey, how you doing?': the result is said once, and the echo of it gets no reply", async () => {
     t0 = Date.now();
     heardMs = 0;
-    const audio = await tts(GREETING);
+    const audio = await tts(talkOver ? REQUEST : GREETING);
     const over = talkOver ? await tts(TALK_OVER) : null;
     const forwarded: string[] = [];
     const mic = new LiveMic();
@@ -192,7 +198,7 @@ describe.skipIf(!KEY || !process.env.NOA_LIVE)("live: Realtime says the agent's 
       }
       const tokyo = /tokyo|time/i.test(text);
       if (tokyo) heardAtRequest = heardMs;
-      const spoken = tokyo ? "It's 3 PM in Tokyo." : SPOKEN;
+      const spoken = tokyo ? "It's 3 PM in Tokyo." : /email|inbox/i.test(text) ? REQUEST_SPOKEN : SPOKEN;
       engine.setAgentWorking(true);
       emit({ type: "user_message", text, voice: true });
       await sleep(2_200);
@@ -288,7 +294,7 @@ describe.skipIf(!KEY || !process.env.NOA_LIVE)("live: Realtime says the agent's 
     await real?.start();
     const ticker = setInterval(() => engine.tick(Date.now()), 1_000);
     await sleep(1_200);
-    log(`USER    says "${GREETING}"`);
+    log(`USER    says "${talkOver ? REQUEST : GREETING}"`);
     await mic.say(audio);
     if (over) {
       // Once the result has been playing for a second, the user talks over it.
@@ -310,7 +316,7 @@ describe.skipIf(!KEY || !process.env.NOA_LIVE)("live: Realtime says the agent's 
     const saidFor = (r: string | undefined) => (r ? heard.filter((h) => saysResult(h.text, r)).length : 0);
     log(`RESULTS ${JSON.stringify(results)}`);
     if (over) {
-      // The greeting's result cut off (not all of its ~4 s heard) and not said again; their question reached the agent
+      // The request's result cut off (not all of its ~6 s heard) and not said again; their question reached the agent
       // and its answer was said once.
       expect({
         cut: heardAtRequest !== null && heardAtRequest < 3_000,
@@ -329,8 +335,8 @@ describe.skipIf(!KEY || !process.env.NOA_LIVE)("live: Realtime says the agent's 
       });
       return;
     }
-    // The result said once, and nothing after it.
-    const first = heard.findIndex((h) => saysResult(h.text, results[0] ?? "\u0000"));
-    expect({ requests, resultSaid: saidFor(results[0]), afterResult: first < 0 ? null : heard.slice(first + 1).map((h) => h.text) }).toEqual({ requests: 1, resultSaid: 1, afterResult: [] });
+    // One answer to the greeting (the narrator's own, or the agent's result when it passed it on), and nothing after it:
+    // the narrator's voice heard back gets no reply and goes to no agent.
+    expect({ atMostOneRequest: requests <= 1, said: heard.map((h) => h.text) }).toEqual({ atMostOneRequest: true, said: [expect.any(String)] });
   });
 });

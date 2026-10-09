@@ -52,7 +52,7 @@ export class ClaudeCodeAgent {
           this.log("AGENT   read the message sent into its turn");
         }
         if (e.type === "assistant_text") this.log(`AGENT   text: "${e.text.replace(/\s+/g, " ").slice(0, 140)}"`);
-        if (e.type === "tool_call") this.log(`AGENT   tool: ${e.name}`);
+        if (e.type === "tool_call") this.log(`AGENT   tool: ${e.name}${e.name === "answer_user" ? ` "${String((e.args as { text?: unknown }).text)}"` : ""}`);
         if (e.type === "task_end") this.log(`AGENT   -> task_end ${e.outcome}: spoken "${e.spoken ?? ""}"`);
         this.emit(e);
       },

@@ -1,4 +1,8 @@
-# Noa
+<p align="center">
+  <img src="brand/logo.svg" width="112" alt="Noa logo">
+</p>
+
+<h1 align="center">Noa</h1>
 
 Claude Code for your browser. Give Noa a todo list and it works through each
 task in your own logged-in Chrome (navigating, clicking, typing, uploading),

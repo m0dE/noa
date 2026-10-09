@@ -93,6 +93,15 @@ describe("Driver with several tabs", () => {
     }
   });
 
+  it("says so for a tab on a page Chrome keeps extensions out of, so it is not read", async () => {
+    chrome.scripting.respond = () => {
+      throw new Error("The extensions gallery cannot be scripted.");
+    };
+    const r = await driver.openTabs({ urls: ["https://chrome.google.com/u/2/webstore/devconsole/x", ...urls(1)] });
+    expect(r.tabs[0]!.error).toMatch(/^Chrome doesn't allow extensions to see or control this page/);
+    expect(r.tabs[1]!.error ?? "").not.toMatch(/Chrome doesn't allow/);
+  });
+
   it("background: false makes the first new tab current without activating it", async () => {
     const r = await driver.openTabs({ urls: urls(2), background: false });
     expect(r.tabs.map((t) => t.current)).toEqual([true, false]);

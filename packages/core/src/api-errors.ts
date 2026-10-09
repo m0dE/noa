@@ -63,11 +63,13 @@ export function isHostedAiUnavailable(body: string): boolean {
 
 /**
  * The Noa API answers { error: "code or text", message? }; Anthropic
- * answers { error: { type, message } }; some proxies just { message }.
+ * answers { error: { type, message } }; some proxies just { message };
+ * TypeSafe (Jev) { detail: "text" or { error_type } }.
  */
 const ErrorBody = z.object({
   error: z.union([z.string(), z.object({ type: z.string().optional(), message: z.string().optional() })]).optional(),
   message: z.string().optional(),
+  detail: z.union([z.string(), z.object({ error_type: z.string().optional() })]).optional(),
 });
 
 /**
@@ -84,6 +86,9 @@ export function errorDetail(body: string, maxChars = 300): string {
     if (typeof error === "string") return message ? (isApiErrorCode(error) ? message : `${error}: ${message}`) : error;
     if (error?.message) return `${error.type ? `${error.type}: ` : ""}${error.message}`;
     if (message) return message;
+    const { detail } = parsed.data;
+    if (typeof detail === "string" && detail) return detail.slice(0, maxChars);
+    if (typeof detail === "object" && detail.error_type) return detail.error_type;
   }
   const text = body.trim();
   if (json !== undefined || text.startsWith("<")) return "";

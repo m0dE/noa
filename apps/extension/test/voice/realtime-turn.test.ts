@@ -127,16 +127,15 @@ describe("the narrator: tool first, at most one acknowledgement", () => {
     expect(socket.replies()).toEqual([{ type: "response.create", response: ackResponse("Open Gmail") }]);
   });
 
-  it("a reply that already spoke gets no acknowledgement", async () => {
+  it("a reply that spoke and then calls a tool is not heard: the acknowledgement is ours, once", async () => {
     const { socket } = client({ onTool: () => "Started." });
     userTurn(socket, "in1", "r1");
     socket.event({ type: "response.output_audio.delta", item_id: "a1", delta: "AAAA" });
-    // Words that let its speech be heard (small talk), then it passes something on too.
-    transcribed(socket, "in1", "okay");
+    transcribed(socket, "in1", "okay, open Gmail");
     callSend(socket, "Open Gmail");
     await flush();
     replyDone(socket, "r1");
-    expect(socket.replies()).toEqual([]);
+    expect(socket.replies()).toEqual([{ type: "response.create", response: ackResponse("Open Gmail") }]);
   });
 
   it("an agent update asking for a reply meanwhile makes the one reply (no acknowledgement on top)", async () => {
@@ -272,7 +271,7 @@ describe("RealtimeEngine: a turn, and stopping while it starts", () => {
     const log: string[] = [];
     const sockets: FakeSocket[] = [];
     const mic = new FakeMic();
-    const player = { play: vi.fn(), stop: vi.fn(() => null), close: vi.fn(), playing: false, pause: vi.fn(() => false), resume: vi.fn(), level: () => 0 };
+    const player = { play: vi.fn(), stop: vi.fn(() => null), close: vi.fn(), playing: false, pause: vi.fn(() => false), resume: vi.fn(), level: () => 0, quietMs: 0 };
     const e = new RealtimeEngine({ ticket, createSource: () => mic, events: engineEvents(log), openSocket: () => (sockets.push(new FakeSocket()), sockets.at(-1)!), player });
     return { e, log, sockets, mic };
   }
@@ -394,7 +393,7 @@ const ENGINES: VoiceEnginesResponse = {
 describe("the side panel's hands-free session on Realtime", () => {
   beforeAll(installMiniDom);
 
-  function panel(opts: { costNoticed?: boolean; holdRealtime?: boolean; patch?: Partial<HandsFreeDeps>; failStarts?: unknown[]; traced?: boolean } = {}) {
+  function panel(opts: { holdRealtime?: boolean; patch?: Partial<HandsFreeDeps>; failStarts?: unknown[]; traced?: boolean } = {}) {
     const engines: FakeEngine[] = [];
     /** How the next engines' starts fail, in order (then they start). */
     const failures = [...(opts.failStarts ?? [])];
@@ -417,11 +416,10 @@ describe("the side panel's hands-free session on Realtime", () => {
       onSpeaking: () => {},
       keepSpoken: vi.fn(),
       keepHeard: vi.fn(),
-      settings: () => ({ voiceEngine: "realtime", realtimeCostNoticed: opts.costNoticed ?? true }) as ExtensionSettings,
+      settings: () => ({ voiceEngine: "realtime" }) as ExtensionSettings,
       account: () => undefined,
       engines: async () => ENGINES,
       saveSettings: async (patch) => void saved.push(patch),
-      openVoiceSettings: () => {},
       createEngine: (id, events, o) => {
         const e = new FakeEngine(id, events, id === "realtime" && !!opts.holdRealtime, failures.shift(), o?.takeover ?? false);
         engines.push(e);
@@ -526,15 +524,14 @@ describe("the side panel's hands-free session on Realtime", () => {
     }
   });
 
-  it("the cost notice points to Settings; it never changes the engine itself", async () => {
+  it("starting Realtime shows no cost notice and saves nothing", async () => {
     vi.useFakeTimers();
     try {
-      const t = panel({ costNoticed: false });
+      const t = panel();
       t.hf.toggle("shortcut");
       await vi.advanceTimersByTimeAsync(0);
-      const notice = t.tips.find((x) => /Realtime voice uses/.test(x.text))!;
-      expect(notice.actions?.map((a) => a.label)).toEqual(["Voice settings"]);
-      expect(t.saved).toEqual([{ realtimeCostNoticed: true }]);
+      expect(t.tips).toEqual([]);
+      expect(t.saved).toEqual([]);
       expect(t.engines.map((e) => e.id)).toEqual(["realtime"]);
       t.hf.toggle("shortcut");
     } finally {
@@ -719,7 +716,7 @@ describe("the side panel's hands-free session on Realtime", () => {
     try {
       const played: string[] = [];
       const earcons = { play: (k: string) => void played.push(k) };
-      const quiet = panel({ patch: { earcons, settings: () => ({ voiceEngine: "realtime", realtimeCostNoticed: true, voiceSounds: false }) as ExtensionSettings } });
+      const quiet = panel({ patch: { earcons, settings: () => ({ voiceEngine: "realtime", voiceSounds: false }) as ExtensionSettings } });
       quiet.hf.toggle("button");
       await vi.advanceTimersByTimeAsync(0);
       expect(quiet.hf.phase).toBe("listening");

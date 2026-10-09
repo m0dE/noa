@@ -9,7 +9,11 @@ import type { CheckState, PageMarks, TypeTarget } from "./driver-common.js";
 import type { PageResult } from "./scroll-probe.js";
 
 export function clickInPage(marks: PageMarks, index: number): PageResult<true> {
-  var el = document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') as HTMLElement | null;
+  var el = (document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') ||
+    ((window as unknown as Record<string, Element[] | undefined>)[marks.shadow] || []).filter(function (m) {
+      return m.isConnected && m.getAttribute(marks.attr) === String(Math.trunc(index));
+    })[0] ||
+    null) as HTMLElement | null;
   if (!el) return { ok: false, error: marks.notFound.replace("#", String(index)) };
   el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" as ScrollBehavior });
   var r = el.getBoundingClientRect();
@@ -47,7 +51,11 @@ export function clickInPage(marks: PageMarks, index: number): PageResult<true> {
  * error, before anything is clicked.
  */
 export function typeTargetInPage(marks: PageMarks, index: number): PageResult<TypeTarget> {
-  var el = document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') as HTMLElement | null;
+  var el = (document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') ||
+    ((window as unknown as Record<string, Element[] | undefined>)[marks.shadow] || []).filter(function (m) {
+      return m.isConnected && m.getAttribute(marks.attr) === String(Math.trunc(index));
+    })[0] ||
+    null) as HTMLElement | null;
   if (!el) return { ok: false, error: marks.notFound.replace("#", String(index)) };
   if (el instanceof HTMLSelectElement) return { ok: true, value: "select" };
   if (el instanceof HTMLTextAreaElement) return { ok: true, value: "field" };
@@ -64,8 +72,17 @@ export function typeTargetInPage(marks: PageMarks, index: number): PageResult<Ty
   if (el instanceof HTMLButtonElement || el instanceof HTMLAnchorElement || role === "button" || role === "link") {
     return { ok: false, error: "element " + index + " is a " + (role || el.tagName.toLowerCase()) + ", which takes no text: leave out text to click it" };
   }
-  var active = document.activeElement as HTMLElement | null;
-  if (active && active !== document.body && !el.contains(active)) active.blur();
+  /** The focused element, inside shadow roots too (document.activeElement is only their host). */
+  function focused(): HTMLElement | null {
+    var a = document.activeElement as HTMLElement | null;
+    while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement as HTMLElement;
+    return a;
+  }
+  var active = focused();
+  // Inside el also through shadow roots: a wrapper's own component may hold the field.
+  var inside = false;
+  for (var e: Node | null = active; e && !inside; e = e.parentNode || (e as ShadowRoot).host || null) inside = e === el;
+  if (active && active !== document.body && !inside) active.blur();
   return { ok: true, value: "other" };
 }
 
@@ -77,11 +94,21 @@ export function typeTargetInPage(marks: PageMarks, index: number): PageResult<Ty
  * "other", the focus must now be on a field or editor, else nothing is typed.
  */
 export function prepareTypingInPage(marks: PageMarks, index: number): PageResult<true> {
-  var el = document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') as HTMLElement | null;
+  var el = (document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') ||
+    ((window as unknown as Record<string, Element[] | undefined>)[marks.shadow] || []).filter(function (m) {
+      return m.isConnected && m.getAttribute(marks.attr) === String(Math.trunc(index));
+    })[0] ||
+    null) as HTMLElement | null;
   if (!el) return { ok: false, error: marks.notFound.replace("#", String(index)) };
   var target = el;
+  /** The focused element, inside shadow roots too (document.activeElement is only their host). */
+  function focused(): HTMLElement | null {
+    var a = document.activeElement as HTMLElement | null;
+    while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement as HTMLElement;
+    return a;
+  }
   if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el.isContentEditable)) {
-    var active = document.activeElement as HTMLElement | null;
+    var active = focused();
     var editable = !!active && (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active.isContentEditable);
     if (!active || active === document.body || !editable) {
       return { ok: false, error: "element " + index + " did not focus a text field when clicked, so nothing was typed. If it opens one, click it first (no text), then type into that field" };
@@ -89,7 +116,7 @@ export function prepareTypingInPage(marks: PageMarks, index: number): PageResult
     target = active;
   }
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-    if (document.activeElement !== target) target.focus();
+    if (focused() !== target) target.focus();
     if (target.value === "") return { ok: true, value: true };
     target.select();
     if (target.selectionStart === 0 && target.selectionEnd === target.value.length) return { ok: true, value: true };
@@ -101,7 +128,7 @@ export function prepareTypingInPage(marks: PageMarks, index: number): PageResult
     target.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }));
     return { ok: true, value: true };
   }
-  if (!target.contains(document.activeElement)) target.focus();
+  if (!target.contains(focused())) target.focus();
   var sel = getSelection();
   if (sel && !(sel.anchorNode && target.contains(sel.anchorNode) && !sel.isCollapsed)) {
     var range = document.createRange();
@@ -121,7 +148,11 @@ export function prepareTypingInPage(marks: PageMarks, index: number): PageResult
  * lists the options.
  */
 export function selectOptionInPage(marks: PageMarks, index: number, text: string): PageResult<string> {
-  var el = document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]');
+  var el = (document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') ||
+    ((window as unknown as Record<string, Element[] | undefined>)[marks.shadow] || []).filter(function (m) {
+      return m.isConnected && m.getAttribute(marks.attr) === String(Math.trunc(index));
+    })[0] ||
+    null);
   if (!el) return { ok: false, error: marks.notFound.replace("#", String(index)) };
   if (!(el instanceof HTMLSelectElement)) return { ok: false, error: "element " + index + " is not a dropdown (<select>)" };
   var select = el;
@@ -179,7 +210,11 @@ export function selectOptionInPage(marks: PageMarks, index: number, text: string
  * radio input (the state of that input).
  */
 export function checkStateInPage(marks: PageMarks, index: number): PageResult<CheckState> {
-  var el = document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') as HTMLElement | null;
+  var el = (document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') ||
+    ((window as unknown as Record<string, Element[] | undefined>)[marks.shadow] || []).filter(function (m) {
+      return m.isConnected && m.getAttribute(marks.attr) === String(Math.trunc(index));
+    })[0] ||
+    null) as HTMLElement | null;
   if (!el) return { ok: false, error: marks.notFound.replace("#", String(index)) };
   var target: HTMLElement = el instanceof HTMLLabelElement && el.control ? el.control : el;
   if (target instanceof HTMLInputElement && (target.type === "checkbox" || target.type === "radio")) {
@@ -198,7 +233,11 @@ export function checkStateInPage(marks: PageMarks, index: number): PageResult<Ch
  * toggles it and fires input and change. Returns the state afterwards.
  */
 export function setCheckedInPage(marks: PageMarks, index: number, checked: boolean): PageResult<boolean> {
-  var el = document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') as HTMLElement | null;
+  var el = (document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') ||
+    ((window as unknown as Record<string, Element[] | undefined>)[marks.shadow] || []).filter(function (m) {
+      return m.isConnected && m.getAttribute(marks.attr) === String(Math.trunc(index));
+    })[0] ||
+    null) as HTMLElement | null;
   if (!el) return { ok: false, error: marks.notFound.replace("#", String(index)) };
   var target: HTMLElement = el instanceof HTMLLabelElement && el.control ? el.control : el;
   function state(): boolean {
@@ -215,17 +254,27 @@ export function setCheckedInPage(marks: PageMarks, index: number, checked: boole
  * is set directly.
  */
 export function insertTextInPage(marks: PageMarks, index: number | null, text: string): PageResult<true> {
+  /** The focused element, inside shadow roots too (document.activeElement is only their host). */
+  function focused(): HTMLElement | null {
+    var a = document.activeElement as HTMLElement | null;
+    while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement as HTMLElement;
+    return a;
+  }
   var el: HTMLElement | null;
   if (index == null) {
-    el = document.activeElement as HTMLElement | null;
+    el = focused();
     if (!el || el === document.body) return { ok: false, error: "nothing is focused to paste into; click a field first" };
   } else {
-    el = document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') as HTMLElement | null;
+    el = (document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') ||
+    ((window as unknown as Record<string, Element[] | undefined>)[marks.shadow] || []).filter(function (m) {
+      return m.isConnected && m.getAttribute(marks.attr) === String(Math.trunc(index));
+    })[0] ||
+    null) as HTMLElement | null;
     if (!el) return { ok: false, error: marks.notFound.replace("#", String(index)) };
   }
   var isField = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement;
   if (index != null && !isField && !el.isContentEditable) el.focus();
-  var target = (index == null ? el : el.isContentEditable || isField ? el : (document.activeElement as HTMLElement | null)) || el;
+  var target = (index == null ? el : el.isContentEditable || isField ? el : focused()) || el;
   var before = isField ? (target as HTMLInputElement).value : target.textContent;
   var done = false;
   try {
@@ -235,7 +284,7 @@ export function insertTextInPage(marks: PageMarks, index: number | null, text: s
   }
   var after = isField ? (target as HTMLInputElement).value : target.textContent;
   // Retyping a field's own value changes nothing, yet it was typed: a focused field is trusted.
-  if (done && (after !== before || (isField && document.activeElement === target))) return { ok: true, value: true };
+  if (done && (after !== before || (isField && focused() === target))) return { ok: true, value: true };
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
     // Use the prototype setter so frameworks that track the value (React) see the change.
     var proto = target instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
@@ -277,7 +326,13 @@ interface PageKey {
  * Other defaults (Tab focus moves, arrows, shortcuts of the browser) do not happen.
  */
 export function pressKeyInPage(k: PageKey): PageResult<true> {
-  var target = (document.activeElement as HTMLElement | null) || document.body;
+  /** The focused element, inside shadow roots too (document.activeElement is only their host). */
+  function focused(): HTMLElement | null {
+    var a = document.activeElement as HTMLElement | null;
+    while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement as HTMLElement;
+    return a;
+  }
+  var target = focused() || document.body;
   // Chrome may drop null arguments' fields; treat a missing text as no text.
   var text = typeof k.text === "string" ? k.text : null;
   var init = {

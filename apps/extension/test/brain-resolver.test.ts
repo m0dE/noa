@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS, type BrainMode, type HelperInfo } from "@noa/shared";
-import { autoSwitchRefusal, builtInJev, CLAUDE_CODE_GONE, needsHelper, resolveBrain } from "../src/engine/brain-resolver.js";
+import { approvalJevSource, autoSwitchRefusal, CLAUDE_CODE_GONE, jevSourceFor, needsHelper, resolveBrain } from "../src/engine/brain-resolver.js";
 
 const base: HelperInfo = { version: "2", jevAvailable: false, claudePath: "C:\\claude.exe", logDir: "L" };
 const ok: HelperInfo = { ...base, selfTest: { ok: true, ms: 900, at: "2026-09-24T00:00:00Z" } };
@@ -64,13 +64,26 @@ describe("resolveBrain", () => {
   });
 });
 
-describe("builtInJev", () => {
-  it("the hosted AI brings its own Jev; local Claude Code the helper's own key when it has one; else none", () => {
-    expect(builtInJev("noa", null)).toBe("hosted");
-    expect(builtInJev("claude-code", { ...base, jevAvailable: true })).toBe("helper");
-    expect(builtInJev("claude-code", base)).toBeNull();
-    expect(builtInJev("claude-api", { ...base, jevAvailable: true })).toBeNull();
-    expect(builtInJev(null, null)).toBeNull();
+describe("jevSourceFor", () => {
+  const credit = { signedIn: true, hostedUsable: true };
+  const broke = { signedIn: true, hostedUsable: false };
+  const src = (brain: Parameters<typeof jevSourceFor>[0], helper: typeof base | null, account: typeof credit | null, jevApiKey = "") =>
+    jevSourceFor(brain, { settings: { ...DEFAULT_SETTINGS, jevApiKey }, helper, account });
+  it("Noa AI always uses the cloud; the others a key here, then the helper's own key, then the cloud", () => {
+    expect(src("noa", null, credit, "j")).toBe("cloud");
+    expect(src("claude-code", { ...base, jevAvailable: true }, credit, "j")).toBe("key");
+    expect(src("claude-code", { ...base, jevAvailable: true }, credit)).toBe("helper");
+    // Bug: "even if im using local claude code, if JEV is lacking, then have me use JEV from cloud service".
+    expect(src("claude-code", base, credit)).toBe("cloud");
+    expect(src("claude-api", { ...base, jevAvailable: true }, credit)).toBe("cloud");
+    expect(src("claude-code", base, broke)).toBeNull();
+    expect(src("claude-api", null, null)).toBeNull();
+    expect(src(null, null, credit)).toBeNull();
+  });
+  it("approval checks: a key here, else the cloud (the helper's key is out of reach)", () => {
+    expect(approvalJevSource({ settings: { ...DEFAULT_SETTINGS, jevApiKey: "j" }, account: credit })).toBe("key");
+    expect(approvalJevSource({ settings: DEFAULT_SETTINGS, account: credit })).toBe("cloud");
+    expect(approvalJevSource({ settings: DEFAULT_SETTINGS, account: broke })).toBeNull();
   });
 });
 

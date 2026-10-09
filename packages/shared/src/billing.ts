@@ -264,10 +264,20 @@ export const UsageEvent = z.object({
 });
 export type UsageEvent = z.infer<typeof UsageEvent>;
 
-/** GET /v1/me/usage?month=YYYY-MM. */
+/** [start, end) of a pay period (ISO instants). */
+export const UsagePeriod = z.object({ start: z.string(), end: z.string() });
+export type UsagePeriod = z.infer<typeof UsagePeriod>;
+
+/** GET /v1/me/usage?month=YYYY-MM (a UTC month), or ?period= (a pay period; the default). */
 export const UsageReport = z.object({
+  /** The month reported, or the one the pay period starts in. */
   month: z.string(),
+  /** Months with activity (month reports only; empty for a pay period). */
   months: z.array(z.string()),
+  /** The pay period reported (pay period reports only). */
+  period: UsagePeriod.optional(),
+  /** The current pay period and earlier ones back to the first activity, newest first (pay period reports only). */
+  periods: z.array(UsagePeriod).optional(),
   totals: z.object({
     tasksRun: z.number().int(),
     tasksDone: z.number().int(),

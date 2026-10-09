@@ -13,6 +13,7 @@ import {
   dialogAnswerLabel,
   dialogLabel,
   errorMessage,
+  formatBytes,
   formatCents,
   isXSite,
   picksText,
@@ -24,6 +25,8 @@ import {
   type BrowserMethod,
   type BrowserMethods,
   type ElementPicks,
+  type NoaFileList,
+  type SavedFile,
   type PageSnapshot,
   type TaskRunResult,
   type ToolArgsOf,
@@ -48,7 +51,7 @@ export const NO_TASK_TO_END = "no task to end in an attached session";
 const err = (text: string): ToolResult => ({ text, isError: true });
 
 /** Tools that do not change the page: the steps Jev left to the model stay open across them. */
-const KEEPS_PENDING = new Set<string>(["act", "read_page", "screenshot", "list_tabs"]);
+const KEEPS_PENDING = new Set<string>(["act", "read_page", "screenshot", "list_tabs", "list_files"]);
 
 /**
  * Tools that may wait for a page to load (up to the driver's navigation timeout, 30 s), and which message from the
@@ -121,6 +124,43 @@ function dialogAnswered(r: BrowserMethods["browser.handleDialog"]["result"], tex
 /** Case- and slash-insensitive path key, for comparing upload paths with mediaPaths. */
 function pathKey(p: string): string {
   return p.trim().replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
+}
+
+/** list_files' answer: the folder, then each file's absolute path (what upload takes), size and date. */
+export function formatFileList(r: NoaFileList, search?: string): string {
+  const matching = search ? ` matching "${search}"` : "";
+  const lines = [`The user's Noa folder: ${r.folder}`];
+  if (r.partial) lines.push("Only the files Chrome saved there itself are listed (Noa's helper, which reads the folder, is not connected here); a file the user put there another way is not shown.");
+  if (!r.files.length) {
+    lines.push(`It has no files${matching}. The user can put files there (or attach them to the message) for you to use.`);
+    return lines.join("\n");
+  }
+  const more = r.total > r.files.length ? ` (the newest ${r.files.length} of ${r.total}; give search to narrow it)` : "";
+  lines.push(`Files${matching}, newest first${more}. To put one on a page, upload its path exactly as written:`);
+  for (const f of r.files) lines.push(`- ${f.path} (${formatBytes(f.size)}, ${f.modified.slice(0, 10)}${f.cloud ? ", in the user's cloud files: saved to this path when you upload it" : ""})`);
+  return lines.join("\n");
+}
+
+/** save_file's answer: where the file is on this computer, and whether the cloud has a copy (and why not). */
+export function formatSavedFile(r: SavedFile): string {
+  const where = r.folder ? `${r.folder} folder` : "top folder";
+  const lines = [`Saved ${r.name} (${formatBytes(r.size)}) in the user's Noa folder: ${r.path}`];
+  switch (r.cloud) {
+    case "saved":
+      lines.push(r.cloudFolder !== undefined ? `A copy is in their cloud files, in the top folder (the account server does not take the folder "${r.folder}" yet).` : `A copy is in their cloud files, ${where}.`);
+      break;
+    case "signed-out":
+      lines.push("No cloud copy: this browser is not signed in to a Noa account. Tell the user it is on this computer only; signed in on a plan with cloud files, it would be kept in the cloud too.");
+      break;
+    case "no-plan":
+      lines.push("No cloud copy: the user's plan has no cloud files. Tell the user it is on this computer only; cloud files come with a paid plan.");
+      break;
+    case "failed":
+      lines.push(`No cloud copy: storing it failed (${r.cloudError ?? "unknown error"}). Tell the user it is on this computer only.`);
+      break;
+  }
+  lines.push("To put it on a page, upload this path. Tell the user what you kept and where.");
+  return lines.join("\n");
 }
 
 export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
@@ -278,7 +318,9 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
         const bad = paths.filter((p) => !allowedMedia.has(pathKey(p)));
         if (bad.length) {
           const allowed = allowedMedia.size ? [...allowedMedia.values()].map((p) => `- ${p}`).join("\n") : "(none)";
-          return err(`upload refused: ${bad.join(", ")} ${bad.length === 1 ? "is" : "are"} not in the task's media list. Allowed files:\n${allowed}`);
+          return err(
+            `upload refused: ${bad.join(", ")} ${bad.length === 1 ? "is" : "are"} not in the task's media list. Allowed files:\n${allowed}\nFor a file in the user's Noa folder, call list_files first and upload the path it gives.`,
+          );
         }
         // The files exactly as the task listed them: the check above ignores case and slashes, a file system may not.
         const r = await browser("browser.upload", { index, paths: paths.map((p) => allowedMedia.get(pathKey(p))!) });
@@ -304,6 +346,38 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
         }
         secrets.add(r.password);
         return { text: `username: ${r.username}\npassword: ${r.password}` };
+      }
+      case "list_files": {
+        const { search } = a as ToolArgsOf<"list_files">;
+        const r = await browser("files.list", search ? { search } : {});
+        // The user keeps these files for the agent to work with: each listed one may be uploaded.
+        for (const f of r.files) allowedMedia.set(pathKey(f.path), f.path);
+        return { text: formatFileList(r, search) };
+      }
+      case "save_file": {
+        const args = a as ToolArgsOf<"save_file">;
+        const sources = (["url", "text", "screenshot", "path", "download"] as const).filter((k) => args[k] !== undefined && args[k] !== false && args[k] !== "");
+        if (sources.length !== 1) return err(`save_file needs exactly one source: url, text, screenshot, path or download (got ${sources.length ? sources.join(", ") : "none"}).`);
+        const params: BrowserMethods["files.save"]["params"] = {};
+        if (args.name) params.name = args.name;
+        if (args.folder) params.folder = args.folder;
+        if (args.url !== undefined) {
+          if (!/^(https?|data):/i.test(args.url.trim())) return err("save_file url must be an http(s) address (a link's href from read_page) or a data: URL. For a file a page makes itself, click its Download button, then save_file with download: true.");
+          params.url = args.url.trim();
+        } else if (args.text !== undefined) {
+          if (!args.name) return err("save_file with text needs a name, with its extension.");
+          params.text = args.text;
+        } else if (args.path !== undefined) {
+          // Only files the agent may use anyway: never any file on the computer a page talked it into sending to the cloud.
+          const known = allowedMedia.get(pathKey(args.path));
+          if (!known) return err(`save_file refused: ${args.path} is not a file you were given. Use a path from list_files, the task's media or attachments, or generate_image.`);
+          params.path = known;
+        } else if (args.screenshot) params.screenshot = true;
+        else params.download = true;
+        const r = await browser("files.save", params);
+        // A kept file is the agent's to upload, like the ones list_files gives.
+        allowedMedia.set(pathKey(r.path), r.path);
+        return { text: formatSavedFile(r) };
       }
       case "generate_image": {
         const r = await browser("media.generateImage", a as ToolArgsOf<"generate_image">);
@@ -363,6 +437,9 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
         const r = await opts.memory(name, a);
         return r.isError ? err(r.text) : { text: r.text };
       }
+      case "answer_user":
+        // The answer is its call (the chat shows it; hands-free voice says it): nothing to do here.
+        return { text: "The user has your answer. Go on with the task." };
       case "task_complete": {
         const { summary, url, ...extras } = a as ToolArgsOf<"task_complete">;
         const r: TaskRunResult = { outcome: "done", summary };
@@ -393,6 +470,10 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
       return p;
     },
     async call(name: ToolName, args: unknown): Promise<ToolResult> {
+      // answer_user only answers a message the user sent into this turn (a turn's own request is answered by its
+      // end). Refused before its call is shown: the chat and hands-free voice take the call itself as the answer.
+      if (name === "answer_user" && !opts.interjections?.answerable)
+        return err("Not said: answer_user is only for a message the user sent while you work, and none came in this turn. Answer this request in your final message and task_complete's spoken line.");
       const id = `t${nextId++}`;
       const span = traceStart();
       // Candidates Jev left to the model stay valid only while the page is left alone.

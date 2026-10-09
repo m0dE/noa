@@ -11,7 +11,7 @@ import { AgentTab, closeChatTabs, type TabMode } from "./agent-tab.js";
 import type { Cdp } from "./cdp.js";
 import { closeTabsAsking, DialogWatch, type DialogEvent } from "./dialogs.js";
 import { Driver } from "./driver.js";
-import { createBrowserCaller, tracedBrowser, type BrowserCallTrace, type VaultLike } from "./engine/browser-caller.js";
+import { createBrowserCaller, tracedBrowser, type BrowserCallTrace, type FilesLike, type VaultLike } from "./engine/browser-caller.js";
 import type { GenerateImageParams, GenerateImageResult } from "./engine/image-generator.js";
 import { isRestrictedError } from "./restricted.js";
 import { ApprovalGate, type GateDeps } from "./approval/gate.js";
@@ -85,6 +85,8 @@ export class AgentSlots implements SlotPool {
     private readonly onDialog?: (sessionId: string, event: DialogEvent) => void,
     /** generate_image (engine/image-generator.ts), for the session using the slot. Absent: the tool says it is not available. */
     private readonly images?: { generate(params: GenerateImageParams, sessionId: string | null): Promise<GenerateImageResult> },
+    /** list_files: the user's Noa folder (engine/noa-folder.ts NoaFiles). Absent: the tool says it cannot be listed. */
+    private readonly files?: FilesLike,
   ) {}
 
   /** Closes a run's tabs at its end without leaving a page silently: "Leave site?" is answered Cancel, and the tab stays. */
@@ -112,7 +114,7 @@ export class AgentSlots implements SlotPool {
     const cleanedUp = () => this.cleanedUp();
     const onCall = this.onBrowserCall;
     const images = this.images;
-    const plain = createBrowserCaller(driver, this.vault, images ? { generate: (p) => images.generate(p, slot.sessionId) } : undefined);
+    const plain = createBrowserCaller(driver, this.vault, images ? { generate: (p) => images.generate(p, slot.sessionId) } : undefined, this.files);
     // Calls made for a session are timed in its trace.
     const traced = onCall
       ? tracedBrowser(plain, () => (driver.inFallback ? "fallback" : "cdp"), (call) => {

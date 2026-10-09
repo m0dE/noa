@@ -1,12 +1,11 @@
 /**
- * Which Jev the approval classifier may use for a session: the user's own
- * Jev key (TypeSafe's systemOne), else, only for a run on Noa AI, the
- * account server's Jev proxy (it is billed to the account like the brain's
- * own Jev calls). Otherwise none: the rules decide and what they are unsure
- * about asks the user. Jev off in Settings: none.
+ * Which Jev the approval classifier may use for a session (approvalJevSource): the user's own
+ * Jev key (TypeSafe's systemOne), else Noa's cloud Jev, the account server's Jev proxy (billed to
+ * the account), whatever AI runs the session. Otherwise none: the rules decide and what they are
+ * unsure about asks the user. Jev off in Settings: none.
  */
 import { proxyJevClient, type JevClientLike } from "@noa/core";
-import { SESSION_HEADER, type BrainKind, type ExtensionSettings } from "@noa/shared";
+import { SESSION_HEADER, type ExtensionSettings } from "@noa/shared";
 import type { SystemOneLike } from "./jev-judge.js";
 
 /** TypeSafe's systemOne endpoint (what its SDK calls; core's createJev uses the SDK). */
@@ -14,9 +13,7 @@ export const TYPESAFE_SYSTEMONE_URL = "https://api.typesafe.ai/v1/systemone";
 
 export interface ApprovalJevInput {
   settings: ExtensionSettings;
-  /** The brain the session runs on. */
-  brain: BrainKind | undefined;
-  /** The signed-in account's session (Noa AI), or null. */
+  /** The signed-in account's session while Noa's cloud Jev can be used (cloudJevUsable), or null. */
   hosted: { token: string; apiBase: string } | null;
   sessionId: string;
   fetch?: typeof fetch;
@@ -37,7 +34,7 @@ export function approvalJev(i: ApprovalJevInput): SystemOneLike | null {
   if (!i.settings.jevEnabled) return null;
   const opts = i.fetch ? { fetch: i.fetch } : {};
   if (i.settings.jevApiKey) return asSystemOne(proxyJevClient(TYPESAFE_SYSTEMONE_URL, i.settings.jevApiKey, opts), TYPESAFE_DEFAULT_MODEL);
-  if (i.brain === "noa" && i.hosted) {
+  if (i.hosted) {
     const base = i.hosted.apiBase.replace(/\/+$/, "");
     return asSystemOne(proxyJevClient(`${base}/v1/ai/jev`, i.hosted.token, { ...opts, headers: { [SESSION_HEADER]: i.sessionId } }));
   }

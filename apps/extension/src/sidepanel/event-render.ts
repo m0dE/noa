@@ -1,5 +1,5 @@
 /** DOM for one conversation log entry (a job's conversation and its earlier runs) (see event-format.ts for the pure view models). */
-import { chipHint, plural, TASK_END_TOOLS, type SessionInfo, type TodoChange } from "@noa/shared";
+import { ANSWER_TOOL, chipHint, plural, TASK_END_TOOLS, type SessionInfo, type TodoChange } from "@noa/shared";
 import { busy, copyText, h } from "../ui/dom.js";
 import { renderErrorHelp } from "./error-view.js";
 import type { EventView, OpeningView, ScheduledView } from "./event-format.js";
@@ -287,8 +287,9 @@ export function placeEvent(log: HTMLElement, node: HTMLElement, v: EventView): v
     group = newStepsGroup();
     log.append(group);
   }
-  // The task_* call and its result say what the end card below says: kept, but not shown or counted.
-  const ending = (v.kind === "tool" || v.kind === "result") && (TASK_END_TOOLS as readonly string[]).includes(v.name);
+  // The task_* call and its result say what the end card below says: kept, but not shown or counted. An answer_user
+  // call is shown as the agent's text; its result says nothing.
+  const ending = ((v.kind === "tool" || v.kind === "result") && (TASK_END_TOOLS as readonly string[]).includes(v.name)) || (v.kind === "result" && v.name === ANSWER_TOOL);
   if (ending) node.hidden = true;
   group.querySelector(":scope > .ev-steps-body")!.append(node);
   if (v.kind === "tool" && !ending) updateStepsGroup(group as HTMLDetailsElement, v.name);

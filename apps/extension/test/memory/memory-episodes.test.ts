@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { memoryTaskKey, type AgentEvent, type ExtensionSettings, type MemoryKind, type SessionInfo } from "@noa/shared";
+import { memoryTaskKey, USER_STOP_REASON, type AgentEvent, type ExtensionSettings, type MemoryKind, type SessionInfo } from "@noa/shared";
 import { SessionStore } from "../../src/engine/sessions.js";
 import {
   BACKFILL_DAYS,
@@ -235,6 +235,51 @@ describe("the episode", () => {
     const episodes = (await store.list()).filter((e) => e.kind === "episode");
     expect(episodes).toEqual([expect.objectContaining({ id: "m1", text: "Confirmed the booking and told the guest about parking.", at: new Date(START).toISOString() })]);
     expect(prompts[1]!.prompt).toContain("User: Also tell the guest about parking");
+  });
+
+  it("of a conversation the user stopped is marked stopped; a later turn that finishes clears it", async () => {
+    await conversation("chat");
+    await sessions.update("chat", { outcome: "paused", reason: USER_STOP_REASON });
+    await sessions.flush();
+    answer({ episode: EPISODE, facts: [] });
+    await writer.ended("chat", { soon: false });
+    await fireAlarm();
+    expect((await store.list()).find((e) => e.kind === "episode")).toMatchObject({ stopped: true });
+    await sessions.reopen("chat", { startedAt: iso(), turns: 2, firstStartedAt: new Date(START).toISOString() });
+    sessions.append("chat", { type: "user_message", text: "Go on" });
+    sessions.append("chat", { type: "task_end", outcome: "done", summary: "Confirmed" });
+    await sessions.update("chat", { endedAt: iso(), outcome: "done" });
+    answer({ episode: EPISODE, facts: [] });
+    await writer.ended("chat", { soon: false });
+    await fireAlarm();
+    expect((await store.list()).find((e) => e.kind === "episode")!.stopped).toBeUndefined();
+  });
+
+  it("written before episodes were marked: a worker start marks those of stopped conversations, once", async () => {
+    await conversation("stopped");
+    await sessions.update("stopped", { outcome: "paused", reason: USER_STOP_REASON });
+    await conversation("finished");
+    await sessions.flush();
+    const source = (sessionId: string) => ({ kind: "chat" as const, sessionId });
+    await store.putEpisode({ ...EPISODE, at: iso() }, source("stopped"));
+    await store.putEpisode({ ...EPISODE, subject: "Another", at: iso() }, source("finished"));
+    await writer.resume();
+    const bySession = async () => Object.fromEntries((await store.list()).map((e) => [e.source.sessionId, e.stopped]));
+    expect(await bySession()).toEqual({ stopped: true, finished: undefined });
+    // Once: a later episode written without the mark (as an older extension would) is left as it is.
+    await store.putEpisode({ ...EPISODE, at: iso() }, source("stopped"));
+    await writer.resume();
+    expect((await bySession()).stopped).toBeUndefined();
+  });
+
+  it("of a run paused for the user (a question, a sign-in) is not marked stopped", async () => {
+    await conversation("chat");
+    await sessions.update("chat", { outcome: "paused", reason: "Which account should I use?" });
+    await sessions.flush();
+    answer({ episode: EPISODE, facts: [] });
+    await writer.ended("chat", { soon: false });
+    await fireAlarm();
+    expect((await store.list()).find((e) => e.kind === "episode")!.stopped).toBeUndefined();
   });
 });
 

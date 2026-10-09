@@ -244,7 +244,7 @@ export class PanelCommands {
    * Ends the session wherever it runs (the panels that listen are told to stop, and report it). None listens: a
    * session the voice dep still has (kept across a worker restart) is over.
    */
-  private stopVoice(): void {
+  stopVoice(): void {
     const listening = [...this.panels].filter(([, p]) => p.listening);
     for (const [port] of listening) this.post(port, { type: "voice.stop" });
     if (!listening.length) {

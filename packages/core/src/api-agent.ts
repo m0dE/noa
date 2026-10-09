@@ -280,6 +280,7 @@ export function startApiAgentWith(opts: ApiAgentOptions, internals: ApiAgentInte
 
   const runTurn = (config: RunConfig): AgentSession => {
     turnRunning = true;
+    interjections.newTurn();
     reasoning.startTurn(config);
     raiseNotePending = null;
     const controller = new AbortController();

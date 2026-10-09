@@ -13,11 +13,14 @@ describe("isRestrictedUrl", () => {
     "view-source:https://example.com/",
     "https://chromewebstore.google.com/detail/x/abc",
     "https://chrome.google.com/webstore/devconsole/123",
+    // The dashboard of a second signed-in account: Chrome keeps extensions off the whole host, not only /webstore.
+    "https://chrome.google.com/u/2/webstore/devconsole/123",
+    "https://chrome.google.com/robots.txt",
     "edge://settings",
     "devtools://devtools/bundled/inspector.html",
   ])("%s is restricted", (url) => expect(isRestrictedUrl(url)).toBe(true));
 
-  it.each(["https://mail.google.com/", "http://127.0.0.1:8080/x", "about:blank", "https://chrome.google.com/intl/en/chrome/", "", undefined])(
+  it.each(["https://mail.google.com/", "http://127.0.0.1:8080/x", "about:blank", "https://www.google.com/chrome/", "https://notchrome.google.com.example/", "", undefined])(
     "%s is not",
     (url) => expect(isRestrictedUrl(url)).toBe(false),
   );

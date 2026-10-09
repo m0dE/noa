@@ -245,14 +245,14 @@ class ScriptedAgent {
         ok: true,
         summary: "read",
       } as unknown as AgentEvent);
-      // Read now: a question is answered in a short reply before the next tool call, then the task goes on.
+      // Read now: a question is answered with answer_user, then the task goes on.
       const read = this.unread.splice(0);
       // The brains' "interjection" trace: the model read the message (sessions.ts passes it on live).
       if (read.length) this.emit({ type: "trace", trace: { t: Date.now(), cat: "user", name: "interjection", data: { route: "request", count: read.length } } } as unknown as AgentEvent);
       for (const q of read) {
         await sleep(1_500);
         log(`AGENT   -> answers the message read mid-turn: "${q.a}"`);
-        this.emit({ type: "assistant_text", text: q.a });
+        this.emit({ type: "tool_call", id: `ans${n}`, name: "answer_user", args: { text: q.a } });
       }
     }
     const a = answer?.a ?? "I couldn't find that.";
