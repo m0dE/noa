@@ -3,6 +3,8 @@
  * answering the browser.* calls from a fake X page. Proves the host end to
  * end without Chrome or a model (NOA_BRAIN=scripted).
  */
+// @ts-expect-error: a plain .mjs build module
+import { helperCodeId } from "../code-id.mjs";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -45,6 +47,9 @@ describe("dist/host.js over native messaging", () => {
     const info = await ext.call("helper.hello", {}, { timeoutMs: 10_000 });
     expect(info).toEqual({
       version: helperPackage.version,
+      // The code it was built from (code-id.mjs), which the extension compares with its own; run from the repo.
+      code: await helperCodeId(),
+      install: "checkout",
       jevAvailable: false,
       brain: "scripted",
       claudePath: null,

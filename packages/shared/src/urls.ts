@@ -14,6 +14,9 @@ export const TERMS_URL = "https://noa.bot/terms";
  */
 export const HELPER_INSTALL_URL = "https://noa.bot/helper/install.sh";
 
+/** The same for Windows (apps/web/public/helper/install.ps1): a PowerShell script, run with `irm ... | iex`. */
+export const HELPER_INSTALL_PS1_URL = "https://noa.bot/helper/install.ps1";
+
 /** "@name" from "name", "@name" or " @@name ". */
 export function normalizeHandle(handle: string): string {
   return `@${handle.trim().replace(/^@+/, "").trim()}`;

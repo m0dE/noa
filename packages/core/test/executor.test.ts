@@ -52,7 +52,7 @@ describe("createToolExecutor: plain tools", () => {
     expect(events.filter((e) => e.type === "tool_call")).toHaveLength(8);
   });
 
-  // Owner's trace (2026-10-12): every navigate was followed by a read_page, one more model turn per page.
+  // Every navigate used to be followed by a read_page: one more model turn per page.
   it("navigate returns the page it opened, as read_page shows it; the turn counts it as a page opened by address", async () => {
     const x = new FakeX();
     const { exec } = setup(x, { jev: fakeJev([]) });

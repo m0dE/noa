@@ -21,6 +21,12 @@ import type { JobDismissals } from "../job-dismissals.js";
 import type { TestResult } from "./settings-tests.js";
 import { WrongPassphraseError, type Vault } from "../vault.js";
 import { isMemoryRequest, type MemoryService } from "../memory/service.js";
+import { reportedHelper } from "./brain-resolver.js";
+import { HELPER_CODE } from "../build-config.js";
+import { helperOutdated } from "../options/settings-patch.js";
+
+/** Why an out-of-date helper's connection was closed (a turn it was running ends with it). */
+export const HELPER_RESTARTED = "the helper was out of date and restarts with its new version";
 
 /** The runner as the router uses it. */
 export type RouterRunner = Pick<
@@ -58,6 +64,7 @@ export interface UiRouterDeps {
     readonly info: HelperInfo | null;
     readonly lastError: string | null;
     connect(timeoutMs?: number, opts?: { selfTest?: boolean }): Promise<HelperInfo>;
+    disconnect(reason?: string): void;
     call<M extends "helper.getLog">(method: M, params: HelperMethods[M]["params"], opts?: { timeoutMs?: number }): Promise<HelperMethods[M]["result"]>;
   };
   brainStatus(settings: ExtensionSettings): BrainStatus;
@@ -182,7 +189,7 @@ export class UiRouter {
   private async traceEnv(): Promise<TraceEnv> {
     if (this.deps.traceEnv) return this.deps.traceEnv();
     const h = this.deps.helper.info;
-    return { extensionVersion: "", userAgent: "", helper: h ? { version: h.version, brain: h.brain ?? "claude", jev: h.jevAvailable } : null };
+    return { extensionVersion: "", userAgent: "", helper: h ? reportedHelper(h) : null };
   }
 
   /** The last state's stamp (UiState.rev): a newer state always has a higher one, also after a restart (it is the clock). */
@@ -230,6 +237,9 @@ export class UiRouter {
       case "helper.connect":
         // Connects (or reconnects) and re-runs the Claude Code self-test.
         // Failure is not an error: the state carries brain.helperError.
+        // An out-of-date helper is let go first: Chrome then starts the helper as it is on disk now (rebuilt or
+        // reinstalled), where saying hello again would only ask the old process.
+        if (d.helper.info && helperOutdated(d.helper.info, HELPER_CODE)) d.helper.disconnect(HELPER_RESTARTED);
         await d.helper.connect(undefined, { selfTest: true }).catch(() => undefined);
         return this.getState();
       case "run.adhoc": {

@@ -119,8 +119,17 @@ export interface TaskRunResult {
 /** What runs a helper's tasks: Claude Code, or the deterministic scripted brain (tests, NOA_BRAIN=scripted). */
 export type HelperBrain = "claude" | "scripted";
 
+/** Where a helper runs from, which says how to update it: a repo checkout (rebuild), Noa's folder (the installer), or an app (Noa Browser). */
+export type HelperInstall = "checkout" | "noa-folder" | "app";
+
 export interface HelperInfo {
   version: string;
+  /**
+   * The code it was built from (apps/helper/code-id.mjs). The extension is built with the id it expects: another one
+   * means the helper is out of date and misses fixes the extension relies on. Absent from helpers built before it.
+   */
+  code?: string;
+  install?: HelperInstall;
   jevAvailable: boolean;
   /** The helper's brain. Absent means "claude". */
   brain?: HelperBrain;

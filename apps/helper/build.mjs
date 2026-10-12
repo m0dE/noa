@@ -3,8 +3,11 @@
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
+import { helperCodeId } from "./code-id.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
+
+const codeId = await helperCodeId();
 
 await build({
   entryPoints: {
@@ -21,6 +24,8 @@ await build({
   target: "node20",
   sourcemap: true,
   logLevel: "warning",
+  // The code id the extension compares with its own (code-id.mjs).
+  define: { __NOA_HELPER_CODE__: JSON.stringify(codeId) },
   banner: {
     js: 'import { createRequire as __btCreateRequire } from "node:module"; const require = __btCreateRequire(import.meta.url);',
   },

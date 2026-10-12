@@ -47,6 +47,18 @@ Node.js 22+ and pnpm 10):
    Claude API (your own key).
 4. Sign in to your sites by hand in Chrome, then type a task in the side panel.
 
+### The helper (Local Claude Code)
+
+Local Claude Code needs a small helper that connects Chrome to Claude Code.
+Settings shows a one-line install command for your system:
+
+- macOS and Linux, in Terminal: `curl -fsSL https://noa.bot/helper/install.sh | sh`
+- Windows, in PowerShell: `irm https://noa.bot/helper/install.ps1 | iex`
+
+From a source build, run `node apps/helper/dist/install.js` instead. If
+Settings says the helper is out of date, run the same command again (or
+rebuild) and click **Re-check**.
+
 ## Usage
 
 Type a task in the side panel to start it. Every chat, scheduled task and

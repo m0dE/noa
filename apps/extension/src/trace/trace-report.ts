@@ -768,7 +768,8 @@ export interface ReportEnv {
   userAgent: string;
   os?: string;
   arch?: string;
-  helper: { version: string; brain: string; jev: boolean } | null;
+  /** code: the code id it reports (absent: built before code ids); outdated: not the code this extension expects. */
+  helper: { version: string; brain: string; jev: boolean; code?: string; outdated?: boolean } | null;
   voice?: { engine: string; model?: string; realtimeModel?: string; standardModel?: string; voice?: string; speed?: number };
 }
 
@@ -893,7 +894,9 @@ export function turnTitle(t: TurnReport): string {
 function envLine(env: ReportEnv): string {
   return join(
     env.extensionVersion && `extension ${env.extensionVersion}`,
-    env.helper ? `helper ${env.helper.version} (${env.helper.brain})` : "no helper",
+    env.helper
+      ? `helper ${env.helper.version} (${env.helper.brain})${env.helper.code ? ` code ${env.helper.code}` : ""}${env.helper.outdated ? " OUT OF DATE" : ""}`
+      : "no helper",
     browserName(env.userAgent),
     env.os && `${env.os}${env.arch ? `/${env.arch}` : ""}`,
     env.voice && `voice ${env.voice.engine}${env.voice.model ? ` (${env.voice.model})` : ""}`,

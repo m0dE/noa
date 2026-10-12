@@ -10,8 +10,10 @@
  * "Right now this picks ..." both ask it.
  */
 import type { BrainKind, ExtensionSettings, HelperInfo } from "@noa/shared";
+import { HELPER_CODE } from "../build-config.js";
 import { HELPER_NOT_INSTALLED } from "../helper-link.js";
-import type { BrainStatus, JevSource } from "../ui-protocol.js";
+import { helperOutdated } from "../options/settings-patch.js";
+import type { BrainStatus, JevSource, TraceEnv } from "../ui-protocol.js";
 
 export interface BrainInputs {
   settings: Pick<ExtensionSettings, "brain" | "anthropicApiKey" | "jevApiKey" | "jevEnabled">;
@@ -91,6 +93,14 @@ export function approvalJevSource(inputs: Pick<BrainInputs, "settings" | "accoun
   return cloudJevUsable(inputs.account) ? "cloud" : null;
 }
 
+/** The helper as a trace's header names it: its version, brain, Jev, code id, and whether it is out of date. */
+export function reportedHelper(h: HelperInfo): NonNullable<TraceEnv["helper"]> {
+  const out: NonNullable<TraceEnv["helper"]> = { version: h.version, brain: h.brain ?? "claude", jev: h.jevAvailable };
+  if (h.code) out.code = h.code;
+  if (helperOutdated(h, HELPER_CODE)) out.outdated = true;
+  return out;
+}
+
 /** Noa's cloud Jev answers: signed in, with usage credit or a paid plan. */
 export function cloudJevUsable(account: BrainInputs["account"]): boolean {
   return !!account?.signedIn && account.hostedUsable;
@@ -149,6 +159,8 @@ export function resolveBrain(inputs: BrainInputs): BrainStatus {
     hasApiKey,
     jevActive: false,
   };
+  const outdated = effective === "claude-code" && helper ? helperOutdated(helper, HELPER_CODE) : null;
+  if (outdated) status.helperOutdated = outdated;
   const jevSource = jevSourceFor(effective, inputs);
   if (jevSource) {
     status.jevSource = jevSource;

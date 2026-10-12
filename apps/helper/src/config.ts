@@ -6,12 +6,23 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_MODEL, type HelperBrain } from "@noa/shared";
+import { DEFAULT_MODEL, type HelperBrain, type HelperInstall } from "@noa/shared";
 import helperPackage from "../package.json" with { type: "json" };
 import { ENV } from "./env-names.js";
 
 /** Reported in helper.hello and by the MCP server: the version in apps/helper/package.json (bundled at build time). */
 export const HELPER_VERSION: string = helperPackage.version;
+
+declare const __NOA_HELPER_CODE__: string | undefined;
+/** The code this helper was built from (code-id.mjs, set by build.mjs); "dev" when run from source. */
+export const HELPER_CODE: string = typeof __NOA_HELPER_CODE__ === "string" ? __NOA_HELPER_CODE__ : "dev";
+
+/** Where this helper runs from: a checkout (apps/helper with its src), Noa's own folder (install.sh), or else an app. */
+export function helperInstall(baseDir: string): HelperInstall {
+  if (existsSync(join(helperRoot(), "src", "host.ts"))) return "checkout";
+  if (resolve(moduleDir()) === resolve(join(baseDir, "helper"))) return "noa-folder";
+  return "app";
+}
 
 /**
  * The model when neither the extension nor NOA_MODEL names one: the extension setting's own

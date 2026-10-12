@@ -72,7 +72,7 @@ describe("describeEvent", () => {
     });
     expect(describeEvent({ type: "task_end", outcome: "failed", reason: "no" })).toMatchObject({ text: "no", chip: { tone: "bad" } });
   });
-  // Owner: "was JEV used? if so, show badge or something and say what happened hence using claude as fallback".
+  // Whether Jev was used, and why Claude picked instead, is shown in the chat (it used to be in the Raw view only).
   it("the chat shows Jev's picks and the turn's Jev line; only a brain's start line is left to the Raw view", () => {
     const events: AgentEvent[] = [
       { type: "status", text: "Claude Code started (claude-sonnet-5)" },
@@ -85,7 +85,7 @@ describe("describeEvent", () => {
     expect(describeEvent(events[4]!, {})).not.toHaveProperty("picks");
   });
 
-  it("the turn's Jev line says who picked, and why Claude picked each step Jev did not (the owner's trace, 2026-10-12)", () => {
+  it("the turn's Jev line says who picked, and why Claude picked each step Jev did not", () => {
     const unsure = { type: "jev", goal: "click the Analytics button in the top navigation tabs", operation: "click", index: 10, confidence: 0.58, executed: false, ms: 105 } as const;
     const v = describeEvent({ type: "status", text: "Jev chose 0 of 1 element pick (clicks and typing); Claude chose 1", picks: { jev: 0, claude: 1, byAddress: 3 } }, { jevSteps: [unsure] });
     expect(v).toEqual({

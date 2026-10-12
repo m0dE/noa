@@ -115,6 +115,9 @@ describe("trace report", () => {
     expect(text).toContain("Slowest:");
     expect(text).toMatch(/TURN 1 · .* · done · first response 13\.70 s/);
     expect(text).toContain("helper 0.4.1 (claude)");
+    // A trace says which helper code ran, and when it was not the code the extension expects.
+    const stale = reportText(buildReport({ session, events, trace: book }), session, { ...env, helper: { version: "0.4.1", brain: "claude", jev: true, code: "aaa", outdated: true } });
+    expect(stale).toContain("helper 0.4.1 (claude) code aaa OUT OF DATE");
     expect(text).toContain("Chrome 153.0.7000.0");
     expect(text).toContain("voice standard (@cf/deepgram/nova-3)");
     expect(text).not.toContain("abc123secretXYZ");

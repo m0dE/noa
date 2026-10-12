@@ -10,7 +10,10 @@
  *
  * price: Anthropic's list price in cents per 1M tokens (input, output, 5-minute
  * cache write, cache read), read 2026-09-27 from Anthropic's model table (the
- * owner must confirm against the live pricing page before going live). The
+ * owner must confirm against the live pricing page before going live). Cache
+ * writes are 1.25x and reads 0.1x the input price. longPrompt: the rates of a
+ * request whose prompt (input, cache reads and writes) is over `over` tokens;
+ * Haiku 5.5's list price is $0.10 / $0.50 up to 100K and $0.50 / $2.50 above (read 2026-10-12). The
  * ONE place to edit prices: the hosted AI's price table (apps/api/src/pricing.ts)
  * and the model menu's cost hint (modelHint) are built from it.
  */
@@ -19,6 +22,13 @@ export const CLAUDE_MODELS = [
   { id: "claude-opus-5-5", label: "Opus 5.5", thinking: "always", price: { input: 400, output: 2000, cacheWrite: 500, cacheRead: 20 } },
   { id: "claude-fable-5-1", label: "Fable 5.1", thinking: "always", price: { input: 1000, output: 5000, cacheWrite: 1250, cacheRead: 25 } },
   { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5", thinking: "budget", price: { input: 100, output: 500, cacheWrite: 125, cacheRead: 10 } },
+  {
+    id: "claude-haiku-5-5",
+    label: "Haiku 5.5",
+    // Adaptive thinking, and disabled at effort high or below (its default is medium): Reasoning's fast and thorough both work.
+    thinking: "switchable",
+    price: { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1, longPrompt: { over: 100_000, input: 50, output: 250, cacheWrite: 62.5, cacheRead: 5 } },
+  },
 ] as const;
 
 export type ClaudeModelId = (typeof CLAUDE_MODELS)[number]["id"];
@@ -49,9 +59,10 @@ export function modelHint(id: string): string | null {
   return `${speed} · ${priceRatioText(m.price.output / base.price.output)} price`;
 }
 
-/** 2 -> "2×", 0.5 -> "½", 1.5 -> "1.5×". */
+/** 2 -> "2×", 0.5 -> "½", 1.5 -> "1.5×", 0.05 -> "1/20" (a small fraction as one over a whole number). */
 function priceRatioText(ratio: number): string {
   if (ratio === 0.5) return "½";
+  if (ratio < 0.5) return `1/${Math.round(1 / ratio)}`;
   return `${Math.round(ratio * 10) / 10}×`;
 }
 

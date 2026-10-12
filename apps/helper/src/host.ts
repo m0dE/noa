@@ -26,7 +26,7 @@ import {
   type RpcMessage,
 } from "@noa/shared";
 import { createJev, createToolExecutor, withoutCreditPause, type JevLike } from "@noa/core";
-import { HELPER_VERSION, loadConfig } from "./config.js";
+import { HELPER_CODE, HELPER_VERSION, helperInstall, loadConfig } from "./config.js";
 import { LiveLog, redirectConsole, summarize } from "./logger.js";
 import { encodeNativeMessage, FrameTooLargeError, MAX_NATIVE_OUT, NativeDecoder } from "./native-framing.js";
 import { pipePathFor, startPipeServer, type PipeServer } from "./pipe-server.js";
@@ -53,7 +53,7 @@ async function main(): Promise<void> {
   redirectConsole(live);
   const logLine = (line: string) => live.write(`helper ${line}`);
   const scripted = config.brain === "scripted";
-  logLine(`start v${HELPER_VERSION} pid=${process.pid} brain=${config.brain} jev=${config.typesafeApiKey ? "on" : "off"}`);
+  logLine(`start v${HELPER_VERSION} code=${HELPER_CODE} pid=${process.pid} brain=${config.brain} jev=${config.typesafeApiKey ? "on" : "off"}`);
   const stripped = apiBillingVarsIn();
   if (stripped.length) logLine(`not passing ${stripped.join(", ")} to Claude Code: it runs on your Claude Code login, never an API key`);
 
@@ -162,6 +162,8 @@ async function main(): Promise<void> {
     const st = await selfTest.get(rerun === true);
     return {
       version: HELPER_VERSION,
+      code: HELPER_CODE,
+      install: helperInstall(config.baseDir),
       jevAvailable: envJev !== null,
       brain: config.brain,
       claudePath,

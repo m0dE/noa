@@ -156,10 +156,12 @@ describe("what each brain reveals", () => {
     expect(view({ draft: { brain: "claude-api" }, settings: { anthropicApiKey: "sk" } }).apiKeyMissing).toBe(false);
     expect(view({ draft: { brain: "auto" } }).apiKeyMissing).toBe(false);
   });
-  it("helper status only for local Claude Code", () => {
-    expect(view({ draft: { brain: "claude-code" } }).showHelper).toBe(true);
-    expect(view({ draft: { brain: "auto" } }).showHelper).toBe(false);
-    expect(view({ draft: { brain: "claude-api" } }).showHelper).toBe(false);
+  it("helper status under local Claude Code, and under Auto while nothing runs without it", () => {
+    expect(view({ draft: { brain: "claude-code" } }).helperUnder).toBe("claude-code");
+    expect(view({ draft: { brain: "auto" } }).helperUnder).toBe("auto");
+    expect(view({ draft: { brain: "auto" }, account: PLUS }).helperUnder).toBeNull();
+    expect(view({ draft: { brain: "auto" }, helper: HELPER }).helperUnder).toBeNull();
+    expect(view({ draft: { brain: "claude-api" } }).helperUnder).toBeNull();
   });
 });
 
@@ -177,7 +179,7 @@ describe("Auto says what it would pick now", () => {
   });
   it("nothing set up", () => {
     expect(view({ helperError: "not found" }).autoPick).toEqual({
-      text: "Nothing set up yet. Signed in to Claude Code? Also install the helper: pick Local Claude Code.",
+      text: "Nothing set up yet. To use the Claude Code on this computer, install the helper below.",
       tone: "bad",
     });
   });

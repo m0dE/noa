@@ -154,7 +154,8 @@ export interface SettingsView {
   showApiKey: boolean;
   /** Claude API selected without a key. */
   apiKeyMissing: boolean;
-  showHelper: boolean;
+  /** Where the helper's status and install steps show: under Local Claude Code, or under Auto while nothing runs without it. */
+  helperUnder: "auto" | "claude-code" | null;
   showModel: boolean;
   model: ModelChoice;
   /** Under Reasoning: what the chosen level does. */
@@ -233,7 +234,9 @@ export function settingsView(input: ViewInput): SettingsView {
   const autoPick = auto.effective
     ? { text: `Right now this picks ${auto.effective === "claude-code" ? "Local Claude Code" : brainLabel(auto.effective)}.`, tone: "ok" as Tone }
     : {
-        text: brain.helper ? "Nothing set up yet." : "Nothing set up yet. Signed in to Claude Code? Also install the helper: pick Local Claude Code.",
+        text: brain.helper
+          ? "Nothing set up yet."
+          : "Nothing set up yet. To use the Claude Code on this computer, install the helper below.",
         tone: "bad" as Tone,
       };
 
@@ -288,7 +291,7 @@ export function settingsView(input: ViewInput): SettingsView {
     brainProblem,
     showApiKey: draft.brain === "claude-api",
     apiKeyMissing: draft.brain === "claude-api" && !settings.anthropicApiKey,
-    showHelper: draft.brain === "claude-code",
+    helperUnder: draft.brain === "claude-code" ? "claude-code" : draft.brain === "auto" && !auto.effective && !brain.helper ? "auto" : null,
     // Every brain runs the chosen model (the hosted AI only its own list).
     showModel: true,
     model: modelChoice(draft),

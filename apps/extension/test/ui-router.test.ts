@@ -45,6 +45,9 @@ function setup() {
       helper.lastError = null;
       return INFO;
     }),
+    disconnect: vi.fn((_reason?: string) => {
+      helper.info = null;
+    }),
     call: vi.fn(async (_method: string, _p?: unknown, _o?: unknown): Promise<any> => ({ text: "log lines" })),
   };
   const localStore = new LocalStore({ db });

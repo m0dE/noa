@@ -141,16 +141,16 @@
                     <ul id="helper-details" class="helper-details"></ul>
                     <p id="helper-msg" class="msg" role="status"></p>
                     <ol id="helper-install" class="steps" hidden>
-                      <li>Install <a href="https://claude.com/claude-code" target="_blank" rel="noopener">Claude Code</a> and sign in to it once.</li>
+                      <li id="helper-step-claude">Install <a href="https://claude.com/claude-code" target="_blank" rel="noopener">Claude Code</a> and sign in to it once.</li>
                       <li id="helper-step-terminal"><span id="helper-open-terminal">Open Terminal: press <b>⌘ Space</b>, type <b>Terminal</b>, press <b>Return</b>.</span></li>
-                      <li id="helper-step-command">Click <b>Copy</b>, paste it into Terminal (<b id="helper-paste-key">⌘ V</b>) and press <b>Return</b>. It takes about a minute and ends with “Done”.
+                      <li id="helper-step-command">Click <b>Copy</b>, paste it into <span id="helper-app-name">Terminal</span> (<b id="helper-paste-key">⌘ V</b>) and press <b id="helper-enter-key">Return</b>. It takes about a minute and ends with “Done”.
                         <div class="cmd-row">
                           <code id="helper-command" class="cmd"></code>
                           <button id="helper-copy" type="button" class="small primary">Copy</button>
                         </div>
                       </li>
                       <li id="helper-step-repo" hidden><span id="helper-repo-why"></span> From a copy of the Noa repository, run <code>pnpm install</code>, <code>pnpm build</code>, then <code>node apps/helper/dist/install.js</code>.</li>
-                      <li>Come back to this page. It connects by itself; if not, click <b>Connect</b>.</li>
+                      <li>Come back to this page. It connects by itself; if not, click <b id="helper-connect-name">Connect</b>.</li>
                     </ol>
                   </div>
                 </div></div>

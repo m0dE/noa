@@ -3,6 +3,7 @@ import { build } from "esbuild";
 import { cpSync, existsSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { helperCodeId } from "../helper/code-id.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 // Output to the repo root so Chrome's "Load unpacked" points at <repo>/dist.
@@ -48,7 +49,8 @@ const common = {
   // function that is serialized with Function.prototype.toString.
   keepNames: false,
   logLevel: "info",
-  define: { __NOA_GOOGLE_CLIENT_ID__: JSON.stringify(config.googleClientId) },
+  // __NOA_HELPER_CODE__: the helper code id this extension was built with; a helper that reports another is out of date.
+  define: { __NOA_GOOGLE_CLIENT_ID__: JSON.stringify(config.googleClientId), __NOA_HELPER_CODE__: JSON.stringify(await helperCodeId()) },
 };
 await build({
   ...common,

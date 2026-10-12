@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS, redactSettings, type ExtensionSettings } from "@noa/shared";
-import { adjustedFields, buildSettingsPatch, HELPER_WHY, helperInstallCommand, helperStatus } from "../../src/options/settings-patch.js";
+import { adjustedFields, buildSettingsPatch, HELPER_WHY, helperInstallCommand, helperInstallCommandWindows, helperNeedsInstall, helperOutdated, helperStatus } from "../../src/options/settings-patch.js";
 
 const saved: ExtensionSettings = redactSettings({ ...DEFAULT_SETTINGS, anthropicApiKey: "sk-real" });
 
@@ -63,3 +63,46 @@ describe("helperInstallCommand", () => {
     );
   });
 });
+
+// An extension paired with an older helper keeps the old behaviour of clicks and tools; the helper's version string
+// never changed, so nothing showed it was out of date.
+describe("helperOutdated: a helper built from other code than this extension", () => {
+  const h = { version: "0.2.0", jevAvailable: true, claudePath: "C:\\claude.exe", logDir: "L" };
+  it("is out of date with another code id, or none (built before code ids); says how to update it for its install", () => {
+    expect(helperOutdated({ ...h, code: "aaa", install: "checkout" }, "aaa")).toBeNull();
+    expect(helperOutdated({ ...h, code: "aaa", install: "checkout" }, "bbb")).toBe("Helper out of date: it is an older version than this extension, so recent fixes are missing. In your Noa checkout, pull and run pnpm build, then click Re-check.");
+    expect(helperOutdated({ ...h, code: "aaa", install: "noa-folder" }, "bbb")).toMatch(/run the install command below again, then click Re-check\.$/);
+    expect(helperOutdated({ ...h, code: "aaa", install: "app" }, "bbb")).toMatch(/Update Noa Browser\.$/);
+    expect(helperOutdated(h, "bbb")).toBe(
+      "Helper out of date: it is an older version than this extension, so recent fixes are missing. To update it, run the install command below again (or, in a copy of the Noa repository, pull and run pnpm build), then click Re-check.",
+    );
+  });
+  it("never for a build without ids (tests, the harness), a helper run from source, or the scripted brain", () => {
+    expect(helperOutdated(h, "dev")).toBeNull();
+    expect(helperOutdated({ ...h, code: "dev" }, "bbb")).toBeNull();
+    expect(helperOutdated({ ...h, brain: "scripted" }, "bbb")).toBeNull();
+  });
+  it("the settings page warns, first thing under the headline", () => {
+    const s = helperStatus({ ...h, code: "aaa", install: "checkout", selfTest: { ok: true, ms: 900, at: "x" } }, undefined, "bbb");
+    expect(s.tone).toBe("warn");
+    expect(s.headline).toBe("Helper connected · v0.2.0 · out of date");
+    expect(s.details[0]).toMatch(/^Helper out of date/);
+    expect(helperStatus({ ...h, code: "bbb", selfTest: { ok: true, ms: 900, at: "x" } }, undefined, "bbb").tone).toBe("ok");
+  });
+});
+
+describe("installing the helper on Windows", () => {
+  // Windows had no installer: first-time users were told to build the helper from the repository.
+  it("is one PowerShell command, with the extension's id", () => {
+    expect(helperInstallCommandWindows("abcdefghijklmnopabcdefghijklmnop")).toBe('$env:NOA_EXTENSION_ID="abcdefghijklmnopabcdefghijklmnop"; irm https://noa.bot/helper/install.ps1 | iex');
+  });
+  it("the install steps show again for an out-of-date helper the command installed (not one from a checkout or an app)", () => {
+    const h = { version: "0.2.0", jevAvailable: true, claudePath: "C", logDir: "L" };
+    expect(helperNeedsInstall({ ...h, code: "aaa", install: "noa-folder" }, "bbb")).toBe(true);
+    expect(helperNeedsInstall(h, "bbb")).toBe(true);
+    expect(helperNeedsInstall({ ...h, code: "aaa", install: "checkout" }, "bbb")).toBe(false);
+    expect(helperNeedsInstall({ ...h, code: "aaa", install: "app" }, "bbb")).toBe(false);
+    expect(helperNeedsInstall({ ...h, code: "bbb", install: "noa-folder" }, "bbb")).toBe(false);
+  });
+});
+

@@ -5,7 +5,7 @@
  * What shows when comes from settingsView() (settings-view.ts).
  */
 import { OPEN_CHAT_COMMAND, openShortcutSettings, readShortcut, VOICE_COMMAND, type ShortcutCommand } from "../shortcut.js";
-import { errorMessage, HELPER_INSTALL_URL, LONGEST_RUN_HINT, type BrainMode, type ExtensionSettings } from "@noa/shared";
+import { errorMessage, HELPER_INSTALL_PS1_URL, HELPER_INSTALL_URL, LONGEST_RUN_HINT, type BrainMode, type ExtensionSettings } from "@noa/shared";
 import { isStale, OPTIONS_PORT_NAME, uiRequest, type UiState } from "../ui-protocol.js";
 import { connectBackground } from "../sidepanel/port.js";
 import { createAccountMenu } from "../ui/account-menu.js";
@@ -18,7 +18,7 @@ import { SaveQueue } from "./autosave.js";
 import { initSecretFields } from "./secret-field.js";
 import { initVaultSection } from "./vault-section.js";
 import { initVoiceSection } from "./voice-section.js";
-import { adjustedFields, buildSettingsPatch, helperInstallCommand, helperStatus } from "./settings-patch.js";
+import { adjustedFields, buildSettingsPatch, helperInstallCommand, helperInstallCommandWindows, helperNeedsInstall, helperStatus } from "./settings-patch.js";
 import {
   BOOL_FIELDS,
   CUSTOM_MODEL,
@@ -230,6 +230,10 @@ function render(): void {
   find(pick, ".t").textContent = v.autoPick.text;
   setTone(pick, v.autoPick.tone);
   setTone(find(pick, ".dot"), v.autoPick.tone);
+  // One helper block: under Local Claude Code, or under Auto while nothing runs without the helper.
+  const helperBox = find(document, ".helper");
+  const helperHome = find(document, `.opt[data-brain="${v.helperUnder ?? "claude-code"}"] .reveal-inner`);
+  if (helperBox.parentElement !== helperHome) helperHome.append(helperBox);
 
   $("hosted-out").hidden = !v.showHostedSignIn;
   $("hosted-in").hidden = !v.hosted;
@@ -274,8 +278,12 @@ function renderState(s: UiState): void {
   $("helper-dot").dataset.tone = hs.tone;
   $("helper-headline").textContent = hs.headline;
   $("helper-details").replaceChildren(...hs.details.map((d) => h("li", null, d)));
-  $("helper-install").hidden = !!b.helper;
+  // Not connected, or an installed helper that is out of date: the install command (again) updates it.
+  $("helper-install").hidden = !!b.helper && !helperNeedsInstall(b.helper);
   $("helper-connect").textContent = b.helper ? "Re-check" : "Connect";
+  // Updating a connected helper: Claude Code is there already, and the button says Re-check.
+  $("helper-step-claude").hidden = !!b.helper;
+  $("helper-connect-name").textContent = $("helper-connect").textContent;
   render();
 }
 
@@ -360,41 +368,44 @@ function connectHelper(): void {
 }
 connectBtn.addEventListener("click", connectHelper);
 
-// Installing the helper: one Terminal command on macOS and Linux (it downloads the helper), the repo's
-// installer on Windows (the command is a shell script) or while the installer is not online (a 404 in
-// Terminal leaves people stuck, so the command shows only once the site answers for it).
+// Installing the helper: one command that downloads it, in Terminal on macOS and Linux (install.sh) and in
+// PowerShell on Windows (install.ps1); the repo's installer only while the site does not serve the installer
+// yet (a 404 in a terminal leaves people stuck, so the command shows only once the site answers for it).
 const onWindows = /Windows/.test(navigator.userAgent);
 const onMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
-if (!onMac) {
-  $("helper-open-terminal").textContent = "Open a terminal.";
-  $("helper-paste-key").textContent = "Ctrl+Shift+V";
-}
-$("helper-command").textContent = helperInstallCommand(chrome.runtime.id);
+const SHELL = onWindows
+  ? { name: "PowerShell", open: "Open PowerShell: press the Windows key, type PowerShell, press Enter.", paste: "Ctrl+V", enter: "Enter" }
+  : onMac
+    ? { name: "Terminal", open: "Open Terminal: press ⌘ Space, type Terminal, press Return.", paste: "⌘ V", enter: "Return" }
+    : { name: "the terminal", open: "Open a terminal.", paste: "Ctrl+Shift+V", enter: "Enter" };
+$("helper-open-terminal").textContent = SHELL.open;
+$("helper-app-name").textContent = SHELL.name;
+$("helper-paste-key").textContent = SHELL.paste;
+$("helper-enter-key").textContent = SHELL.enter;
+$("helper-command").textContent = (onWindows ? helperInstallCommandWindows : helperInstallCommand)(chrome.runtime.id);
 function showInstallSteps(installerOnline: boolean): void {
-  const command = installerOnline && !onWindows;
-  $("helper-step-terminal").hidden = !command;
-  $("helper-step-command").hidden = !command;
-  $("helper-step-repo").hidden = command;
-  $("helper-repo-why").textContent = onWindows ? "" : "The one-step installer is not online yet.";
+  $("helper-step-terminal").hidden = !installerOnline;
+  $("helper-step-command").hidden = !installerOnline;
+  $("helper-step-repo").hidden = installerOnline;
+  $("helper-repo-why").textContent = "The one-step installer is not online yet.";
 }
 showInstallSteps(false);
-if (!onWindows) {
-  void fetch(HELPER_INSTALL_URL, { method: "HEAD", cache: "no-store" }).then(
-    (res) => showInstallSteps(res.ok),
-    () => showInstallSteps(false),
-  );
-}
+void fetch(onWindows ? HELPER_INSTALL_PS1_URL : HELPER_INSTALL_URL, { method: "HEAD", cache: "no-store" }).then(
+  (res) => showInstallSteps(res.ok),
+  () => showInstallSteps(false),
+);
 $("helper-copy").addEventListener("click", () =>
   void navigator.clipboard.writeText($("helper-command").textContent ?? "").then(
     () => {
-      flash(helperMsg, "Copied. Now paste it into Terminal and press Return.", "ok", { keep: true });
+      flash(helperMsg, `Copied. Now paste it into ${SHELL.name} and press ${SHELL.enter}.`, "ok", { keep: true });
     },
     () => flash(helperMsg, "Could not copy; select the command and copy it by hand.", "bad"),
   ),
 );
 window.addEventListener("focus", () => {
-  // Back from Terminal: the install steps are showing, so try the helper again.
-  if (!$("helper-install").hidden && state && !state.brain.helper && !connectBtn.disabled) connectHelper();
+  // Back from the terminal: the install steps are showing, so try the helper again (an out-of-date one restarts).
+  const helper = state?.brain.helper ?? null;
+  if (!$("helper-install").hidden && state && (!helper || helperNeedsInstall(helper)) && !connectBtn.disabled) connectHelper();
 });
 
 async function main(): Promise<void> {

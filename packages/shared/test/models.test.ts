@@ -8,6 +8,7 @@ describe("model hints", () => {
     expect(modelHint("claude-opus-5-5")).toBe("Thinks first, slower · 2× price");
     expect(modelHint("claude-fable-5-1")).toBe("Thinks first, slower · 5× price");
     expect(modelHint("claude-haiku-4-5")).toBe("Faster · ½ price");
+    expect(modelHint("claude-haiku-5-5")).toBe("Faster · 1/20 price");
     expect(modelHint("claude-custom-9")).toBeNull();
   });
 

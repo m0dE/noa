@@ -74,6 +74,7 @@ export function statusLine(state: UiState, list: ListFacts = { lockedWaiting: 0 
       action: "retry-pause",
     };
   }
+  if (state.brain.helperOutdated) return { tone: "warn", text: "Helper out of date: recent fixes are missing", title: state.brain.helperOutdated, action: FIXES.updateHelper };
   return { tone: "ok", text: brainLabel(state.brain.effective, state.brain.jevActive) };
 }
 

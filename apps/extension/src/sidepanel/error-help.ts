@@ -51,6 +51,7 @@ export interface ErrorHelp {
 export const FIXES = {
   ownClaude: { kind: "own-claude", label: "Use your own Claude", title: "Set up Local Claude Code or a Claude API key in Settings" },
   claudeCode: { kind: "claude-code", label: "Set up Claude Code", title: "Install or reconnect the helper for Local Claude Code in Settings" },
+  updateHelper: { kind: "claude-code", label: "How to update", title: "How to update the helper, in Settings" },
   apiKey: { kind: "api-key", label: "Add API key", title: "Enter your Claude API key in Settings" },
   setUpAi: { kind: "set-up-ai", label: "Set up AI", title: "Choose how Noa thinks: your own Claude or Noa AI" },
   useHosted: { kind: "use-hosted", label: `Use ${HOSTED_LABEL}`, title: `Switch to ${HOSTED_LABEL}, paid from your usage credit` },

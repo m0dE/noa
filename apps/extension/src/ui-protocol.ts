@@ -94,6 +94,8 @@ export interface BrainStatus {
   jevActive: boolean;
   /** Where the effective brain's Jev comes from (jevSourceFor), Jev on or off; absent: it has none. */
   jevSource?: JevSource;
+  /** Local Claude Code runs on a helper built from other code than this extension: why, and how to update it. */
+  helperOutdated?: string;
 }
 
 /** A Jev key in Settings, the helper's own key, or Noa's cloud Jev (billed to usage credit). */
@@ -467,7 +469,8 @@ export interface TraceEnv {
   userAgent: string;
   os?: string;
   arch?: string;
-  helper: { version: string; brain: string; jev: boolean } | null;
+  /** code: the code id it reports (absent: built before code ids); outdated: not the code this extension expects. */
+  helper: { version: string; brain: string; jev: boolean; code?: string; outdated?: boolean } | null;
 }
 
 /** trace.get: a conversation in full (events as stored), with its timing trace. */

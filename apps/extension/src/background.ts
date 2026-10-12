@@ -23,7 +23,7 @@ import { ControlIndicator } from "./control-indicator.js";
 import { GOOGLE_CLIENT_ID } from "./build-config.js";
 import { ApiBrain } from "./engine/api-brain.js";
 import { hostedBackend } from "./engine/hosted-brain.js";
-import { cloudJevUsable, needsHelper, resolveBrain } from "./engine/brain-resolver.js";
+import { cloudJevUsable, needsHelper, reportedHelper, resolveBrain } from "./engine/brain-resolver.js";
 import { registerBrowserHandlers } from "./engine/browser-caller.js";
 import { ImageGenerator } from "./engine/image-generator.js";
 import type { Brain } from "./engine/brains.js";
@@ -615,7 +615,7 @@ const router = new UiRouter({
       extensionVersion: chrome.runtime.getManifest().version,
       userAgent: navigator.userAgent,
       ...(platform ? { os: platform.os, arch: platform.arch } : {}),
-      helper: h ? { version: h.version, brain: h.brain ?? "claude", jev: h.jevAvailable } : null,
+      helper: h ? reportedHelper(h) : null,
     };
   },
   runningTabs: async () => {

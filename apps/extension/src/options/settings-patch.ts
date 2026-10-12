@@ -1,5 +1,6 @@
 /** Pure helpers for the options page: building settings.save patches and status text. */
-import { HELPER_INSTALL_URL, SECRET_SETTING_KEYS, type ExtensionSettings, type HelperInfo } from "@noa/shared";
+import { HELPER_INSTALL_PS1_URL, HELPER_INSTALL_URL, SECRET_SETTING_KEYS, type ExtensionSettings, type HelperInfo } from "@noa/shared";
+import { HELPER_CODE } from "../build-config.js";
 import { HELPER_NOT_INSTALLED } from "../helper-link.js";
 
 /** Why the helper is needed at all: people sign in to Claude Code and expect that to be enough. */
@@ -11,6 +12,11 @@ export const HELPER_WHY = "Signing in to Claude Code is not enough: Chrome reach
  */
 export function helperInstallCommand(extensionId: string): string {
   return `curl -fsSL ${HELPER_INSTALL_URL} | sh -s -- --extension-id ${extensionId}`;
+}
+
+/** The PowerShell command that does the same on Windows (install.ps1 takes the id from NOA_EXTENSION_ID). */
+export function helperInstallCommandWindows(extensionId: string): string {
+  return `$env:NOA_EXTENSION_ID="${extensionId}"; irm ${HELPER_INSTALL_PS1_URL} | iex`;
 }
 
 /** A key field: masked, saved one by one with its own buttons (secret-field.ts). */
@@ -46,7 +52,31 @@ export interface HelperStatus {
   details: string[];
 }
 
-export function helperStatus(helper: HelperInfo | null, helperError?: string): HelperStatus {
+/**
+ * Why the connected helper is out of date, with how to update it for the way it is installed; null when it runs the
+ * code this extension was built for (`expected`, build-config.ts). A helper from before code ids reports none: it is
+ * out of date too. Fixes in clicks, Jev and the tools run in the helper with Local Claude Code, so an old one
+ * keeps the old behaviour whatever the extension's version.
+ */
+export function helperOutdated(helper: HelperInfo, expected: string): string | null {
+  if (helper.brain === "scripted" || expected === "dev" || helper.code === "dev" || helper.code === expected) return null;
+  const how =
+    helper.install === "checkout"
+      ? "In your Noa checkout, pull and run pnpm build, then click Re-check."
+      : helper.install === "noa-folder"
+        ? "To update it, run the install command below again, then click Re-check."
+        : helper.install === "app"
+          ? "Update Noa Browser."
+          : "To update it, run the install command below again (or, in a copy of the Noa repository, pull and run pnpm build), then click Re-check.";
+  return `Helper out of date: it is an older version than this extension, so recent fixes are missing. ${how}`;
+}
+
+/** An out-of-date helper that the install command updates (installed by it, or from before install kinds were reported). */
+export function helperNeedsInstall(helper: HelperInfo, expected: string = HELPER_CODE): boolean {
+  return helperOutdated(helper, expected) !== null && helper.install !== "checkout" && helper.install !== "app";
+}
+
+export function helperStatus(helper: HelperInfo | null, helperError?: string, expectedCode: string = HELPER_CODE): HelperStatus {
   if (!helper) {
     return {
       tone: helperError ? "bad" : "muted",
@@ -61,6 +91,8 @@ export function helperStatus(helper: HelperInfo | null, helperError?: string): H
   const st = helper.selfTest;
   if (st) details.push(st.ok ? `Self-test passed (${(st.ms / 1000).toFixed(1)} s)` : `Self-test failed: ${st.error ?? "unknown error"}`);
   else if (helper.claudePath) details.push("Self-test not run yet");
-  const tone = (!scripted && !helper.claudePath) || (st && !st.ok) ? "warn" : "ok";
-  return { tone, headline: `Helper connected · v${helper.version}`, details };
+  const outdated = helperOutdated(helper, expectedCode);
+  if (outdated) details.unshift(outdated);
+  const tone = (!scripted && !helper.claudePath) || (st && !st.ok) || outdated ? "warn" : "ok";
+  return { tone, headline: `Helper connected · v${helper.version}${outdated ? " · out of date" : ""}`, details };
 }
