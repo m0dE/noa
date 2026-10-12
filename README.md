@@ -4,9 +4,18 @@
 
 <h1 align="center">Noa</h1>
 
-Claude Code for your browser. Give Noa a todo list and it works through each
-task in your own logged-in Chrome (navigating, clicking, typing, uploading),
-then reports back. Everything runs on your machine.
+A Chrome extension for browser automation, powered by Claude Code and Jev.
+Give Noa a todo list and it works through each task in your own logged-in
+Chrome (navigating, clicking, typing, uploading), then reports back.
+Everything runs on your machine.
+
+Built for speed: Claude Code plans each task, and Jev, a fast model for
+picking what to click and type, carries out the single steps, so a run
+doesn't wait on a full Claude turn for every click.
+
+Use the subscriptions you already have: your Claude plan through Claude
+Code, or your own Claude API key, and your own Jev key. Without a Jev key,
+Noa uses its hosted Jev.
 
 ## Setup
 

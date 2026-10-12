@@ -1,5 +1,6 @@
 {
   "name": "noa",
+  "description": "Chrome extension for browser automation, powered by Claude Code and Jev",
   "private": true,
   "type": "module",
   "license": "MIT",
