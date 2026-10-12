@@ -315,6 +315,11 @@ export async function runAct(steps: Step[], ctx: ActContext): Promise<ToolResult
       const spoken = n === 1 ? ctx.userSpeaks?.() : undefined;
       const snap = spoken ? await untilUserSpeaks<PageSnapshot | null>(readPage(), spoken, () => null) : await readPage();
       if (!snap) return { text: ACT_STOPPED_LOADING(steps.length) };
+      // Nothing on the page to pick from (it is still loading): Jev is not asked, and its "unsure" would hide why.
+      if (!snap.elements.length) {
+        const rest = steps.length > n ? ` Steps ${n + 1}-${steps.length} were not run.` : "";
+        return { text: `${[...lines, `step ${n}: "${step.goal}": the page has no elements yet (still loading or empty), so nothing was picked.${rest} Wait for it (wait_for), then send the steps again.`].join("\n")}\n\n${formatSnapshot(snap, { words: true })}` };
+      }
       const started = Date.now();
       let d: JevDecision;
       try {

@@ -89,8 +89,8 @@ describe("TaskRunner with ScriptedBrain", () => {
     // Jev (the fake always refuses) left both picks to the brain, which chose from act's candidates; the count comes before task_end.
     expect(events.at(-2)!.event).toEqual({
       type: "status",
-      text: "Jev chose 0 of 2 element picks (clicks and typing); Claude chose 2",
-      picks: { jev: 0, claude: 2 },
+      text: "Jev chose 0 of 2 element picks (clicks and typing); Claude chose 2; Claude opened 2 pages by address",
+      picks: { jev: 0, claude: 2, byAddress: 2 },
     });
   });
 

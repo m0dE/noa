@@ -69,6 +69,8 @@ export function renderEvent(v: EventView, onContinue?: () => void, scheduled?: S
         h("span.chip", { "data-tone": v.executed ? "accent" : "muted" }, v.label),
         h("span.ms", null, `${v.ms} ms`),
       );
+    case "jev-turn":
+      return renderJevTurn(v);
     case "user": {
       if (v.screen) return renderScreenHelp(v.text);
       const files = renderSentFiles(v.attachments);
@@ -256,6 +258,24 @@ export function renderDraft(text: string): HTMLElement {
     null,
     h("div.ev-draft-head", null, h("span.ev-draft-label", null, "Draft · not sent"), copy),
     h("div.ev-draft-text", null, text),
+  );
+}
+
+/** The turn's Jev line: a badge with who picked the clicks and typing, then why Claude picked each step Jev did not. */
+function renderJevTurn(v: Extract<EventView, { kind: "jev-turn" }>): HTMLElement {
+  const total = v.jev + v.claude;
+  const opened = v.byAddress ? `Claude opened ${v.byAddress} page${v.byAddress === 1 ? "" : "s"} by address` : "";
+  const badge = total
+    ? h("span.chip", { "data-tone": v.jev ? "accent" : "muted" }, `Jev ${v.jev}/${total}`)
+    : h("span.chip", { "data-tone": "muted" }, "Jev not used");
+  const said = total
+    ? `Jev picked ${v.jev} of ${total} click${total === 1 ? "" : "s"} and typing step${total === 1 ? "" : "s"}${v.claude ? `; Claude picked ${v.claude}` : ""}${opened ? `. ${opened}` : ""}`
+    : `No clicks or typing this turn${opened ? `: ${opened}` : ""}`;
+  return h(
+    "div.ev-jev-turn",
+    { title: "Jev: a fast model that picks the element for each click and typing step" },
+    h("div.ev-jev-turn-head", null, badge, h("span.ev-jev-turn-text", null, said)),
+    ...v.fallbacks.map((f) => h("div.ev-jev-turn-why", null, h("span.goal", null, `“${f.goal}”`), ` · ${f.why}`)),
   );
 }
 

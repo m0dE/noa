@@ -492,6 +492,11 @@ button[aria-disabled="true"]:hover { border-color: var(--border); }
 .log .ev-jev .chip { font-family: var(--mono); font-weight: 400; font-size: 10.5px; }
 .log .ev-jev .chip[data-tone="accent"] { font-weight: 500; }
 .log .ev-jev .ms { color: var(--faint); }
+.log .ev-jev-turn { display: flex; flex-direction: column; gap: 3px; font-size: var(--text-xs); color: var(--muted); }
+.log .ev-jev-turn-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.log .ev-jev-turn .chip { font-family: var(--mono); font-weight: 500; font-size: 10.5px; }
+.log .ev-jev-turn-why { padding-left: 12px; overflow-wrap: anywhere; }
+.log .ev-jev-turn-why .goal { color: var(--text); }
 
 /* End of a turn: the outcome and a one-line summary, quietly (a long summary shows as a message above it). */
 .log .ev-end { display: flex; flex-direction: column; gap: 6px; }

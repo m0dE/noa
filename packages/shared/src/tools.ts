@@ -240,7 +240,7 @@ export const TOOL_NAMES = Object.keys(ToolArgs) as ToolName[];
 export type ToolArgsOf<N extends ToolName> = z.infer<(typeof ToolArgs)[N]>;
 
 export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
-  navigate: "Open a URL in the current tab and wait for it to load.",
+  navigate: "Open a URL in the current tab and wait for it to load. Returns the page as read_page shows it.",
   read_page:
     "Get the page URL, title, visible text and an indexed list of interactive elements. Give `tabs` to read several tabs in one call (each under its own header) without switching to them.",
   screenshot: "Capture the visible part of the current tab as an image.",

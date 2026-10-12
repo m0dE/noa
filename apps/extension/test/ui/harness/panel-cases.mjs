@@ -628,8 +628,8 @@ export const PANEL_CASES = [
       const view = await p.evaluate(() => ({
         bubbles: [...document.querySelectorAll("#chat-log .ev-user")].map((b) => b.textContent),
         ends: document.querySelectorAll("#chat-log .ev-end").length,
-        // Who picked the turn's elements (Jev or Claude) is for the Raw view: nowhere in the chat.
-        picks: [...document.querySelectorAll("#chat-log *")].filter((e) => !e.children.length && /element pick/.test(e.textContent)).length,
+        // Each turn's Jev line, outside the folded steps: who picked, and why Claude picked what Jev did not.
+        jev: [...document.querySelectorAll("#chat-log > .ev-jev-turn")].map((e) => [...e.children].map((c) => c.textContent).join(" | ")),
         heads: document.querySelectorAll("#chat-log .ev-head").length,
         // The second bubble opens the second turn: right after the first turn's end card.
         order: [...document.querySelectorAll("#chat-log > *")].map((e) => e.className).join(" ").includes("ev-end ev-user"),
@@ -637,6 +637,11 @@ export const PANEL_CASES = [
       }));
       const conv = scenario("conversation").sessions[0];
       if (JSON.stringify(view.bubbles) !== JSON.stringify([conv.title, "Now like the first reply to it"]) || view.ends !== 2 || !view.order) fail(`thread ${JSON.stringify(view)}`);
+      const jevLines = [
+        "Jev 2/2Jev picked 2 of 2 clicks and typing steps",
+        "Jev 0/1Jev picked 0 of 1 click and typing step; Claude picked 1. Claude opened 1 page by address | “click the Like button under the first reply” · Jev was unsure (0.62, below your threshold), so Claude picked",
+      ];
+      if (JSON.stringify(view.jev) !== JSON.stringify(jevLines)) fail(`Jev lines ${JSON.stringify(view.jev)}`);
       if (view.sub !== "Done · 1 min ago") fail(`subtitle "${view.sub}"`);
       const first = await firstMessage(p);
       if (!first?.first || first.text !== conv.title || first.origin !== null || first.role !== "button" || first.tabIndex !== 0 || first.header) fail(`first message ${JSON.stringify(first)}`);
@@ -646,7 +651,6 @@ export const PANEL_CASES = [
       if (!first.when?.endsWith(hm)) fail(`first message time "${first.when}", want ${hm}`);
       // The brain shows once: the chip under the prompt; the brain's own start line is not repeated.
       if (first.head !== "Claude Code · claude-sonnet-5 · Jev on" || view.heads !== 1 || first.startLines !== 0) fail(`brain shown more than once ${JSON.stringify({ first, heads: view.heads })}`);
-      if (view.picks !== 0) fail(`Jev's picks in the chat ${JSON.stringify(view)}`);
       // An ended chat: schedule its request, Raw, Rename, Delete (the agent has no tab now).
       await expectMenu(p, ["Schedule", "Raw", "Rename", "Delete"], "ended conversation");
       await expectComposer(CHAT, "not in conversation mode");

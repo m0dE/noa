@@ -155,12 +155,16 @@ export const isMessageRead = (e: AgentEvent): boolean => e.type === "trace" && e
 export interface ElementPicks {
   jev: number;
   claude: number;
+  /** Pages Claude opened by their address (navigate): no element to pick, so no Jev. */
+  byAddress?: number;
 }
 
-/** "Jev chose 9 of 11 element picks (clicks and typing)". */
+/** "Jev chose 9 of 11 element picks (clicks and typing)"; with none, that Jev was not used and why. */
 export function picksText(p: ElementPicks): string {
   const total = p.jev + p.claude;
-  return `Jev chose ${p.jev} of ${total} element pick${total === 1 ? "" : "s"} (clicks and typing)${p.claude ? `; Claude chose ${p.claude}` : ""}`;
+  const opened = p.byAddress ? `Claude opened ${p.byAddress} page${p.byAddress === 1 ? "" : "s"} by address` : "";
+  if (!total) return `Jev not used: no clicks or typing this turn${opened ? `; ${opened}` : ""}`;
+  return `Jev chose ${p.jev} of ${total} element pick${total === 1 ? "" : "s"} (clicks and typing)${p.claude ? `; Claude chose ${p.claude}` : ""}${opened ? `; ${opened}` : ""}`;
 }
 
 export type StampedAgentEvent = AgentEvent & { ts: string; sessionId: string };

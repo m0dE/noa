@@ -10,6 +10,7 @@ import {
   spokenEchoes,
   hiddenInChat,
   wordForWord,
+  jevFallback,
 } from "../../src/sidepanel/event-format.js";
 import { shortUrl, toolArgsSummary } from "../../src/text.js";
 
@@ -53,7 +54,7 @@ describe("describeEvent", () => {
     const v = describeEvent({ type: "jev", goal: "click Post", operation: "click", index: 7, confidence: 0.934, executed: true, ms: 182 });
     expect(v).toEqual({ kind: "jev", label: "Jev: click #7 · 0.93", ms: 182, executed: true, title: "Jev (a faster helper for simple clicks and typing): click Post" });
     const n = describeEvent({ type: "jev", goal: "g", operation: "type", index: null, confidence: 0.4, executed: false, ms: 90 });
-    expect(n).toMatchObject({ label: "Jev unsure (0.40) · Claude decides", executed: false });
+    expect(n).toMatchObject({ label: "Jev unsure (0.40) · Claude picks", executed: false });
     if (n.kind === "jev") expect(n.title).toContain("left to Claude");
   });
   it("task_end carries the agent's draft, whole", () => {
@@ -71,7 +72,8 @@ describe("describeEvent", () => {
     });
     expect(describeEvent({ type: "task_end", outcome: "failed", reason: "no" })).toMatchObject({ text: "no", chip: { tone: "bad" } });
   });
-  it("the chat leaves Jev's picks, their count and a brain's start line to the Raw view; other lines show", () => {
+  // Owner: "was JEV used? if so, show badge or something and say what happened hence using claude as fallback".
+  it("the chat shows Jev's picks and the turn's Jev line; only a brain's start line is left to the Raw view", () => {
     const events: AgentEvent[] = [
       { type: "status", text: "Claude Code started (claude-sonnet-5)" },
       { type: "jev", goal: "click Post", operation: "click", index: 7, confidence: 0.93, executed: true, ms: 182 },
@@ -79,8 +81,29 @@ describe("describeEvent", () => {
       { type: "status", text: "Post verified" },
       { type: "task_end", outcome: "done", summary: "Posted" },
     ];
-    expect(events.map((_, i) => hiddenInChat(events, i))).toEqual([true, true, true, false, false]);
+    expect(events.map((_, i) => hiddenInChat(events, i))).toEqual([true, false, false, false, false]);
     expect(describeEvent(events[4]!, {})).not.toHaveProperty("picks");
+  });
+
+  it("the turn's Jev line says who picked, and why Claude picked each step Jev did not (the owner's trace, 2026-10-12)", () => {
+    const unsure = { type: "jev", goal: "click the Analytics button in the top navigation tabs", operation: "click", index: 10, confidence: 0.58, executed: false, ms: 105 } as const;
+    const v = describeEvent({ type: "status", text: "Jev chose 0 of 1 element pick (clicks and typing); Claude chose 1", picks: { jev: 0, claude: 1, byAddress: 3 } }, { jevSteps: [unsure] });
+    expect(v).toEqual({
+      kind: "jev-turn",
+      jev: 0,
+      claude: 1,
+      byAddress: 3,
+      fallbacks: [{ goal: "click the Analytics button in the top navigation tabs", why: "Jev was unsure (0.58, below your threshold), so Claude picked" }],
+    });
+  });
+
+  it("why a step was not Jev's: unavailable, no match, a key press, not approved, failed", () => {
+    const base = { type: "jev", goal: "g", index: null, confidence: 0.9, executed: false, ms: 1 } as const;
+    expect(jevFallback({ ...base, operation: "error", confidence: 0 }).why).toBe("Jev was unavailable, so Claude picked");
+    expect(jevFallback({ ...base, operation: "blocked" }).why).toBe("Jev found no element that matches, so Claude picked");
+    expect(jevFallback({ ...base, operation: "press_key" }).why).toMatch(/key press/);
+    expect(jevFallback({ ...base, operation: "click", notRun: "not_approved" }).why).toBe("Jev picked it (0.90), but you did not approve it");
+    expect(jevFallback({ ...base, operation: "click", notRun: "failed" }).why).toBe("Jev picked it (0.90), but the action failed");
   });
 
   it("a run paused for an approval shows its card alone: its pause line and its end are left to the Raw view", () => {

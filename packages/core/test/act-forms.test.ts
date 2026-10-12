@@ -143,3 +143,20 @@ describe("a click the page never received", () => {
   });
 });
 
+
+describe("a page with nothing on it yet", () => {
+  // Live (2026-10-12): a slow site read with 0 elements; Jev was asked anyway and its "unsure (0.63)" hid the cause.
+  it("is not given to Jev: the step stops saying the page is still loading", async () => {
+    const empty: PageSnapshot = { url: "https://slow.test/", title: "Slow", text: "", elements: [], truncated: false };
+    const jev = fakeJev([{ operation: "click", index: null, confidence: 0.63 }]);
+    const events: unknown[] = [];
+    const r = await runAct([{ goal: "the Dropdown link" }, { goal: "choose Option 2", text: "Option 2" }], {
+      ...ctx(browser(), jev),
+      browser: (async (m: BrowserMethod) => (m === "browser.readPage" ? empty : { ok: true })) as never,
+      emit: (e: unknown) => events.push(e),
+    });
+    expect(jev.goals).toEqual([]);
+    expect(events).toEqual([]);
+    expect(r.text).toContain('step 1: "the Dropdown link": the page has no elements yet (still loading or empty), so nothing was picked. Steps 2-2 were not run.');
+  });
+});

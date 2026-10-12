@@ -8,6 +8,7 @@ import { agentError, buildFollowUpMessage, buildSystemPrompt, buildTaskPrompt, c
 import { buildJevQuestions, buildJevState, JEV_TOKEN_BUDGET, jevFromClient, type JevClientLike } from "../src/jev.js";
 import { mentionsHandle, MENU_WAIT_MS, switchXAccount } from "../src/x-account.js";
 import type { BrowserCaller } from "../src/types.js";
+import { picksEvent } from "../src/executor.js";
 import { parseSnapshotText } from "../src/page-format.js";
 import { FakeX } from "./fake-x.js";
 import { noSleep } from "./helpers.js";
@@ -676,5 +677,18 @@ describe("scheduling from the chat (schedule_task)", () => {
     expect(schema("update_scheduled_task").required).toEqual(["task_id"]);
     expect(schema("cancel_scheduled_task").required).toEqual(["task_id"]);
     expect(schema("list_scheduled_tasks").properties).toEqual({});
+  });
+});
+
+describe("the turn's Jev line (picksEvent)", () => {
+  it("says who picked; with no picks, that Jev was not used and that Claude opened pages by address; nothing when neither", () => {
+    const text = (p: Parameters<typeof picksEvent>[0]) => {
+      const e = picksEvent(p);
+      return e?.type === "status" ? e.text : null;
+    };
+    expect(text({ jev: 2, claude: 1 })).toBe("Jev chose 2 of 3 element picks (clicks and typing); Claude chose 1");
+    expect(text({ jev: 0, claude: 0, byAddress: 3 })).toBe("Jev not used: no clicks or typing this turn; Claude opened 3 pages by address");
+    expect(text({ jev: 0, claude: 1, byAddress: 1 })).toBe("Jev chose 0 of 1 element pick (clicks and typing); Claude chose 1; Claude opened 1 page by address");
+    expect(picksEvent({ jev: 0, claude: 0 })).toBeNull();
   });
 });

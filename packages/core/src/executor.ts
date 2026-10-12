@@ -79,9 +79,9 @@ function stillLoadingText(name: ToolName, args: unknown): string {
   return READ_STILL_LOADING;
 }
 
-/** The status line at the end of a turn with Jev on: who picked act's elements. Null when nothing was picked. */
+/** The status line at the end of a turn with Jev on: who picked act's elements. Null when the turn neither picked nor opened a page. */
 export function picksEvent(picks: ElementPicks): AgentEvent | null {
-  if (picks.jev + picks.claude === 0) return null;
+  if (picks.jev + picks.claude === 0 && !picks.byAddress) return null;
   return { type: "status", text: picksText(picks), picks };
 }
 
@@ -236,7 +236,13 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
     switch (name) {
       case "navigate": {
         const r = await browser("browser.navigate", { url: (a as ToolArgsOf<"navigate">).url });
-        return { text: `Navigated to ${r.url}\nTitle: ${r.title}` };
+        gate.picks.byAddress = (gate.picks.byAddress ?? 0) + 1;
+        // The page it opened, as read_page shows it: the agent goes on from it without one more model turn to read it.
+        const page = await browser("browser.readPage", {}).then(
+          (snap) => formatSnapshot(snap, { words: jevOn }),
+          () => null,
+        );
+        return { text: page ? `Navigated to ${r.url}\n\n${page}` : `Navigated to ${r.url}\nTitle: ${r.title}` };
       }
       case "read_page": {
         const { tabs } = a as ToolArgsOf<"read_page">;

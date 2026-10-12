@@ -6,7 +6,7 @@
  * (setBefore) and opens Raw (the conversation with its timings, raw-view.ts) in place of the log. Which conversation
  * that is comes from sidepanel.ts.
  */
-import { errorMessage, isMemoryUndone, type SessionInfo, type StampedAgentEvent } from "@noa/shared";
+import { errorMessage, isMemoryUndone, type AgentEvent, type SessionInfo, type StampedAgentEvent } from "@noa/shared";
 import { isContinuableOutcome } from "../continue.js";
 import { uiRequest } from "../ui-protocol.js";
 import { $, h } from "../ui/dom.js";
@@ -127,10 +127,23 @@ function eventNode(
               ? { approval: approvalEnding(events, e.request.id), decidable: !running && pausedRequest(events, e.request.id) !== null }
               : e.type === "memory"
                 ? { memoryUndone: isMemoryUndone(events, e.changeId) }
-                : {};
+                : e.type === "status" && e.picks
+                  ? { jevSteps: turnJevSteps(events, i) }
+                  : {};
   const view = describeEvent(e, turn);
   const el = renderEvent(view, canContinue ? () => on.onContinue?.(e.sessionId) : undefined, on.scheduled, on.approval, on.memory);
   return { el, view };
+}
+
+/** The jev events of the turn that event `i` is in: since its user_message (or the session's start). */
+function turnJevSteps(events: readonly StampedAgentEvent[], i: number): Extract<AgentEvent, { type: "jev" }>[] {
+  const out: Extract<AgentEvent, { type: "jev" }>[] = [];
+  for (let k = i - 1; k >= 0; k--) {
+    const e = events[k]!;
+    if (e.type === "user_message") break;
+    if (e.type === "jev") out.unshift(e);
+  }
+  return out;
 }
 
 export function initChat(opts: ChatOptions = {}): ChatView {

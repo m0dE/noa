@@ -16,6 +16,11 @@ export type EventView =
   | { kind: "result"; id: string; name: string; preview: string; full: string; isError: boolean; thumbnail?: string }
   | { kind: "jev"; label: string; ms: number; executed: boolean; title: string }
   /**
+   * The turn's Jev line (its picks status): who picked the clicks and typing, and why Claude picked each one Jev did
+   * not. Shown under the steps, never folded with them: whether Jev worked is what the user looks for.
+   */
+  | { kind: "jev-turn"; jev: number; claude: number; byAddress: number; fallbacks: JevFallback[] }
+  /**
    * screen: an empty message, "look at the page and do what is needed" (shown quieter, with an eye). voice: it was
    * spoken. heard: the user's words for a spoken request, word for word, when they read otherwise than the request
    * (Realtime: the text is what the narrator understood and passed on), shown folded under it.
@@ -67,7 +72,33 @@ export function turnError(events: readonly AgentEvent[], endIndex: number): stri
 }
 
 /** What a task_end's view needs from the rest of its turn (see turnError), and a spoken line's (spokenEchoes). */
+/** A step Jev did not do, and why (from its jev event). */
+export interface JevFallback {
+  goal: string;
+  why: string;
+}
+
+/** Why a step's element was not Jev's: unsure, no match, unavailable, or its pick did not run. */
+export function jevFallback(ev: Extract<AgentEvent, { type: "jev" }>): JevFallback {
+  const conf = ev.confidence.toFixed(2);
+  const why =
+    ev.operation === "error"
+      ? "Jev was unavailable, so Claude picked"
+      : ev.notRun === "not_approved"
+        ? `Jev picked it (${conf}), but you did not approve it`
+        : ev.notRun
+          ? `Jev picked it (${conf}), but the ${ev.notRun === "refused" ? "action was refused" : "action failed"}`
+          : ev.operation === "blocked"
+            ? "Jev found no element that matches, so Claude picked"
+            : ev.operation === "press_key"
+              ? "Jev answered with a key press, so Claude took the step back"
+              : `Jev was unsure (${conf}, below your threshold), so Claude picked`;
+  return { goal: ev.goal, why };
+}
+
 export interface TurnContext {
+  /** A picks status: the turn's jev events before it (for why Claude picked what Jev did not). */
+  jevSteps?: readonly Extract<AgentEvent, { type: "jev" }>[];
   /** An error the turn already showed as its own card. */
   error?: string | undefined;
   /** A spoken line repeats what is written above it. */
@@ -161,6 +192,10 @@ export function scheduledView(
 export function describeEvent(ev: AgentEvent, turn: TurnContext = {}): EventView {
   switch (ev.type) {
     case "status":
+      if (ev.picks) {
+        const fallbacks = (turn.jevSteps ?? []).filter((j) => !j.executed).map(jevFallback);
+        return { kind: "jev-turn", jev: ev.picks.jev, claude: ev.picks.claude, byAddress: ev.picks.byAddress ?? 0, fallbacks };
+      }
       return { kind: "status", text: ev.text };
     case "assistant_text":
       return ev.id ? { kind: "text", text: ev.text.trim(), id: ev.id } : { kind: "text", text: ev.text.trim() };
@@ -196,7 +231,11 @@ export function describeEvent(ev: AgentEvent, turn: TurnContext = {}): EventView
           ? `Jev: ${ev.operation}${target} · ${ev.confidence.toFixed(2)}`
           : ev.notRun
             ? `Jev: ${ev.operation}${target} · ${ev.confidence.toFixed(2)} · ${ev.notRun === "not_approved" ? "not approved" : ev.notRun}`
-            : `Jev unsure (${ev.confidence.toFixed(2)}) · Claude decides`,
+            : ev.operation === "error"
+              ? "Jev unavailable · Claude picks"
+              : ev.operation === "blocked"
+                ? "Jev: no match · Claude picks"
+                : `Jev unsure (${ev.confidence.toFixed(2)}) · Claude picks`,
         ms: ev.ms,
         executed: ev.executed,
         title: `Jev (a faster helper for simple clicks and typing): ${ev.goal}${ev.executed ? "" : ev.notRun === "not_approved" ? " (not approved)" : ev.notRun ? ` (${ev.notRun})` : " (not confident, left to Claude)"}`,
@@ -322,14 +361,13 @@ export function isBrainStartLine(text: string): boolean {
 }
 
 /**
- * What the chat leaves to the Raw view: a brain's start line (the brain chip says it), Jev's element picks and the
- * turn's count of them (nothing to act on), and what only repeats the card a run paused at (its "Pausing: ..." line
- * and its end: the card says it, with its answers).
+ * What the chat leaves to the Raw view: a brain's start line (the brain chip says it), and what only repeats the
+ * card a run paused at (its "Pausing: ..." line and its end: the card says it, with its answers). Jev's picks are
+ * shown: a chip per step, and the turn's Jev line.
  */
 export function hiddenInChat(events: readonly AgentEvent[], index: number): boolean {
   const e = events[index]!;
-  if (e.type === "jev") return true;
-  if (e.type === "status" && (e.picks || isBrainStartLine(e.text))) return true;
+  if (e.type === "status" && !e.picks && isBrainStartLine(e.text)) return true;
   return repeatsPausedCard(events, index);
 }
 

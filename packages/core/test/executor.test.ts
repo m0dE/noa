@@ -39,6 +39,8 @@ describe("createToolExecutor: plain tools", () => {
     await exec.call("upload", { index: 3, paths: ["C:\\media\\a.png"] });
     expect(x.calls.map((c) => [c.method, c.params])).toEqual([
       ["browser.navigate", { url: "https://x.com/home" }],
+      // navigate returns the page it opened (no model turn to read it), then read_page's own read.
+      ["browser.readPage", {}],
       ["browser.readPage", {}],
       ["browser.click", { index: 0 }],
       ["browser.type", { index: 2, text: "hi" }],
@@ -48,6 +50,16 @@ describe("createToolExecutor: plain tools", () => {
       ["browser.upload", { index: 3, paths: ["C:\\media\\a.png"] }],
     ]);
     expect(events.filter((e) => e.type === "tool_call")).toHaveLength(8);
+  });
+
+  // Owner's trace (2026-10-12): every navigate was followed by a read_page, one more model turn per page.
+  it("navigate returns the page it opened, as read_page shows it; the turn counts it as a page opened by address", async () => {
+    const x = new FakeX();
+    const { exec } = setup(x, { jev: fakeJev([]) });
+    const r = await exec.call("navigate", { url: "https://x.com/home" });
+    expect(r.text).toMatch(/^Navigated to https:\/\/x\.com\/home\n\nURL: https:\/\/x\.com\/home/);
+    expect(r.text).toContain('textbox "Post text"');
+    expect(exec.takePicks()).toEqual({ jev: 0, claude: 0, byAddress: 1 });
   });
 
   it("read_page returns compact text including element text", async () => {
