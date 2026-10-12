@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "iframe-injector (test fixture)",
+  "version": "1.0.0",
+  "description": "Test fixture: injects its own chrome-extension:// iframe into every page, like Streak does on Gmail.",
+  "content_scripts": [
+    { "matches": ["<all_urls>"], "js": ["inject.js"], "run_at": "document_idle", "all_frames": false }
+  ],
+  "web_accessible_resources": [
+    { "resources": ["frame.html"], "matches": ["<all_urls>"] }
+  ]
+}

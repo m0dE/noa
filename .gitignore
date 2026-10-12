@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.log
+.env
+.wrangler/
+test-results/
+playwright-report/
+.dev.vars
+*.pem
+apps/extension/test/ui/screenshots/
+apps/extension/config.json
+dist.building/
+/export/
+/dist.zip
+dist-dev/

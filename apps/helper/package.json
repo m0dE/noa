@@ -1,0 +1,25 @@
+{
+  "name": "@noa/helper",
+  "version": "0.2.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p .",
+    "install-host": "node dist/install.js"
+  },
+  "dependencies": {
+    "@noa/core": "workspace:*",
+    "@noa/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "@typesafe-ai/sdk": "^0.6.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  }
+}
