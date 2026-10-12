@@ -9,6 +9,15 @@ Give Noa a todo list and it works through each task in your own logged-in
 Chrome (navigating, clicking, typing, uploading), then reports back.
 Everything runs on your machine.
 
+Tasks can repeat on a schedule or run at a set time, which makes Noa a good
+fit for social media: post, reply and check in on a routine without opening
+the browser yourself.
+
+You can also run Noa entirely by voice: start tasks, answer its questions
+and hear results, hands-free. Pick from several voice engines, including
+OpenAI's latest realtime voice model (gpt-realtime-2.1), a smaller realtime
+model, Deepgram, or your browser's own voice.
+
 Built for speed: Claude Code plans each task, and Jev, a fast model for
 picking what to click and type, carries out the single steps, so a run
 doesn't wait on a full Claude turn for every click.
