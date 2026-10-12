@@ -4,6 +4,11 @@
 
 <h1 align="center">Noa</h1>
 
+<p align="center">
+  <a href="https://www.noa.bot">www.noa.bot</a> ·
+  <a href="https://chromewebstore.google.com/detail/noa/enpgjinoecjfmomfkpjokgcledffmink">Get it on the Chrome Web Store</a>
+</p>
+
 A Chrome extension for browser automation, powered by Claude Code and Jev.
 Give Noa a todo list and it works through each task in your own logged-in
 Chrome (navigating, clicking, typing, uploading), then reports back.
@@ -28,7 +33,10 @@ Noa uses its hosted Jev.
 
 ## Setup
 
-Requires Chrome, Node.js 22+ and pnpm 10.
+The quickest way in is to install Noa from the
+[Chrome Web Store](https://chromewebstore.google.com/detail/noa/enpgjinoecjfmomfkpjokgcledffmink),
+then follow steps 3 and 4. To build it from source instead (requires Chrome,
+Node.js 22+ and pnpm 10):
 
 1. Build: `pnpm install && pnpm build`
 2. In `chrome://extensions`, turn on Developer mode, click "Load unpacked" and
