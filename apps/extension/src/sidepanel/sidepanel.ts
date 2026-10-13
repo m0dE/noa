@@ -555,7 +555,8 @@ function errorFixes(s: UiState): ErrorFixes {
     void uiRequest({ type: "settings.save", settings: { brain: "noa" } }).then(applyState, (err: unknown) => composer.showError(err));
   return {
     "own-claude": aiSettings,
-    "claude-code": aiSettings,
+    // Straight to the helper's status and install steps (options.html#helper scrolls to them).
+    "claude-code": () => void openSettings("helper"),
     "api-key": aiSettings,
     "set-up-ai": aiSettings,
     "new-tab": () => void chrome.tabs.create({}),

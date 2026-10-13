@@ -9,7 +9,7 @@ export const IMAGES_PATH = "/v1/ai/images";
 
 /**
  * The image models a user can pick (Settings > AI > Image generation); the server prices each (IMAGE_PRICES in
- * apps/api/src/pricing.ts). Costs are per 1024x1024 medium picture, marked up.
+ * apps/api/src/pricing.ts). Prices are per 1024x1024 medium picture.
  */
 export const ImageModelId = z.enum(["gpt-image-2", "gpt-image-1-mini"]);
 export type ImageModelId = z.infer<typeof ImageModelId>;

@@ -40,7 +40,7 @@ describe("helperStatus", () => {
   it("connected with a passing self-test", () => {
     const s = helperStatus({ ...info, selfTest: { ok: true, ms: 4200, at: "t" } });
     expect(s.tone).toBe("ok");
-    expect(s.headline).toBe("Helper connected · v0.2.0");
+    expect(s.headline).toBe("Helper connected");
     expect(s.details).toEqual(["Claude Code: C:\\claude.exe", "Self-test passed (4.2 s)"]);
   });
   it("a scripted helper needs no Claude Code", () => {
@@ -70,12 +70,10 @@ describe("helperOutdated: a helper built from other code than this extension", (
   const h = { version: "0.2.0", jevAvailable: true, claudePath: "C:\\claude.exe", logDir: "L" };
   it("is out of date with another code id, or none (built before code ids); says how to update it for its install", () => {
     expect(helperOutdated({ ...h, code: "aaa", install: "checkout" }, "aaa")).toBeNull();
-    expect(helperOutdated({ ...h, code: "aaa", install: "checkout" }, "bbb")).toBe("Helper out of date: it is an older version than this extension, so recent fixes are missing. In your Noa checkout, pull and run pnpm build, then click Re-check.");
-    expect(helperOutdated({ ...h, code: "aaa", install: "noa-folder" }, "bbb")).toMatch(/run the install command below again, then click Re-check\.$/);
+    expect(helperOutdated({ ...h, code: "aaa", install: "checkout" }, "bbb")).toBe("It is older than this extension, so recent fixes are missing. In your Noa checkout, pull and run pnpm build, then click Re-check.");
+    expect(helperOutdated({ ...h, code: "aaa", install: "noa-folder" }, "bbb")).toBe("It is older than this extension, so recent fixes are missing. Run the command below to update it, then click Re-check.");
     expect(helperOutdated({ ...h, code: "aaa", install: "app" }, "bbb")).toMatch(/Update Noa Browser\.$/);
-    expect(helperOutdated(h, "bbb")).toBe(
-      "Helper out of date: it is an older version than this extension, so recent fixes are missing. To update it, run the install command below again (or, in a copy of the Noa repository, pull and run pnpm build), then click Re-check.",
-    );
+    expect(helperOutdated(h, "bbb")).toBe("It is older than this extension, so recent fixes are missing. Run the command below to update it, then click Re-check.");
   });
   it("never for a build without ids (tests, the harness), a helper run from source, or the scripted brain", () => {
     expect(helperOutdated(h, "dev")).toBeNull();
@@ -85,8 +83,8 @@ describe("helperOutdated: a helper built from other code than this extension", (
   it("the settings page warns, first thing under the headline", () => {
     const s = helperStatus({ ...h, code: "aaa", install: "checkout", selfTest: { ok: true, ms: 900, at: "x" } }, undefined, "bbb");
     expect(s.tone).toBe("warn");
-    expect(s.headline).toBe("Helper connected · v0.2.0 · out of date");
-    expect(s.details[0]).toMatch(/^Helper out of date/);
+    expect(s.headline).toBe("Helper connected · out of date");
+    expect(s.details[0]).toMatch(/^It is older than this extension/);
     expect(helperStatus({ ...h, code: "bbb", selfTest: { ok: true, ms: 900, at: "x" } }, undefined, "bbb").tone).toBe("ok");
   });
 });

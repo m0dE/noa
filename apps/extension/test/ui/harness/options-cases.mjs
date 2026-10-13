@@ -108,7 +108,8 @@ export const OPTION_CASES = [
     ["Auto checked", () => p.isChecked(radio("auto"))],
     ["Auto says what it picks", async () => /picks Local Claude Code/.test(await p.textContent("#auto-pick"))],
     ["API key hidden under Auto", async () => !(await shown(p, "[data-secret=anthropicApiKey]"))],
-    ["helper hidden under Auto", async () => !(await shown(p, "#helper-headline"))],
+    // Auto runs on Local Claude Code here: its helper's status (and update steps when it is out of date) show under Auto.
+    ["helper shown under Auto", async () => (await shown(p, "#helper-headline")) && (await p.evaluate(() => document.getElementById("helper-box").closest(".opt")?.dataset.brain)) === "auto"],
     ["hosted: plan inline with Get a plan", async () => /Free plan/.test(await p.textContent("#hosted-plan")) && (await shown(p, "#hosted-action"))],
     ["model select", async () => (await p.inputValue("#model-select")) === "claude-sonnet-5"],
     ["Reasoning: Fast, with its hint", async () => (await p.inputValue("#f-reasoning")) === "fast" && /little thinking/.test(await p.textContent("#reasoning-hint"))],

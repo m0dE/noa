@@ -77,6 +77,7 @@ const ANCHORS: Record<string, string> = {
   source: "source-group",
   brain: "source-group",
   model: "model-group",
+  helper: "helper-box",
   jev: "jev-group",
   speed: "jev-group",
   voice: "voice-group",
@@ -154,7 +155,7 @@ export interface SettingsView {
   showApiKey: boolean;
   /** Claude API selected without a key. */
   apiKeyMissing: boolean;
-  /** Where the helper's status and install steps show: under Local Claude Code, or under Auto while nothing runs without it. */
+  /** Where the helper's status and install steps show: under Local Claude Code, or under Auto when Auto runs on it or nothing works yet. */
   helperUnder: "auto" | "claude-code" | null;
   showModel: boolean;
   model: ModelChoice;
@@ -291,7 +292,7 @@ export function settingsView(input: ViewInput): SettingsView {
     brainProblem,
     showApiKey: draft.brain === "claude-api",
     apiKeyMissing: draft.brain === "claude-api" && !settings.anthropicApiKey,
-    helperUnder: draft.brain === "claude-code" ? "claude-code" : draft.brain === "auto" && !auto.effective && !brain.helper ? "auto" : null,
+    helperUnder: draft.brain === "claude-code" ? "claude-code" : draft.brain === "auto" && (auto.effective === "claude-code" || (!auto.effective && !brain.helper)) ? "auto" : null,
     // Every brain runs the chosen model (the hosted AI only its own list).
     showModel: true,
     model: modelChoice(draft),

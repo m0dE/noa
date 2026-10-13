@@ -245,7 +245,7 @@ describe("TODO tab gate (the TODO list is a paid feature)", () => {
 
 describe("the status line with an out-of-date helper", () => {
   it("warns, with how to update it in the tooltip and a button to Settings", () => {
-    const why = "Helper out of date: it is an older version than this extension, so recent fixes are missing. In your Noa checkout, pull and run pnpm build, then click Re-check.";
+    const why = "It is older than this extension, so recent fixes are missing. In your Noa checkout, pull and run pnpm build, then click Re-check.";
     const line = statusLine(state({}, { effective: "claude-code", helperOutdated: why }));
     expect(line).toMatchObject({ tone: "warn", text: "Helper out of date: recent fixes are missing", title: why });
     expect(line.action).toMatchObject({ kind: "claude-code", label: "How to update" });

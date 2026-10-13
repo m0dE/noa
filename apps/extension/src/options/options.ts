@@ -20,6 +20,7 @@ import { initVaultSection } from "./vault-section.js";
 import { initVoiceSection } from "./voice-section.js";
 import { adjustedFields, buildSettingsPatch, helperInstallCommand, helperInstallCommandWindows, helperNeedsInstall, helperStatus } from "./settings-patch.js";
 import {
+  anchorFromHash,
   BOOL_FIELDS,
   CUSTOM_MODEL,
   formValues,
@@ -36,7 +37,7 @@ import {
   type Tone,
 } from "./settings-view.js";
 import { initSidebar } from "./sidebar.js";
-import { initAiTabs } from "./ai-tabs.js";
+import { initAiTabs, revealGroup } from "./ai-tabs.js";
 
 const LABELS: Partial<Record<keyof ExtensionSettings, string>> = {
   jevThreshold: "Jev threshold",
@@ -213,6 +214,9 @@ function setTone(el: HTMLElement, tone: Tone): void {
   el.dataset.tone = tone;
 }
 
+/** Opened with a link to the helper: the helper box moves under its option on the first render, then is shown. */
+let revealHelperPending = anchorFromHash(location.hash) === "helper-box";
+
 /** Everything that depends on the settings on screen and the background's state. */
 function render(): void {
   if (!state || !saved) return;
@@ -234,6 +238,11 @@ function render(): void {
   const helperBox = find(document, ".helper");
   const helperHome = find(document, `.opt[data-brain="${v.helperUnder ?? "claude-code"}"] .reveal-inner`);
   if (helperBox.parentElement !== helperHome) helperHome.append(helperBox);
+  // A link to the helper (options.html#helper, the side panel's "How to update"): scrolled to once it is in place.
+  if (revealHelperPending) {
+    revealHelperPending = false;
+    requestAnimationFrame(() => revealGroup("helper-box"));
+  }
 
   $("hosted-out").hidden = !v.showHostedSignIn;
   $("hosted-in").hidden = !v.hosted;

@@ -156,11 +156,12 @@ describe("what each brain reveals", () => {
     expect(view({ draft: { brain: "claude-api" }, settings: { anthropicApiKey: "sk" } }).apiKeyMissing).toBe(false);
     expect(view({ draft: { brain: "auto" } }).apiKeyMissing).toBe(false);
   });
-  it("helper status under local Claude Code, and under Auto while nothing runs without it", () => {
+  it("helper status under local Claude Code, and under Auto when Auto runs on it or nothing works yet", () => {
     expect(view({ draft: { brain: "claude-code" } }).helperUnder).toBe("claude-code");
     expect(view({ draft: { brain: "auto" } }).helperUnder).toBe("auto");
     expect(view({ draft: { brain: "auto" }, account: PLUS }).helperUnder).toBeNull();
-    expect(view({ draft: { brain: "auto" }, helper: HELPER }).helperUnder).toBeNull();
+    // Auto runs on Local Claude Code: its helper's status (out of date, say) and update steps show under Auto.
+    expect(view({ draft: { brain: "auto" }, helper: HELPER }).helperUnder).toBe("auto");
     expect(view({ draft: { brain: "claude-api" } }).helperUnder).toBeNull();
   });
 });

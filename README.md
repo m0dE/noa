@@ -12,7 +12,8 @@
 A Chrome extension for browser automation, powered by Claude Code and Jev.
 Give Noa a todo list and it works through each task in your own logged-in
 Chrome (navigating, clicking, typing, uploading), then reports back.
-Everything runs on your machine.
+It runs in your own browser on your machine; see [Privacy](#privacy) for
+what goes to the AI you pick.
 
 Tasks can repeat on a schedule or run at a set time, which makes Noa a good
 fit for social media: post, reply and check in on a routine without opening
@@ -21,7 +22,8 @@ the browser yourself.
 You can also run Noa entirely by voice: start tasks, answer its questions
 and hear results, hands-free. Pick from several voice engines, including
 OpenAI's latest realtime voice model (gpt-realtime-2.1), a smaller realtime
-model, Deepgram, or your browser's own voice.
+model, Deepgram, or your browser's own voice. Voice runs through a Noa
+account on a plan with voice ([pricing](https://www.noa.bot/pricing)).
 
 Built for speed: Claude Code plans each task, and Jev, a fast model for
 picking what to click and type, carries out the single steps, so a run
@@ -29,7 +31,8 @@ doesn't wait on a full Claude turn for every click.
 
 Use the subscriptions you already have: your Claude plan through Claude
 Code, or your own Claude API key, and your own Jev key. Without a Jev key,
-Noa uses its hosted Jev.
+a signed-in Noa account with usage credit uses Noa's hosted Jev; otherwise
+Claude does each step itself.
 
 ## Setup
 
@@ -78,17 +81,39 @@ claude mcp add noa -- node <path-to-repo>/apps/helper/dist/mcp-server.js --attac
 An optional account server can queue tasks for the extension to run; see
 [the protocol](docs/PROTOCOL.md).
 
+## Privacy
+
+Noa works in your own Chrome, with the logins you already have. Logins you
+save under **Settings > Site logins** stay encrypted in the browser; when a
+task has to sign in, Noa hands that one login to the AI. To decide each
+step, it sends what is on the page to the AI that runs the task:
+
+- **Local Claude Code** and the **Claude API** send it to Anthropic, under
+  your own Claude plan or key.
+- **Your own Jev key** sends single steps to Jev (TypeSafe) directly.
+- **Noa AI**, Noa's **hosted Jev**, **voice**, and memory sync on a plan with
+  the TODO list go through Noa's account server (`https://app.noa.bot`),
+  only when you are signed in.
+
+Details: [privacy policy](https://www.noa.bot/privacy) and
+[terms](https://www.noa.bot/terms).
+
 ## Development
 
 ```
-pnpm test
+pnpm install
+pnpm --filter @noa/extension exec playwright install chromium   # once, for the browser tests
 pnpm typecheck
 pnpm build
+pnpm test
 node apps/extension/test/smoke.e2e.mjs [--headed]
 ```
 
 More end-to-end tests live in `apps/extension/test/`, and
 `test/fixtures/fake-x` is a fake X site for testing.
+
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). Report
+security problems privately ([SECURITY.md](SECURITY.md)).
 
 Automating a site may break its terms; check before you do. Not affiliated
 with Anthropic, X or TypeSafe. Claude and Claude Code are trademarks of

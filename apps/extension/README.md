@@ -17,8 +17,8 @@ the API's first `GOOGLE_CLIENT_ID`), and says so plainly when the server has
 none. Either way the client needs the
 redirect URI `https://<extension id>.chromiumapp.org/` for every id the
 extension runs under: the local-build id (in `extension-id.txt`) and the
-Chrome Web Store id (`docs/CHROME-WEB-STORE.md`), and the account server must accept the same client ID
-(`GOOGLE_CLIENT_ID`, see `apps/api/README.md`).
+Chrome Web Store id (`enpgjinoecjfmomfkpjokgcledffmink`), and the account server must accept the same client ID
+(its `GOOGLE_CLIENT_ID`).
 
 The account server defaults to `https://app.noa.bot`. An install
 saved with an earlier default (`PREVIOUS_ACCOUNT_API_BASES` in

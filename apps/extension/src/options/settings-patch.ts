@@ -63,12 +63,10 @@ export function helperOutdated(helper: HelperInfo, expected: string): string | n
   const how =
     helper.install === "checkout"
       ? "In your Noa checkout, pull and run pnpm build, then click Re-check."
-      : helper.install === "noa-folder"
-        ? "To update it, run the install command below again, then click Re-check."
-        : helper.install === "app"
-          ? "Update Noa Browser."
-          : "To update it, run the install command below again (or, in a copy of the Noa repository, pull and run pnpm build), then click Re-check.";
-  return `Helper out of date: it is an older version than this extension, so recent fixes are missing. ${how}`;
+      : helper.install === "app"
+        ? "Update Noa Browser."
+        : "Run the command below to update it, then click Re-check.";
+  return `It is older than this extension, so recent fixes are missing. ${how}`;
 }
 
 /** An out-of-date helper that the install command updates (installed by it, or from before install kinds were reported). */
@@ -94,5 +92,5 @@ export function helperStatus(helper: HelperInfo | null, helperError?: string, ex
   const outdated = helperOutdated(helper, expectedCode);
   if (outdated) details.unshift(outdated);
   const tone = (!scripted && !helper.claudePath) || (st && !st.ok) || outdated ? "warn" : "ok";
-  return { tone, headline: `Helper connected · v${helper.version}${outdated ? " · out of date" : ""}`, details };
+  return { tone, headline: outdated ? "Helper connected · out of date" : "Helper connected", details };
 }
