@@ -498,11 +498,12 @@ button[aria-disabled="true"]:hover { border-color: var(--border); }
 .log .ev-jev-turn-why { padding-left: 12px; overflow-wrap: anywhere; }
 .log .ev-jev-turn-why .goal { color: var(--text); }
 
-/* End of a turn: the outcome and a one-line summary, quietly (a long summary shows as a message above it). */
+/* End of a turn: the outcome and a short summary, quietly (a long summary shows as a message above it).
+   The summary is often the whole answer, so it wraps and is never cut off (the chip stays on its first line). */
 .log .ev-end { display: flex; flex-direction: column; gap: 6px; }
-.log .ev-outcome { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: var(--text-sm); color: var(--muted); }
+.log .ev-outcome { display: flex; align-items: baseline; gap: 7px; min-width: 0; font-size: var(--text-sm); color: var(--muted); }
 .log .ev-outcome .chip { flex: none; }
-.log .ev-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log .ev-summary { min-width: 0; overflow-wrap: anywhere; user-select: text; }
 .log .ev-draft { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--radius); background: var(--surface); }
 .log .ev-draft-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .log .ev-draft-label { font-size: var(--text-sm); font-weight: 600; color: var(--muted); }

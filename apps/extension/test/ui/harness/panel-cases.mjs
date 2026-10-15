@@ -643,6 +643,13 @@ export const PANEL_CASES = [
       ];
       if (JSON.stringify(view.jev) !== JSON.stringify(jevLines)) fail(`Jev lines ${JSON.stringify(view.jev)}`);
       if (view.sub !== "Done · 1 min ago") fail(`subtitle "${view.sub}"`);
+      // A short end summary is the whole answer: shown in full, wrapped, never cut off with an ellipsis.
+      const summaries = await p.evaluate(() =>
+        [...document.querySelectorAll("#chat-log .ev-end .ev-summary")].map((e) => ({ text: e.textContent, cut: e.scrollWidth > e.clientWidth + 1 || getComputedStyle(e).whiteSpace === "nowrap" })),
+      );
+      const lastSummary = conv.summary;
+      if (summaries.length !== 2 || summaries[1].text !== lastSummary) fail(`end summaries ${JSON.stringify(summaries)}`);
+      for (const s of summaries) if (s.cut) fail(`end summary cut off: "${s.text}"`);
       const first = await firstMessage(p);
       if (!first?.first || first.text !== conv.title || first.origin !== null || first.role !== "button" || first.tabIndex !== 0 || first.header) fail(`first message ${JSON.stringify(first)}`);
       // The first turn's start: the time under the prompt (not the latest turn's).

@@ -98,7 +98,7 @@ export function renderEvent(v: EventView, onContinue?: () => void, scheduled?: S
           "div.ev-outcome",
           null,
           h("span.chip", { "data-tone": v.chip.tone, title: chipHint(v.chip.label) || null }, v.chip.label),
-          v.text && !v.long ? h("span.ev-summary", { title: v.text }, v.text) : null,
+          v.text && !v.long ? h("span.ev-summary", null, v.text) : null,
         ),
         v.url ? h("a", { href: v.url, target: "_blank", rel: "noopener" }, v.url) : null,
         onContinue

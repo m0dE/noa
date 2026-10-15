@@ -280,12 +280,14 @@ export function scenario(kind) {
     state.tabChats = { "1": "s-live" };
     state.runningTabs = { "s-live": [1] };
   }
+  // A one-sentence answer in the end summary (under the long-summary threshold): it is the whole answer, so it must show in full.
+  const LIKED_ANSWER = "Liked the first reply, from @beta: they asked whether the launch includes the Android app, and it does.";
   if (kind === "conversation") {
     // A one-off conversation with two turns: the second started with the user's message.
     const conv = {
       sessionId: "s-conv", source: "adhoc", title: "Post on X from @alpha: our launch is live", instructions: "Post on X from @alpha: our launch is live", brain: "claude-code", jev: true,
       model: "claude-sonnet-5", startedAt: iso(-2), endedAt: iso(-1), firstStartedAt: iso(-6), outcome: "done", turns: 2,
-      summary: "Liked the first reply", url: "https://x.com/alpha/status/1838912345678901299",
+      summary: LIKED_ANSWER, url: "https://x.com/alpha/status/1838912345678901299",
       logPath: "C:\\Users\\me\\AppData\\Local\\noa\\runs\\s-conv-2026\\log.jsonl",
     };
     const cev = (minutes, e) => ({ ...e, ts: iso(minutes), sessionId: "s-conv" });
@@ -312,7 +314,7 @@ export function scenario(kind) {
       cev(-1, { type: "tool_call", id: "5", name: "act", args: { steps: [{ goal: "click the Like button under the first reply", index: 31 }] } }),
       cev(-1, { type: "tool_result", id: "5", name: "act", text: "step 1: clicked [31] (picked by Claude)" }),
       cev(-1, { type: "status", text: "Jev chose 0 of 1 element pick (clicks and typing); Claude chose 1; Claude opened 1 page by address", picks: { jev: 0, claude: 1, byAddress: 1 } }),
-      cev(-1, { type: "task_end", outcome: "done", summary: "Liked the first reply", url: "https://x.com/alpha/status/1838912345678901299" }),
+      cev(-1, { type: "task_end", outcome: "done", summary: LIKED_ANSWER, url: "https://x.com/alpha/status/1838912345678901299" }),
     ];
     state.running = null;
     state.runningTabs = {};
