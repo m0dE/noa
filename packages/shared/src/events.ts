@@ -135,9 +135,10 @@ export type AgentEvent =
   /**
    * Auto tab switching brought a tab of the run to the front, so the agent could see it (a screenshot): the chat
    * says so once per conversation, with how to turn it off. tab: the run's short id of the tab; url: its page.
+   * full: it switched because the chat runs under full autonomy (which never asks), whatever the setting says.
    * Written by the extension, never by a brain.
    */
-  | { type: "auto_tab_switching"; tab?: string; url?: string }
+  | { type: "auto_tab_switching"; tab?: string; url?: string; full?: true }
   /**
    * The agent's memory changed from this conversation (remember, forget, a task's run note): the chat shows
    * "Remembered: ..." with Undo. before / after: the entry before and after the change (null: it did not exist /

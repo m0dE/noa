@@ -1,7 +1,8 @@
 // A chat per browser tab, in the built extension in Playwright's Chromium: one-off runs
 // started from two tabs run at the same time, each acting on its own tab (even after the
 // user switched away), the side panel (the page opened as a tab) shows the job of the active tab (the jobs list
-// when it has none), a chat whose tab shows a chrome:// page moves to a new tab, and closing a chat's tab stops its run.
+// when it has none), a chat whose tab shows a chrome:// page moves to a new tab, a run next to the Noa settings page
+// takes the user along from its blank tab to the user's tab it moves to, and closing a chat's tab stops its run.
 // The brain is a scripted fake installed in the service worker (no helper, no API key).
 // Usage: pnpm build && node apps/extension/test/tabs.e2e.mjs [--headed]
 import assert from "node:assert/strict";
@@ -21,7 +22,7 @@ const { base } = site;
 
 const { step, finish } = createSuite("tab");
 const ext = await launchExtension({ name: "tabs" });
-const { context, sw } = ext;
+const { context, sw, extensionId } = ext;
 
 try {
   // The fake brain: each run waits for its gate, then reads its tab and clicks Count there.
@@ -30,10 +31,17 @@ try {
     makeAct: () => {
       const log = (globalThis.__turns = []);
       return async ({ browser }, name) => {
+        // Task E starts on a blank tab next to the settings page: the agent moves to the user's own tab /e and works
+        // there, holding the turn until the test has looked (globalThis.__goOnE).
+        if (name === "task E") {
+          const own = (await browser.call("browser.listTabs", {})).tabs.find((t) => t.url.endsWith("/e"));
+          await browser.call("browser.switchTab", { tab: own.id });
+        }
         const snap = await browser.call("browser.readPage", {});
         const btn = snap.elements.find((e) => e.name === "Count");
         await browser.call("browser.click", { index: btn.index });
         log.push({ name, url: snap.url });
+        if (name === "task E") await new Promise((r) => (globalThis.__goOnE = r));
         return `clicked on ${snap.title}`;
       };
     },
@@ -205,6 +213,53 @@ try {
     await fake.release("again C");
     await turnEnded(s.sessionId, 2, "turn 2 of task C");
     return `tab ${c} (chrome://version) -> tab ${moved}`;
+  });
+
+  await step("a run next to the Noa settings page: its blank tab in front, then the user follows the agent to their own tab", async () => {
+    // The user's page /e is open; they are on the settings page (Chrome keeps extensions out of it) when they ask.
+    const pageE = await context.newPage();
+    await pageE.goto(`${base}/e`);
+    const settingsPage = await context.newPage();
+    await settingsPage.goto(`chrome-extension://${extensionId}/options.html`);
+    const [e, settings] = await sw.evaluate(async ([urls, w]) => {
+      const ids = [];
+      for (const u of urls) {
+        const [t] = await chrome.tabs.query({ url: u });
+        if (t.windowId !== w) await chrome.tabs.move(t.id, { windowId: w, index: -1 });
+        ids.push(t.id);
+      }
+      await chrome.tabs.update(ids[1], { active: true });
+      return ids;
+    }, [[`${base}/e`, `chrome-extension://${extensionId}/options.html`], windowId]);
+    const s = await ui({ type: "run.adhoc", instructions: "task E", tabId: settings });
+    // The run gets a blank tab right after the settings page, in front; the chat moves there and the panel follows.
+    const blank = await waitFor(async () => {
+      const m = await bindings();
+      const tab = Object.keys(m).find((k) => m[k] === s.sessionId);
+      return tab && Number(tab) !== settings ? Number(tab) : null;
+    }, "the chat to move to the blank tab");
+    const tabOf = (id) => sw.evaluate((t) => chrome.tabs.get(t), id);
+    assert.deepEqual(await tabOf(blank).then((t) => ({ url: t.url, active: t.active })), { url: "about:blank", active: true });
+    await waitFor(async () => (await panelView()).title === "task E", "the panel following the blank tab");
+    // The agent moves to the user's tab /e: the user is taken along, the blank tab stays behind.
+    await fake.release("task E");
+    try {
+      await waitFor(async () => (await tabOf(e)).active, "the user's tab /e in front");
+      await waitFor(async () => (await clicks(pageE)) === 1, "a click on /e");
+      assert.equal((await tabOf(blank)).active, false);
+      const { runningTabs } = await ui({ type: "state.get" });
+      assert.deepEqual(runningTabs[s.sessionId], [e, blank], "acting on /e now, the blank tab its first");
+      // The panel followed the user to /e before the state said the run acts there: the pushed state puts its job back.
+      await waitFor(async () => (await panelView()).title === "task E", "the panel showing the run on /e");
+    } finally {
+      await sw.evaluate(() => globalThis.__goOnE?.());
+    }
+    await sessionWhen(sw, s.sessionId, "task E", { until: (x) => x.outcome === "done" });
+    assert.equal((await sw.evaluate(() => globalThis.__turns)).find((l) => l.name === "task E").url, `${base}/e`);
+    // The user's tab is theirs: never in the Noa group, never closed.
+    assert.equal((await tabOf(e)).groupId, -1);
+    await settingsPage.close();
+    return `blank tab ${blank} -> the user's tab ${e}`;
   });
 
   await step("closing a chat's tab while it runs stops it (paused); the session stays", async () => {

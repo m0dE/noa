@@ -25,6 +25,16 @@ describe("the Auto tab switching notice", () => {
     expect((describeEvent({ type: "auto_tab_switching" }) as { hint: string }).hint).toMatch(/^Noa switched to its tab because it needs the tab visible/);
   });
 
+  it("under full autonomy (full): says that did it, not the setting, and links to the Permission tab", () => {
+    const v = describeEvent({ type: "auto_tab_switching", tab: "t2", url: "https://docs.test/a", full: true });
+    expect(v).toMatchObject({ kind: "tabswitch", text: "Full autonomy: switched tabs without asking", settings: "permission" });
+    const hint = (v as { hint: string }).hint;
+    expect(hint).toMatch(/^Noa switched to its tab \(tab t2 on docs.test\) because it needs the tab visible to see the page \(to take a screenshot\)\. Please don't type while it works\. /);
+    expect(hint).toContain("Full autonomy never asks, so this happens whatever Auto tab switching is set to.");
+    expect(hint).toContain("pick another permission level in Settings and turn Auto tab switching off");
+    expect(hint).not.toContain("You can turn Auto tab switching off in Settings, but");
+  });
+
   describe("rendered", () => {
     beforeAll(installMiniDom);
 

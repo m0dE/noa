@@ -20,6 +20,8 @@ let runTab: number;
 let auto: boolean;
 let stopped: boolean;
 let attended: boolean;
+/** The chat's automation level (Settings > Permission): full autonomy never asks, the switch card included. */
+let level: GateContext["level"];
 /** What the card's user does when a request shows: an answer, or nothing (it waits until it times out). */
 let answer: "allow_once" | "deny" | null;
 let requests: ApprovalRequest[];
@@ -38,7 +40,7 @@ function makeSlots(opts: { timeoutMs?: number } = {}): AgentSlots {
     ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
   });
   const approvals: SlotApprovals = {
-    context: async (): Promise<GateContext> => ({ level: "ask_consequential", attended, stopped: () => stopped }),
+    context: async (): Promise<GateContext> => ({ level, attended, stopped: () => stopped }),
     request: (sessionId, ask, o) => broker.request(sessionId, ask, o),
     end: (sessionId) => broker.end(sessionId),
   };
@@ -63,6 +65,7 @@ beforeEach(async () => {
   auto = true;
   stopped = false;
   attended = true;
+  level = "ask_consequential";
   answer = null;
   requests = [];
   told = [];
@@ -262,6 +265,44 @@ describe("Auto tab switching off: the user is asked", () => {
     expect(await shot).toEqual({ base64: "Q0RQ", mimeType: "image/jpeg" });
     expect(requests).toHaveLength(1);
     expect(activations()).toEqual([runTab]);
+  });
+});
+
+describe("Full autonomy never asks (the user chose it for everything)", () => {
+  beforeEach(() => {
+    level = "full";
+  });
+
+  it("with Auto tab switching off: the tab comes forward at once, no card, and the chat is told once", async () => {
+    auto = false;
+    answer = "deny";
+    const slot = await runIn(makeSlots());
+    expect(await slot.screenshot()).toEqual({ base64: "Q0RQ", mimeType: "image/jpeg" });
+    expect(activations()).toEqual([runTab]);
+    expect(windowUpdates()).toEqual([]);
+    expect(requests).toEqual([]);
+    await new Promise((r) => setTimeout(r, 0));
+    // The notice says full autonomy did it (not the setting, which is off).
+    expect(told).toEqual([["S", { type: "auto_tab_switching", tab: "t1", url: "https://run.test/", full: true }]]);
+  });
+
+  it("while the user is active in that window (the setting on): no card either, the tab comes forward", async () => {
+    chrome.idle.state = "active";
+    answer = "deny";
+    const slot = await runIn(makeSlots());
+    expect(await slot.screenshot()).toEqual({ base64: "Q0RQ", mimeType: "image/jpeg" });
+    expect(activations()).toEqual([runTab]);
+    expect(requests).toEqual([]);
+  });
+
+  it("never for a stopped run: nothing moves, the screenshot says the task was stopped", async () => {
+    auto = false;
+    chrome.debugger.blocked.add(runTab);
+    const slot = await runIn(makeSlots());
+    stopped = true;
+    await expect(slot.screenshot()).rejects.toThrow(SHOT_NOT_SWITCHED.stopped);
+    expect(activations()).toEqual([]);
+    expect(requests).toEqual([]);
   });
 });
 

@@ -62,7 +62,7 @@ import type { UiPush, UiRequest } from "./ui-protocol.js";
 import { VOICE_BADGES, VoiceSessions } from "./voice-session.js";
 import { TabBadges, type BadgeLook } from "./tab-badges.js";
 import { TabChats } from "./tab-chats.js";
-import { isChatTabsKey, keptChatTabs } from "./agent-tab.js";
+import { isChatTabsKey, keptChatTabs, TABS_STATE_KEY } from "./agent-tab.js";
 import { JobDismissals } from "./job-dismissals.js";
 import { Vault } from "./vault.js";
 
@@ -719,6 +719,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
   void handleStorageChange(changes, area);
   // A run's tabs (agent-tab.ts) or the overlay setting changed.
   if ((area === "session" && Object.keys(changes).some((k) => k.startsWith("agentTab"))) || (area === "local" && changes.settings)) controlIndicator.refresh();
+  // The tab a run acts on changed (switch_tab, open_tabs in the foreground): the panel's "Working in" row and the tab
+  // whose job the panel shows follow it (UiState.runningTabs).
+  const currentOf = (v: unknown) => (v as { current?: number } | undefined)?.current;
+  if (area === "session" && Object.entries(changes).some(([k, c]) => k.startsWith(TABS_STATE_KEY) && currentOf(c.oldValue) !== currentOf(c.newValue))) hub.pushState();
   // A chat's turn ended and its opened tabs were kept (or the chat is over): the panel there shows its job (or not).
   if (area === "session" && Object.keys(changes).some(isChatTabsKey)) hub.pushState();
   if (area === "local" && changes.settings) {

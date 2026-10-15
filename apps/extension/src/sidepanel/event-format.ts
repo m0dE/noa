@@ -1,5 +1,5 @@
 /** Pure view models for agent events in a job's conversation. */
-import { ANSWER_TOOL, describeSchedule, dialogLine, LIMITED_MODE, localTimeZone, SCREEN_HELP_TEXT, type AgentEvent, type AttachmentRef, type Chip, type SessionInfo, type TaskSource, type TodoChange } from "@noa/shared";
+import { ANSWER_TOOL, describeSchedule, dialogLine, FULL_AUTONOMY_NAME, LIMITED_MODE, localTimeZone, SCREEN_HELP_TEXT, type AgentEvent, type AttachmentRef, type Chip, type SessionInfo, type TaskSource, type TodoChange } from "@noa/shared";
 import { repeatsPausedCard } from "../approval/paused.js";
 import { clip, isLongSummary, toolArgsSummary } from "../text.js";
 import { speakable } from "../voice/spoken-line.js";
@@ -343,8 +343,13 @@ export function limitedView(ev: Extract<AgentEvent, { type: "limited_mode" }>): 
 
 /** The options page's link to the Auto tab switching toggle (options.html#tab-switching). */
 export const TAB_SWITCHING_SETTING = "tab-switching";
+/** The options page's link to the Permission tab (options.html#permission), where full autonomy is turned off. */
+export const PERMISSION_SETTING = "permission";
 
-/** Auto tab switching brought a tab forward (agent-slots.ts showForShot): why, and how to turn it off. */
+/**
+ * Auto tab switching, or full autonomy (ev.full), brought a tab forward (agent-slots.ts showForShot): why, and how to
+ * turn it off (the toggle, or the permission level: with full autonomy the toggle makes no difference).
+ */
 export function tabSwitchView(ev: Extract<AgentEvent, { type: "auto_tab_switching" }>): EventView {
   let site = "";
   try {
@@ -353,12 +358,19 @@ export function tabSwitchView(ev: Extract<AgentEvent, { type: "auto_tab_switchin
     /* no page address */
   }
   const which = [ev.tab && `tab ${ev.tab}`, site && `on ${site}`].filter(Boolean).join(" ");
+  const why = `Noa switched to its tab${which ? ` (${which})` : ""} because it needs the tab visible to see the page (to take a screenshot). Please don't type while it works. `;
+  if (ev.full) {
+    return {
+      kind: "tabswitch",
+      text: `${FULL_AUTONOMY_NAME}: switched tabs without asking`,
+      hint: `${why}${FULL_AUTONOMY_NAME} never asks, so this happens whatever Auto tab switching is set to. To be asked before it switches, pick another permission level in Settings and turn Auto tab switching off.`,
+      settings: PERMISSION_SETTING,
+    };
+  }
   return {
     kind: "tabswitch",
     text: "Auto tab switching on",
-    hint:
-      `Noa switched to its tab${which ? ` (${which})` : ""} because it needs the tab visible to see the page (to take a screenshot). ` +
-      "Please don't type while it works. You can turn Auto tab switching off in Settings, but then Noa can't see tabs you're not looking at, which limits what it can do.",
+    hint: `${why}You can turn Auto tab switching off in Settings, but then Noa can't see tabs you're not looking at, which limits what it can do.`,
     settings: TAB_SWITCHING_SETTING,
   };
 }

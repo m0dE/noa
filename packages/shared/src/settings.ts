@@ -137,6 +137,7 @@ export const ExtensionSettings = z.object({
    * Auto tab switching: when the agent needs to see a tab that is hidden (a screenshot of a background tab, or of a
    * minimized window's tab where Chrome cannot capture it), its tab is brought to the front without asking, and the
    * chat says so once. Off: the agent asks first (a card in the chat), and without an OK it cannot see that tab.
+   * Full autonomy (automationLevel) never asks, so it switches whatever this says.
    */
   autoTabSwitching: z.boolean().default(true),
   /**

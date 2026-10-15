@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChromeFake } from "./chrome-fake.js";
-import { DRAWN, driverHarness, runInUserTab } from "./driver-harness.js";
+import { DRAWN, driverHarness, runInUserTab, userWindow } from "./driver-harness.js";
 import { keptChatTabs, type AgentTab } from "../src/agent-tab.js";
 import { DEBUGGER_CANCELED, type Cdp } from "../src/cdp.js";
 import type { Driver } from "../src/driver.js";
@@ -354,5 +354,69 @@ describe("Cdp with several tabs", () => {
     };
     await Promise.all([cdp.sendTo(mainTab, "A"), cdp.sendTo(mainTab, "B")]);
     expect(attaches).toBe(1);
+  });
+});
+
+describe("a run next to a page Chrome keeps extensions out of (its blank tab in front)", () => {
+  /** A one-off run started on chrome://newtab: its blank tab, made active right after it (what the user then looks at). */
+  async function runNextToRestricted(): Promise<{ windowId: number; blank: number }> {
+    const { windowId } = await userWindow(chrome, "chrome://newtab/");
+    const blank = await agent.prepare("current-tab");
+    expect(chrome.tabs.byId.get(blank)).toMatchObject({ url: "about:blank", active: true });
+    chrome.tabs.updateCalls.length = 0;
+    return { windowId, blank };
+  }
+
+  it("switch_tab to a tab it opened takes the user along: the blank page showed nothing", async () => {
+    const { blank } = await runNextToRestricted();
+    await driver.openTabs({ urls: urls(1) });
+    const t2 = await agent.resolve("t2");
+    expect((await chrome.tabs.get(blank)).active).toBe(true);
+    await driver.switchTab({ tab: "t2" });
+    expect((await chrome.tabs.get(t2)).active).toBe(true);
+    expect((await chrome.tabs.get(blank)).active).toBe(false);
+    expect(activations().map((c) => c.id)).toEqual([t2]);
+    // The window is theirs already: not focused again.
+    expect(chrome.windows.updateCalls).toEqual([]);
+  });
+
+  it("open_tabs in the foreground shows the first new tab at once", async () => {
+    const { blank } = await runNextToRestricted();
+    await driver.openTabs({ urls: urls(2), background: false });
+    const t2 = await agent.resolve("t2");
+    expect((await chrome.tabs.get(t2)).active).toBe(true);
+    expect((await chrome.tabs.get(blank)).active).toBe(false);
+    expect(activations().map((c) => c.id)).toEqual([t2]);
+  });
+
+  it("switching to one of the user's own tabs (a page they have open) takes them there", async () => {
+    const { windowId } = await userWindow(chrome, "chrome://newtab/");
+    const shop = await chrome.tabs.create({ windowId, url: "https://shop.test/inventory", active: false });
+    const blank = await agent.prepare("current-tab");
+    chrome.tabs.updateCalls.length = 0;
+    const own = (await driver.listTabs()).tabs.find((t) => t.url.startsWith("https://shop.test/"))!;
+    await driver.switchTab({ tab: own.id });
+    expect((await chrome.tabs.get(shop.id)).active).toBe(true);
+    expect((await chrome.tabs.get(blank)).active).toBe(false);
+  });
+
+  it("not once the user has moved on from the blank tab, nor from a blank tab in the background (a scheduled run)", async () => {
+    const { windowId, blank } = await runNextToRestricted();
+    await driver.openTabs({ urls: urls(1) });
+    const user = await chrome.tabs.create({ windowId, url: "https://user.test/", active: true });
+    chrome.tabs.updateCalls.length = 0;
+    await driver.switchTab({ tab: "t2" });
+    expect(activations()).toEqual([]);
+    expect((await chrome.tabs.get(user.id)).active).toBe(true);
+
+    // A scheduled run's blank tab is made in the background: the user keeps the tab they are using.
+    await chrome.tabs.remove(blank);
+    const own = await agent.prepare("own-tab");
+    expect(chrome.tabs.byId.get(own)).toMatchObject({ url: "about:blank", active: false });
+    chrome.tabs.updateCalls.length = 0;
+    await driver.openTabs({ urls: urls(1) });
+    await driver.switchTab({ tab: "t2" });
+    expect(activations()).toEqual([]);
+    expect((await chrome.tabs.get(user.id)).active).toBe(true);
   });
 });

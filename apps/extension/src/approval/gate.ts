@@ -242,8 +242,9 @@ export class ApprovalGate {
   }
 
   /**
-   * The user's OK to bring a tab of the run to the front so the agent can see it (Auto tab switching is off:
-   * agent-slots.ts). Asked at every automation level: it is about the user's screen, not a change to the page. It
+   * The user's OK to bring a tab of the run to the front so the agent can see it (Auto tab switching is off, or the
+   * user is active in that window: agent-slots.ts). Asked at every automation level but full autonomy (which never
+   * asks, and switches on its own): it is about the user's screen, not a change to the page. It
    * waits like an action's card (the turn's time, Stop, a message from the user, left out of the turn's clock), at
    * most SWITCH_APPROVAL_TIMEOUT_MS. A run nobody watches is not asked at all ("unattended"): an action's card would
    * pause such a run (ask), which a screenshot is not worth, since read_page sees the page without it. An OK that

@@ -136,7 +136,10 @@ export class AgentSlots implements SlotPool {
     });
     const onFallback = (tabId: number) => void this.tellLimited(slot, tabId).catch(() => undefined);
     const auto = this.autoTabSwitching;
-    const front: TabFront | undefined = auto && { auto, show: (tabId, opts) => this.showForShot(slot, tabId, opts) };
+    const front: TabFront | undefined = auto && {
+      auto: async () => (await auto()) || (await this.fullAutonomy(slot)),
+      show: (tabId, opts) => this.showForShot(slot, tabId, opts),
+    };
     const driver = new Driver(this.cdp, tab, { knownTabs: () => this.allTabIds(), dialogs, onFallback, ...(front ? { front } : {}) });
     const cdp = this.cdp;
     const cleanedUp = () => this.cleanedUp();
@@ -335,10 +338,11 @@ export class AgentSlots implements SlotPool {
 
   /**
    * The driver needs the tab in front for a screenshot (Driver.screenshot: where Chrome cannot capture it hidden).
-   * Never for a stopped run. Auto tab switching on: brought forward at once, and the session's chat is told the
-   * first time. Off: the user is asked on a card (ApprovalGate.askToSwitch; a run nobody watches is not asked), and
-   * after Not now or no answer this turn does not ask again. Switching on the user's OK also brings its window in
-   * front: they asked to see it. Resolves null once the tab is in front, else why not (SHOT_NOT_SWITCHED).
+   * Never for a stopped run. Auto tab switching on, or the session under full autonomy (which never asks, whatever
+   * the setting): brought forward at once, and the session's chat is told the first time. Off: the user is asked on
+   * a card (ApprovalGate.askToSwitch; a run nobody watches is not asked), and after Not now or no answer this turn
+   * does not ask again. Switching on the user's OK also brings its window in front: they asked to see it. Resolves
+   * null once the tab is in front, else why not (SHOT_NOT_SWITCHED).
    *
    * Noa stays on the tab afterwards, never switching back: a run takes screenshots again and again, and each switch
    * back would make the next one switch again.
@@ -349,10 +353,13 @@ export class AgentSlots implements SlotPool {
     if (ctx?.stopped?.()) return SHOT_NOT_SWITCHED.stopped;
     // Not while the user may be typing in that window: their keys would go on in the run's tab (measured with real
     // OS keystrokes: a sentence split between their field and the agent's). Then they are asked, as with it off.
-    if ((opts.auto ?? (await this.autoTabSwitching?.())) && !(await userActiveInWindowOf(tabId))) {
+    // Full autonomy: never asked, not even then (the user chose it for everything; the chat's notice tells them not
+    // to type while it works).
+    const full = ctx?.level === "full";
+    if (full || ((opts.auto ?? (await this.autoTabSwitching?.())) && !(await userActiveInWindowOf(tabId)))) {
       // A tab that is gone: the capture says so.
       if (!(await bringTabForward(tabId, { restore: opts.restore, focus: false }))) return null;
-      if (sessionId) void this.tellSwitching(slot, sessionId, tabId).catch(() => undefined);
+      if (sessionId) void this.tellSwitching(slot, sessionId, tabId, full).catch(() => undefined);
       return null;
     }
     if (!sessionId || !slot.gate) return SHOT_NOT_SWITCHED.noChat;
@@ -382,12 +389,19 @@ export class AgentSlots implements SlotPool {
     }
   }
 
-  /** Auto tab switching brought a tab of the session's run forward: its chat is told, once per conversation. */
-  private async tellSwitching(slot: Slot, sessionId: string, tabId: number): Promise<void> {
+  /** The slot's session runs under full autonomy (Settings > Permission): nothing of it waits for the user, a tab switch included. */
+  private async fullAutonomy(slot: Slot): Promise<boolean> {
+    const sessionId = slot.sessionId;
+    if (!sessionId || !this.approvals) return false;
+    return (await this.approvals.context(sessionId)).level === "full";
+  }
+
+  /** Auto tab switching (or full autonomy: full) brought a tab of the session's run forward: its chat is told, once per conversation. */
+  private async tellSwitching(slot: Slot, sessionId: string, tabId: number, full: boolean): Promise<void> {
     if (this.toldSwitching.has(sessionId)) return;
     this.toldSwitching.add(sessionId);
     const { short, url } = await tabLabel(slot, tabId);
-    this.onPageEvent?.(sessionId, { type: "auto_tab_switching", ...(short ? { tab: short } : {}), ...(url ? { url } : {}) });
+    this.onPageEvent?.(sessionId, { type: "auto_tab_switching", ...(short ? { tab: short } : {}), ...(url ? { url } : {}), ...(full ? { full: true } : {}) });
   }
 
   /** Every tab of every slot. */

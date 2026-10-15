@@ -26,11 +26,14 @@ export type WithNote<T> = T & { note?: string };
 const BACKGROUND_SHOT_TIMEOUT_MS = 10_000;
 
 /**
- * Brings a hidden tab of the run to the front so a screenshot can see it (agent-slots.ts): Auto tab switching does at
- * once, or, when it is off, after the user's OK on a card.
+ * Brings a hidden tab of the run to the front so a screenshot can see it (agent-slots.ts): Auto tab switching (or
+ * full autonomy) does at once, or, when it is off, after the user's OK on a card.
  */
 export interface TabFront {
-  /** Auto tab switching is on: a background tab is brought forward before its screenshot, without trying it hidden first. */
+  /**
+   * Auto tab switching is on, or the run is under full autonomy: a background tab is brought forward before its
+   * screenshot, without trying it hidden first.
+   */
   auto(): Promise<boolean>;
   /**
    * Brings the tab forward (restore: its minimized window too) and resolves once it is the active tab, or resolves

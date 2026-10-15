@@ -1,10 +1,11 @@
 import { MAX_AGENT_TABS } from "@noa/shared";
-import { addToGroup, createWindowTab, lastNormalWindow, mustId, removeAgentTabs, removeTabs, tabExists } from "./chrome-tabs.js";
+import { addToGroup, createWindowTab, lastNormalWindow, mustId, removeAgentTabs, removeTabs, tabExists, tabUrl } from "./chrome-tabs.js";
 import { isControllableUrl } from "./restricted.js";
 
 const TAB_KEY = "agentTabId";
-/** The run's tabs (main + opened by open_tabs) and which one is current. */
-const TABS_KEY = "agentTabs";
+/** The run's tabs (main + opened by open_tabs) and which one is current (slot n: "agentTabs.n"; background.ts watches it). */
+export const TABS_STATE_KEY = "agentTabs";
+const TABS_KEY = TABS_STATE_KEY;
 /** A chat's opened tabs between its turns: "agentChatTabs.<sessionId>" (see park). */
 const CHAT_TABS_KEY = "agentChatTabs";
 
@@ -266,6 +267,7 @@ export class AgentTab {
     }
     const state = await this.state();
     if (!state) throw new Error(AGENT_TAB_CLOSED);
+    const was = state.current;
     const main = await chrome.tabs.get(state.tabs[0].tabId);
     let index = main.index;
     for (const t of alive) {
@@ -285,6 +287,7 @@ export class AgentTab {
       await this.save(state);
     }
     await addToGroup(created.map((t) => t.tabId));
+    if (opts.current && created[0]) await this.followFromBlank(was, created[0].tabId);
     return created;
   }
 
@@ -321,12 +324,13 @@ export class AgentTab {
     return out;
   }
 
-  /** Makes a run tab current. Returns its Chrome id. */
+  /** Makes a run tab current. Returns its Chrome id. The user follows from the run's blank tab (followFromBlank). */
   async setCurrent(id: string): Promise<number> {
     const tabId = await this.resolve(id);
     const state = await this.state();
     if (!state) throw new Error(AGENT_TAB_CLOSED);
     await this.save({ ...state, current: tabId });
+    await this.followFromBlank(state.current, tabId);
     return tabId;
   }
 
@@ -370,6 +374,22 @@ export class AgentTab {
     const closed = await closeTabsOf(opened, this.opts.removeTabs);
     await this.save({ ...state, tabs: [main], current: main.tabId, unreported: [] });
     return closed;
+  }
+
+  /**
+   * The agent's current tab was `from` and is `to` now. The browser's active tab stays as it is (the user may be
+   * using it), except when they are looking at the run's blank page: the tab made next to a page Chrome keeps
+   * extensions out of (pickCurrentTab), or their own empty tab the run started on. It shows nothing of theirs and
+   * nothing of the run's, so leaving them there while the agent works in another tab of that window looks like a
+   * run stuck on an empty page; they are taken to the tab the agent moved to. The user's recent input is not checked
+   * here (unlike showForShot): a blank page has no field their keys could go on in, and the move comes right after
+   * their request.
+   */
+  private async followFromBlank(from: number, to: number): Promise<void> {
+    if (from === to) return;
+    const [blank, next] = await Promise.all([chrome.tabs.get(from).catch(() => null), chrome.tabs.get(to).catch(() => null)]);
+    if (!blank?.active || tabUrl(blank) !== "about:blank" || blank.pendingUrl !== undefined || !next || next.windowId !== blank.windowId) return;
+    await chrome.tabs.update(to, { active: true }).catch(() => undefined);
   }
 
   /** Brings the current agent tab's window to the front and activates the tab. */
