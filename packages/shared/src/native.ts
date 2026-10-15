@@ -90,6 +90,13 @@ export interface UserTab {
    * reason (another run is using it, or it cannot be controlled yet).
    */
   access: "here" | "restricted" | "elsewhere";
+  /**
+   * The user's other tabs in that window, with the short ids the run's tools take (see AgentTab.userTabs). Their url
+   * is the address without its query and #part (a reset link's token, a sign-in code), until the agent reads the tab.
+   */
+  others?: { id: string; url: string; title: string }[];
+  /** How many more of the user's tabs in that window were left out of `others` (it lists the ones used last). */
+  othersMore?: number;
 }
 
 /** How a task run ended, as reported by either brain. */

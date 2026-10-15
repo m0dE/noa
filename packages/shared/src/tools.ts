@@ -46,7 +46,7 @@ function actArgs(d: { goal: string; index: string; steps: string }) {
           text: z
             .string()
             .optional()
-            .describe("Text for a step that fills a field: it replaces the field's current value (in a rich editor it is added at the end). For a dropdown (<select>), the option to choose: its label or value"),
+            .describe("Text for a step that fills a field: it replaces the field's current value (in a rich editor it is added at the end). An empty text (\"\") empties the field, a rich editor too. For a dropdown (a <select>, or a custom one that opens a list of options), the option to choose: its label (or a <select> option's value). For a text field that suggests values as you type (a combobox; not a search box), text that is a suggestion's label chooses that suggestion; otherwise the result lists the suggestions shown"),
           checked: z
             .boolean()
             .optional()
@@ -121,6 +121,10 @@ export const ToolArgs = {
       .describe("Tab ids (from open_tabs or list_tabs) to read together in one call. Default: the current tab"),
   }),
   screenshot: z.object({}),
+  find_text: z.object({
+    text: z.string().trim().min(1).max(200).describe("The text to find (case and spacing do not matter)"),
+    place: z.number().int().min(1).optional().describe("Which place to scroll to, by its number in an earlier answer (default 1)"),
+  }),
   act: actArgs({
     goal: "What this step does, in plain words, e.g. 'open the post composer'",
     index: "Element index from read_page (every step needs one). The step types its text into that element, or clicks it when there is no text",
@@ -242,9 +246,11 @@ export type ToolArgsOf<N extends ToolName> = z.infer<(typeof ToolArgs)[N]>;
 export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   navigate: "Open a URL in the current tab and wait for it to load. Returns the page as read_page shows it.",
   read_page:
-    "Get the page URL, title, visible text and an indexed list of interactive elements. Give `tabs` to read several tabs in one call (each under its own header) without switching to them.",
+    "Get the page URL, title, visible text (of a long page only the start: see find_text) and an indexed list of interactive elements. Give `tabs` to read several tabs in one call (each under its own header) without switching to them.",
   screenshot: "Capture the visible part of the current tab as an image.",
-  act: `Do up to ${MAX_ACT_STEPS} small steps in order, in one call. Each step names the element index from read_page: a step with text fills that element (a dropdown gets the option named by text), a step with checked sets a checkbox or radio button, a step with key presses that key at the focus (no index), any other step clicks it. Stops at the first step that fails and returns the page's element list, so you can send the rest again.`,
+  find_text:
+    "Find text anywhere on the current page, also far below what read_page shows. Says how often it occurs and, per place (row, list item, paragraph), its text and its controls with their values; scrolls the first place (or `place`) into view for act. Use it to look up an item in a long list or to check that a change shows up, instead of scrolling.",
+  act: `Do up to ${MAX_ACT_STEPS} small steps in order, in one call. Each step names the element index from read_page: a step with text fills that element (empty text "" empties it; a dropdown gets the option named by text), a step with checked sets a checkbox or radio button, a step with key presses that key at the focus (no index), any other step clicks it. Stops at the first step that fails and returns the page's element list, so you can send the rest again.`,
   click: "Click an element by index from read_page.",
   type: "Focus an element by index and insert text into it.",
   paste: "Insert text at the current keyboard focus.",
@@ -254,7 +260,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   open_tabs:
     "Open up to 8 URLs at once, each in a new tab, loading in parallel. Waits until all are loaded and returns their tab ids and titles. The current tab stays the same unless background is false.",
   switch_tab: "Make another tab the current tab: read_page, act, navigate, scroll, screenshot and the other tools then act on it.",
-  list_tabs: "List this task's tabs with id, URL, title, and which one is current.",
+  list_tabs: "List this task's tabs, then the user's other tabs in its window, with id, URL, title, and which one is current.",
   close_tabs: "Close tabs you opened and no longer need. The tab the task started on is never closed.",
   handle_dialog: `Answer the browser dialog (alert, confirm, prompt, or "Leave site?") open in a tab. While one is open its page is frozen: other tools on that tab say so until it is answered. One nobody answers is cancelled after ${DIALOG_AUTO_DISMISS_MS / 1000} s.`,
   wait_for: WAIT_FOR_DESCRIPTION,
@@ -278,7 +284,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   answer_user:
     'Answer a message the user sent while you work (it starts with "The user just said:"): a question or a remark. Call it as soon as you know the answer: at once when you already do, else right after the step that finds it out. It is shown in the chat and said aloud to a user who talks hands-free; then go on with the task. Only for those messages, never for progress or the task\'s result.',
   task_complete:
-    "Finish the task successfully. Call exactly once when the task is fully done. For questions and information tasks, write the full answer to the user as normal message text first (Markdown is rendered), then call this with a one-line summary; never put the answer or long text in the summary. Add a suggestion only when a next step is clearly likely.",
+    "Finish the task successfully. Call exactly once when the task is fully done. For questions and information tasks, write the full answer to the user as normal message text first (Markdown is rendered), then call this with a one-line summary; never put the answer or long text in the summary. The summary and spoken line state only what the page or tool results confirmed: what failed, showed no change or could not be confirmed is said as such. Add a suggestion only when a next step is clearly likely.",
   task_fail: "Finish the task as failed when it cannot be done. Add a suggestion only when a next request would clearly help (e.g. 'Try again after I sign in').",
   task_pause: "Stop and ask the human for help: login page, 2FA, CAPTCHA, warning, or anything uncertain. Add a suggestion only when the user's likely reply is clear.",
 };
@@ -291,8 +297,8 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
  */
 const JEV_DESCRIPTIONS: Partial<Record<ToolName, string>> = {
   read_page:
-    "Get the page URL, title, visible text and a compact list of the interactive elements (role and visible label, no index numbers). Describe the element you want in words in act; the fast picker finds it. Give `tabs` to read several tabs in one call (each under its own header) without switching to them.",
-  act: `Do up to ${MAX_ACT_STEPS} small steps in order, in one call. Describe each step's element in words: its visible label and role, and its position when several look alike (e.g. 'click the Reply button under the first post', 'type into the Post text box'); a fast model picks the element. Give text for steps that fill a field (a dropdown gets the option named by text), checked for checkboxes and radio buttons, and key for a step that only presses a key (e.g. {goal: 'submit the search', key: 'Enter'} after typing the search). If the fast model is not confident about a step, act stops there and returns a short numbered candidate list for that step only: send that step again with the same goal and the index of the right candidate, then continue. Do not send an index otherwise.`,
+    "Get the page URL, title, visible text (of a long page only the start: see find_text) and a compact list of the interactive elements (role and visible label, no index numbers). Describe the element you want in words in act; the fast picker finds it. Give `tabs` to read several tabs in one call (each under its own header) without switching to them.",
+  act: `Do up to ${MAX_ACT_STEPS} small steps in order, in one call. Describe each step's element in words: its visible label and role, and its position when several look alike (e.g. 'click the Reply button under the first post', 'type into the Post text box'); a fast model picks the element. Give text for steps that fill a field (text "" empties it; a dropdown gets the option named by text), checked for checkboxes and radio buttons, and key for a step that only presses a key (e.g. {goal: 'submit the search', key: 'Enter'} after typing the search). If the fast model is not confident about a step, act stops there and returns a short numbered candidate list for that step only: send that step again with the same goal and the index of the right candidate, then continue. Do not send an index otherwise, except while results say Jev is paused: then each step names its element by index from the latest list, until a result says Jev is back.`,
 };
 
 /** The description of a tool, for the given Jev mode. */
@@ -305,7 +311,7 @@ export const ToolArgsJev: typeof ToolArgs = {
   ...ToolArgs,
   act: actArgs({
     goal: "The step and its element in words, precisely: visible label, role, and position if several look alike, e.g. 'click the Reply button under the first post'",
-    index: "Only for a step the fast model just reported not confident about: the index of the right element from the candidate list act returned for it (same goal). Never otherwise",
+    index: "Only for a step the fast model just reported not confident about: the index of the right element from the candidate list act returned for it (same goal); or, while results say Jev is paused, its index from the latest list. Never otherwise",
     steps: "Steps done in order; the fast model picks each step's element. Stops at the first step it is not confident about and returns candidates for that step",
   }),
 };

@@ -117,7 +117,7 @@ const RULES: Rule[] = [
     test: startsWith(CLAUDE_CODE_GONE),
     help: () => ({
       message: "Local Claude Code isn't connected.",
-      hint: `Auto won't switch this chat to paid ${HOSTED_LABEL}.`,
+      hint: `Noa won't switch this chat to paid ${HOSTED_LABEL} on its own.`,
       fixes: [FIXES.claudeCode, FIXES.useHosted],
       retry: true,
     }),

@@ -22,6 +22,8 @@ describe("toolArgsSummary", () => {
     expect(toolArgsSummary("type", { index: 4, text: "hello" })).toBe('#4 "hello"');
     expect(toolArgsSummary("press_key", { key: "Control+Enter" })).toBe("Control+Enter");
     expect(toolArgsSummary("scroll", { direction: "down", amount: 2 })).toBe("down ×2");
+    expect(toolArgsSummary("find_text", { text: "Order 4417" })).toBe('"Order 4417"');
+    expect(toolArgsSummary("find_text", { text: "Pro", place: 3 })).toBe('"Pro" (place 3)');
     expect(toolArgsSummary("upload", { index: 3, paths: ["C:\\a\\b\\cat.png", "/x/dog.jpg"] })).toBe("#3 cat.png, dog.jpg");
     expect(toolArgsSummary("switch_x_account", { handle: "@me" })).toBe("@me");
     expect(toolArgsSummary("act", { steps: [{ goal: "open composer" }, { goal: "type", text: "hi" }, { goal: "post" }] })).toBe(
@@ -100,6 +102,9 @@ describe("describeEvent", () => {
   it("why a step was not Jev's: unavailable, no match, a key press, not approved, failed", () => {
     const base = { type: "jev", goal: "g", index: null, confidence: 0.9, executed: false, ms: 1 } as const;
     expect(jevFallback({ ...base, operation: "error", confidence: 0 }).why).toBe("Jev was unavailable, so Claude picked");
+    expect(jevFallback({ ...base, operation: "slow", confidence: 0, ms: 3001 }).why).toBe("Jev did not answer within 3 s, so Claude picked");
+    expect(jevFallback({ ...base, operation: "skipped", confidence: 0, ms: 0 }).why).toBe("Jev was too slow on the steps before, so Claude picked");
+    expect(describeEvent({ ...base, operation: "slow", confidence: 0, ms: 3001 })).toMatchObject({ kind: "jev", label: "Jev too slow · Claude picks" });
     expect(jevFallback({ ...base, operation: "blocked" }).why).toBe("Jev found no element that matches, so Claude picked");
     expect(jevFallback({ ...base, operation: "press_key" }).why).toMatch(/key press/);
     expect(jevFallback({ ...base, operation: "click", notRun: "not_approved" }).why).toBe("Jev picked it (0.90), but you did not approve it");

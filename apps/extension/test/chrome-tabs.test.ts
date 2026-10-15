@@ -74,6 +74,28 @@ describe("the group's look", () => {
     expect(chrome.tabGroups.byId.get(groupId)).toMatchObject({ title: "Bot tabs", color: "grey" });
   });
 
+  it("a rename while the extension saves its records stays the user's (the look is set before, never after)", async () => {
+    const groupId = await grouped();
+    // The user renames the group at the moment the extension saves what it set (chrome.storage.session.set).
+    const set = chrome.storage.session.set.bind(chrome.storage.session);
+    let renamed = false;
+    chrome.storage.session.set = async (items: Record<string, unknown>) => {
+      if (!renamed && "agentGroups" in items) {
+        renamed = true;
+        await chrome.tabGroups.update(groupId, { title: "Bot tabs" });
+      }
+      return set(items);
+    };
+    try {
+      await applyGroupLook(groupId, { title: "Noa · working", color: "purple" });
+      expect(chrome.tabGroups.byId.get(groupId)).toMatchObject({ title: "Bot tabs" });
+      await applyGroupLook(groupId, { title: "Noa · needs you", color: "yellow" });
+      expect(chrome.tabGroups.byId.get(groupId)).toMatchObject({ title: "Bot tabs", color: "yellow" });
+    } finally {
+      chrome.storage.session.set = set;
+    }
+  });
+
   it("a colour the user picked stays theirs; the title still follows the state", async () => {
     const groupId = await grouped();
     await chrome.tabGroups.update(groupId, { color: "green" });

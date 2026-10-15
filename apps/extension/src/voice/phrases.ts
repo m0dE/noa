@@ -31,6 +31,10 @@ const EXACT: Record<string, Lines> = {
     es: "Mirando la página", pt: "Olhando a página", fr: "Je regarde la page", de: "Ich schaue mir die Seite an", ko: "페이지를 보는 중이에요",
     ja: "ページを見ています", zh: "正在查看页面", hi: "पेज देख रहे हैं", ar: "جارٍ النظر في الصفحة",
   },
+  "Searching the page": {
+    es: "Buscando en la página", pt: "Procurando na página", fr: "Je cherche dans la page", de: "Ich durchsuche die Seite", ko: "페이지에서 찾는 중이에요",
+    ja: "ページ内を検索しています", zh: "正在页面中查找", hi: "पेज में खोज रहे हैं", ar: "جارٍ البحث في الصفحة",
+  },
   "Filling in the form": {
     es: "Rellenando el formulario", pt: "Preenchendo o formulário", fr: "Je remplis le formulaire", de: "Ich fülle das Formular aus", ko: "양식을 작성하는 중이에요",
     ja: "フォームに入力しています", zh: "正在填写表单", hi: "फ़ॉर्म भर रहे हैं", ar: "جارٍ ملء النموذج",

@@ -116,6 +116,8 @@ export interface FakeTab {
   groupId: number;
   status?: string;
   title?: string;
+  /** chrome.tabs.Tab.lastAccessed: which of the user's tabs they used last. */
+  lastAccessed?: number;
 }
 
 export interface FakeWindow {
@@ -376,6 +378,15 @@ export function installChromeFake() {
         fake.windows.focusOrder = fake.windows.focusOrder.filter((x) => x !== id);
       },
       onRemoved: new FakeEvent<unknown[]>(),
+    },
+    idle: {
+      /** What queryState answers: "active" is the user's input in the last seconds asked about. */
+      state: "idle" as "active" | "idle" | "locked",
+      queryCalls: [] as number[],
+      async queryState(seconds: number) {
+        fake.idle.queryCalls.push(seconds);
+        return fake.idle.state;
+      },
     },
     debugger: {
       attached: new Set<number>(),

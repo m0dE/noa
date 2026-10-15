@@ -6,15 +6,18 @@
 //
 // Loads the built extension plus test/fixtures/iframe-injector, which appends
 // its own chrome-extension:// iframe to every page (unless <meta name="no-inject">).
+// A run in such a tab tells the user: its chat's limited-mode notice (which extension, what it means, the fix), the
+// pill's "Limited" mark and its popover, the toolbar button's tooltip.
 // Usage: pnpm --filter @noa/extension build && node apps/extension/test/foreign-frame.e2e.mjs [--headed]
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { driverCall, launchExtension } from "../../../test/e2e/lib/extension.mjs";
+import { driverCall, launchExtension, routerUi, sessionWhen } from "../../../test/e2e/lib/extension.mjs";
+import { installFakeBrain } from "../../../test/e2e/lib/fake-brain.mjs";
 import { serveHtml } from "../../../test/e2e/lib/serve.mjs";
-import { createSuite } from "../../../test/e2e/lib/suite.mjs";
+import { createSuite, waitFor } from "../../../test/e2e/lib/suite.mjs";
 import { driverPage, fillSignupForm, findIndex, OTHER_PAGE } from "../../../test/fixtures/driver-page.mjs";
 
 /** Width and height from a JPEG's frame header. */
@@ -29,6 +32,8 @@ function jpegSize(buf) {
 }
 
 const injector = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "iframe-injector");
+const shots = join(dirname(fileURLToPath(import.meta.url)), "ui", "screenshots", "e2e");
+mkdirSync(shots, { recursive: true });
 /** The fallback note, naming the extension whose frame is on the page (the injector's id: it has no fixed key). */
 const noteFor = (id) =>
   `(Using fallback mode: the frame of another extension (id ${id}; chrome://extensions/?id=${id} shows which) on this page blocks Chrome's debugger. Clicks and typing are simulated.)`;
@@ -317,6 +322,99 @@ try {
     assert.equal((await mode()).fallback, true);
     assert.ok(times[0] < HEAVY_LOAD_MS && times[2] < HEAVY_LOAD_MS, `navigate took ${times.join(", ")} ms; the load event comes after ${HEAVY_LOAD_MS} ms`);
     return `navigate times (heavy, light, heavy): ${times.join(", ")} ms`;
+  });
+
+  await step("a run in a tab in limited mode: its chat says so (which extension, the fix), the pill says 'Limited' and its popover why", async () => {
+    const fake = await installFakeBrain(sw, {
+      gated: true,
+      makeAct: () => async ({ browser, onEvent }) => {
+        onEvent({ type: "tool_call", id: "c1", name: "read_page", args: {} });
+        await browser.call("browser.readPage", {});
+        // Holds the run (still acting) until the test lets it end.
+        await new Promise((r) => (globalThis.__endLimited = r));
+        return "read";
+      },
+    });
+    const tabId = (await mode()).tab;
+    const injectorId = /^chrome-extension:\/\/([a-p]{32})\//.exec(await page.$eval("#foreign-extension-frame", (f) => f.src))?.[1];
+    const run = await routerUi(sw)({ type: "run.adhoc", instructions: "Summarize my inbox", tabId });
+    await fake.release("Summarize my inbox");
+    const told = await waitFor(
+      () => sw.evaluate(async (id) => (await globalThis.__noa.sessions.eventsOf(id)).filter((e) => e.type === "limited_mode").map(({ ts, sessionId, ...e }) => e), run.sessionId).then((l) => (l.length ? l : null)),
+      "the chat's limited-mode notice",
+    );
+    assert.deepEqual(told, [{ type: "limited_mode", tab: "t1", url: `${base}/heavy`, extensionId: injectorId }]);
+
+    /** The pill's mark and popover, as the extension's isolated world sees them. */
+    const pill = () =>
+      sw.evaluate(async (t) => {
+        const [res] = await chrome.scripting.executeScript({
+          target: { tabId: t },
+          func: () => {
+            const root = window.__noaControl?.root;
+            const mark = root?.querySelector(".mark");
+            const pop = root?.querySelector(".pop");
+            const text = root?.querySelector(".text")?.getBoundingClientRect();
+            if (!mark || !pop || !text) return null;
+            return {
+              mark: getComputedStyle(mark).display !== "none" ? mark.textContent : null,
+              popover: getComputedStyle(pop).display !== "none" ? [...pop.children].filter((c) => !c.hidden).map((c) => c.textContent) : null,
+              at: { x: text.x + text.width / 2, y: text.y + text.height / 2 },
+            };
+          },
+        });
+        return res?.result ?? null;
+      }, tabId);
+    const shown = await waitFor(async () => {
+      const p = await pill();
+      return p?.mark ? p : null;
+    }, "the pill's Limited mark");
+    assert.equal(shown.mark, "Limited");
+    // The limited-mode flag and the step ("Now: …") reach the tooltip from separate events: wait for the whole text.
+    const expected = "Noa is working in this tab: Summarize my inbox · Now: Reading the page · Limited mode: another extension blocks Chrome's debugger here";
+    let tooltip = "";
+    await waitFor(async () => {
+      tooltip = await sw.evaluate((t) => chrome.action.getTitle({ tabId: t }), tabId);
+      return tooltip === expected ? tooltip : null;
+    }, "the tooltip").catch(() => null);
+    assert.equal(tooltip, expected);
+    await page.mouse.move(shown.at.x, shown.at.y);
+    const open = await waitFor(async () => (await pill())?.popover, "the popover");
+    assert.equal(open[0], "Summarize my inbox");
+    assert.equal(open[1], "Now: Reading the page");
+    assert.match(open[2], /^Limited mode: another extension's frame on this page blocks Chrome's debugger\. .*simulated.*can't upload files/);
+    await page.screenshot({ path: join(shots, "limited-pill-popover.png") });
+    await page.mouse.move(5, 600);
+
+    // The side panel (as a tab): the run's chat shows the notice in the thread, with the other extension's page.
+    const panel = await context.newPage();
+    await panel.setViewportSize({ width: 420, height: 720 });
+    await panel.goto(`chrome-extension://${ext.extensionId}/sidepanel.html`);
+    // A panel shows the working job of its window's tab; else the list, where the job is opened.
+    const notice = panel.locator(".ev-limited");
+    const row = panel.locator("button.job-row:visible", { hasText: "Summarize my inbox" });
+    await notice.or(row).first().waitFor({ timeout: 15_000 });
+    if (!(await notice.isVisible())) await row.first().click();
+    await notice.waitFor({ timeout: 15_000 });
+    const text = await notice.innerText();
+    assert.match(text, /^Limited mode in tab t1 on 127\.0\.0\.1:\d+\n/);
+    assert.ok(text.includes(`Another extension (id ${injectorId}) has a frame on this page that blocks Chrome's debugger.`), text);
+    assert.equal(await notice.locator("button").innerText(), "Open that extension");
+    // Not folded into the steps: a child of the thread itself.
+    assert.equal(await notice.evaluate((el) => el.closest(".ev-steps")), null);
+    await panel.screenshot({ path: join(shots, "limited-sidepanel.png") });
+    // Its button opens the other extension's page in Chrome (where it is turned off, or its site access changed).
+    const settings = `chrome://extensions/?id=${injectorId}`;
+    await notice.locator("button").click();
+    await waitFor(() => sw.evaluate(async (url) => (await chrome.tabs.query({})).some((t) => (t.pendingUrl || t.url) === url), settings), "the other extension's page");
+    await sw.evaluate(async (url) => {
+      for (const t of await chrome.tabs.query({})) if ((t.pendingUrl || t.url) === url) await chrome.tabs.remove(t.id);
+    }, settings);
+    await panel.close();
+
+    await sw.evaluate(() => globalThis.__endLimited());
+    await sessionWhen(sw, run.sessionId, "the run to end");
+    return `${JSON.stringify(told[0])}; pill ${shown.mark}; popover ${JSON.stringify(open)}`;
   });
 } finally {
   await ext.close();

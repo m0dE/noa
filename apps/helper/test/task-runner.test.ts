@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { EventEmitter, getEventListeners } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -8,7 +8,7 @@ import { HelperErrorCode, TODO_TOOLS, type AgentEvent, type AgentTask, type RunC
 import { agentError, classifyFailure, ENDED_WITHOUT_RESULT, EXITED_WITHOUT_RESULT, TASK_FAIL_RECHECK, type JevLike } from "@noa/core";
 import { TaskRunner, type RunTaskParams, type TaskRunnerDeps } from "../src/task-runner.js";
 import { ToolRouter } from "../src/tool-router.js";
-import { AttachmentInbox } from "../src/session/attachments.js";
+import { AttachmentInbox, withBytes } from "../src/session/attachments.js";
 import { LiveLog } from "../src/logger.js";
 import { INTERACTIVE_TASK_ID } from "../src/mcp-tools.js";
 import { ScriptedBrain } from "../src/brains/scripted.js";
@@ -867,14 +867,19 @@ describe("TaskRunner: attachments", () => {
   const notes = { ref: { id: "a2", name: "notes.txt", type: "text/plain", size: 5, kind: "text" as const }, fresh: true, text: "hello" };
 
   /** A kept-open brain that records the prompt and each follow-up, and answers each with task_complete. */
-  function recordingBrain(router: ToolRouter, seen: { ctx?: BrainContext; messages: string[]; results?: string[] }, followUp?: (taskId: string) => Promise<string>): Brain {
+  function recordingBrain(
+    router: ToolRouter,
+    seen: { ctx?: BrainContext; messages: string[]; blocks?: unknown[]; results?: string[] },
+    followUp?: (taskId: string) => Promise<string>,
+  ): Brain {
     return {
       persistent: true,
       run: async (ctx) => {
         seen.ctx = ctx;
         void router.call(ctx.taskId, "task_complete", { summary: "first" });
-        ctx.input.onMessage((text) => {
+        ctx.input.onMessage((text, blocks) => {
           seen.messages.push(text);
+          (seen.blocks ??= []).push(blocks);
           void (async () => {
             if (followUp) (seen.results ??= []).push(await followUp(ctx.taskId));
             await router.call(ctx.taskId, "task_complete", { summary: "next" });
@@ -885,7 +890,7 @@ describe("TaskRunner: attachments", () => {
     };
   }
 
-  it("moves sent files into the run folder's attachments folder, where Claude Code runs and may Read them", async () => {
+  it("moves sent files into the run folder's attachments folder, and shows the images in the first message", async () => {
     const seen: { ctx?: BrainContext; messages: string[] } = { messages: [] };
     const inbox = new AttachmentInbox(join(dir, "incoming"));
     const { runner } = setup(new FakeX(), { inbox, brain: (router) => recordingBrain(router, seen) });
@@ -895,27 +900,33 @@ describe("TaskRunner: attachments", () => {
     inbox.put({ sessionId: "S1", id: "a2", offset: 0, dataBase64: Buffer.from("hello").toString("base64") });
     await runner.run(params({ instructions: "What is in the picture?" }, { attachments: [photo, notes] }));
     const ctx = seen.ctx!;
-    const readDir = join(join(ctx.mcpConfigPath, ".."), "attachments");
-    expect(ctx.readDir).toBe(readDir);
-    expect(readFileSync(join(readDir, "cat.png"), "utf8")).toBe("PNG!");
-    expect(ctx.prompt).toContain(`1. cat.png (image, 2x2): to look at it, Read ${join(readDir, "cat.png")}`);
+    const filesDir = join(join(ctx.mcpConfigPath, ".."), "attachments");
+    expect(readFileSync(join(filesDir, "cat.png"), "utf8")).toBe("PNG!");
+    // The picture is a block before the prompt (Claude Code has no Read); the text file's text is in the prompt.
+    expect(ctx.blocks).toEqual([
+      { type: "text", text: "Attachment: cat.png" },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: Buffer.from("PNG!").toString("base64") } },
+    ]);
+    expect(ctx.prompt).toContain(`1. cat.png (image, 2x2): shown above as "Attachment: cat.png".\n   upload path: ${join(filesDir, "cat.png")}`);
     expect(ctx.prompt).toContain("2. notes.txt (text file, 5 B), its text:\n<<<\nhello\n>>>");
-    expect(ctx.systemPrompt).toMatch(/no file access except Read on the files the user attached/);
+    expect(ctx.systemPrompt).toContain("You have no shell, file or web access other than these tools");
+    expect(ctx.systemPrompt).not.toMatch(/\bRead\b on/);
     // The scripted brain uploads what the task has: its files are among them.
-    expect(ctx.task!.mediaPaths).toEqual([join(readDir, "cat.png"), join(readDir, "notes.txt")]);
+    expect(ctx.task!.mediaPaths).toEqual([join(filesDir, "cat.png"), join(filesDir, "notes.txt")]);
     // Nothing is left waiting.
     expect(existsSync(join(dir, "incoming", "S1", "a1"))).toBe(false);
     runner.endSession("S1");
   });
 
-  it("a follow-up's files are placed beside the earlier ones; upload may attach them, and the message lists them", async () => {
-    const seen: { ctx?: BrainContext; messages: string[]; results?: string[] } = { messages: [] };
+  it("a follow-up's files are placed beside the earlier ones; its images are shown with it, and upload may attach them", async () => {
+    const seen: { ctx?: BrainContext; messages: string[]; blocks?: unknown[]; results?: string[] } = { messages: [] };
     const inbox = new AttachmentInbox(join(dir, "incoming"));
     const x = new FakeX({ url: "https://x.com/compose/post" });
+    const filesDir = () => join(join(seen.ctx!.mcpConfigPath, ".."), "attachments");
     // The follow-up's turn uploads the new file.
     const upload = async (taskId: string) => {
       await router.call(taskId, "read_page", {});
-      const r = await router.call(taskId, "upload", { index: 3, paths: [join(seen.ctx!.readDir!, "cat-2.png")] });
+      const r = await router.call(taskId, "upload", { index: 3, paths: [join(filesDir(), "cat-2.png")] });
       return r.text ?? "";
     };
     const { runner, router } = setup(x, { inbox, brain: (r) => recordingBrain(r, seen, upload) });
@@ -924,14 +935,49 @@ describe("TaskRunner: attachments", () => {
     inbox.put({ sessionId: "S1", id: "a3", offset: 0, dataBase64: Buffer.from("two").toString("base64") });
     const second = { ref: { ...photo.ref, id: "a3" }, fresh: true };
     await runner.continueSession({ sessionId: "S1", text: "and this one", config: CONFIG, attachments: [{ ...photo, fresh: false }, second] });
-    const readDir = seen.ctx!.readDir!;
     // Same name: made unique.
-    expect(readFileSync(join(readDir, "cat-2.png"), "utf8")).toBe("two");
-    expect(seen.messages[0]).toMatch(/and this one\n\nFiles the user attached to this message \(1\):\n1\. cat\.png \(image, 2x2\): to look at it, Read .*cat-2\.png/);
-    expect(seen.messages[0]).toMatch(/Files the user attached earlier in this conversation \(1\):\n2\. cat\.png .*Read .*cat\.png/);
+    expect(readFileSync(join(filesDir(), "cat-2.png"), "utf8")).toBe("two");
+    // Only the new picture goes with the follow-up: the session saw the first one with its first message.
+    expect(seen.blocks![0]).toEqual([
+      { type: "text", text: "Attachment: cat.png" },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: Buffer.from("two").toString("base64") } },
+    ]);
+    expect(seen.messages[0]).toMatch(/and this one\n\nFiles the user attached to this message \(1\):\n1\. cat\.png \(image, 2x2\): shown above as "Attachment: cat\.png"\.\n\s+upload path: .*cat-2\.png/);
+    expect(seen.messages[0]).toMatch(/Files the user attached earlier in this conversation \(1\):\n2\. cat\.png \(image, 2x2\): shown with an earlier message\.\n\s+upload path: .*cat\.png/);
     // upload took the new file (the session's tools allow it from that turn on).
     expect(seen.results).toEqual(["Attached 1 file(s) to [3]."]);
-    expect(x.files).toEqual([join(readDir, "cat-2.png")]);
+    expect(x.files).toEqual([join(filesDir(), "cat-2.png")]);
+    runner.endSession("S1");
+  });
+
+  it("withBytes: this message's files first, then the newest earlier ones, up to the byte budget; the rest are withheld", () => {
+    const file = (id: string, size: number, fresh: boolean, kind: "image" | "pdf" | "text" = "image") => {
+      const path = join(dir, `${id}.bin`);
+      writeFileSync(path, Buffer.alloc(size, 1));
+      return { ref: { id, name: `${id}.bin`, type: kind === "pdf" ? "application/pdf" : kind === "text" ? "text/plain" : "image/png", size, kind }, fresh, path };
+    };
+    const list = [file("old", 40, false), file("mid", 40, false), file("notes", 40, false, "text"), file("new", 50, true), file("gone", 1, true)];
+    rmSync(list[4]!.path);
+    const got = withBytes(list, () => true, 100);
+    // new (50) + mid (40) fit; old would pass 100; a text file is never sent as bytes; a missing file is withheld.
+    expect(got.map((a) => [a.ref.id, a.base64 !== undefined, a.withheld === true])).toEqual([
+      ["old", false, true],
+      ["mid", true, false],
+      ["notes", false, false],
+      ["new", true, false],
+      ["gone", false, true],
+    ]);
+    expect(withBytes(list.slice(0, 4), (a) => a.fresh, 100).map((a) => a.base64 !== undefined)).toEqual([false, false, false, true]);
+  });
+
+  it("a new session for a conversation with earlier files shows those images again", async () => {
+    const seen: { ctx?: BrainContext; messages: string[] } = { messages: [] };
+    const inbox = new AttachmentInbox(join(dir, "incoming"));
+    const { runner } = setup(new FakeX(), { inbox, brain: (router) => recordingBrain(router, seen) });
+    inbox.put({ sessionId: "S1", id: "a1", offset: 0, dataBase64: Buffer.from("old").toString("base64") });
+    await runner.run(params({}, { attachments: [{ ...photo, fresh: false }] }));
+    expect(seen.ctx!.blocks).toHaveLength(2);
+    expect(seen.ctx!.prompt).toContain('1. cat.png (image, 2x2): shown above as "Attachment: cat.png".');
     runner.endSession("S1");
   });
 
@@ -944,11 +990,13 @@ describe("TaskRunner: attachments", () => {
     expect(() => inbox.put({ sessionId: "S1", id: "a1", offset: 0, dataBase64: big })).toThrow(/a piece can be at most/);
   });
 
-  it("an attachment that never arrived is listed without a path (the model is told it cannot open it)", async () => {
+  it("an attachment that never arrived is listed without a path (the model is told it could not be shown)", async () => {
     const seen: { ctx?: BrainContext; messages: string[] } = { messages: [] };
     const { runner } = setup(new FakeX(), { brain: (router) => recordingBrain(router, seen) });
     await runner.run(params({}, { attachments: [photo] }));
-    expect(seen.ctx!.prompt).toContain("1. cat.png (image, 2x2): you cannot open this kind of file; you can upload it.");
+    expect(seen.ctx!.prompt).toContain("1. cat.png (image, 2x2): it could not be shown to you.");
+    expect(seen.ctx!.prompt).not.toContain("upload path:");
+    expect(seen.ctx!.blocks).toBeUndefined();
     runner.endSession("S1");
   });
 });

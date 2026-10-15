@@ -80,7 +80,7 @@ describe("ClaudeCodeBrain process handling (fake claude)", () => {
     const log: Record<string, any>[] = [];
     // A task session's real prompt, with every tool, Jev and follow-ups (the longest there is).
     const tools = TOOL_NAMES.filter((n) => toolsFor().includes(n));
-    const systemPrompt = buildSystemPrompt({ tools, jev: true, followUps: true, readAttachments: true });
+    const systemPrompt = buildSystemPrompt({ tools, jev: true, followUps: true });
     expect(systemPrompt.length).toBeGreaterThan(20_000);
     const c = { ...ctx(new AbortController().signal, log, []), systemPrompt };
     await brain().run(c);
@@ -273,6 +273,36 @@ describe("ClaudeCodeBrain process handling (fake claude)", () => {
     // Claude Code repeats its init event every turn; "started" shows once.
     expect(events.filter((e) => e.type === "status")).toEqual([{ type: "status", text: "Claude Code started (sonnet)" }]);
     expect(log.at(-1)).toMatchObject({ type: "claude_exit", code: 0 });
+  });
+
+  it("attached images go to Claude Code as blocks before the text, with the first message and with a later one (no Read tool)", async () => {
+    const log: Record<string, any>[] = [];
+    const input = new UserInput();
+    let idle = 0;
+    const image = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
+    const first = "A".repeat(4096);
+    const later = "B".repeat(2048);
+    const c = { ...ctx(new AbortController().signal, log, [], input), blocks: [{ type: "text", text: "Attachment: one.png" }, image(first)], idle: () => idle++ };
+    const run = new ClaudeCodeBrain({ claudePath: process.execPath, model: "sonnet", prefixArgs: [FAKE], persistent: true }).run(c);
+    await vi.waitFor(() => expect(idle).toBe(1), { timeout: 10_000 });
+    input.push("Next message from the user: and this", [{ type: "text", text: "Attachment: two.png" }, image(later)]);
+    await vi.waitFor(() => expect(idle).toBe(2), { timeout: 10_000 });
+    input.close();
+    await run;
+    const init = log.find((e) => e.type === "claude" && e.event.type === "system")!.event;
+    expect(init.args.slice(init.args.indexOf("--tools"), init.args.indexOf("--tools") + 2)).toEqual(["--tools", ""]);
+    expect(init.args).not.toContain("--permission-mode");
+    // Claude Code echoes what it read: the run log keeps each message's blocks, without the image bytes.
+    const replays = log.filter((e) => e.type === "claude" && e.event.isReplay).map((e) => e.event.message.content);
+    expect(replays).toEqual([
+      [{ type: "text", text: "Attachment: one.png" }, { type: "image", source: { type: "base64", media_type: "image/png", data: "[3 KB of base64 data not logged]" } }, { type: "text", text: c.prompt }],
+      [
+        { type: "text", text: "Attachment: two.png" },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "[2 KB of base64 data not logged]" } },
+        { type: "text", text: "Next message from the user: and this" },
+      ],
+    ]);
+    expect(log.find((e) => e.type === "claude_user_message")).toMatchObject({ kind: "followup", blocks: 2 });
   });
 
   it("persistent: the request Claude Code starts after the turn's task_* result is stopped at once; nothing it wrote shows, its rows are still traced, and the session answers the next message", async () => {

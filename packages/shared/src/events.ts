@@ -126,6 +126,19 @@ export type AgentEvent =
    */
   | { type: "dialog"; dialog: JsDialog; outcome: DialogAnswer; by: DialogAnsweredBy; tab?: string; text?: string }
   /**
+   * A tab of the run went into limited mode: another extension's frame on its page blocks Chrome's debugger, so the
+   * agent's clicks and typing there are simulated (a site may ignore them) and files cannot be uploaded. tab: the
+   * run's short id of the tab; url: its page; extensionId: the other extension, when the page shows it. Once per tab
+   * in a conversation. Written by the extension, never by a brain.
+   */
+  | { type: "limited_mode"; tab?: string; url?: string; extensionId?: string }
+  /**
+   * Auto tab switching brought a tab of the run to the front, so the agent could see it (a screenshot): the chat
+   * says so once per conversation, with how to turn it off. tab: the run's short id of the tab; url: its page.
+   * Written by the extension, never by a brain.
+   */
+  | { type: "auto_tab_switching"; tab?: string; url?: string }
+  /**
    * The agent's memory changed from this conversation (remember, forget, a task's run note): the chat shows
    * "Remembered: ..." with Undo. before / after: the entry before and after the change (null: it did not exist /
    * it was forgotten); Undo puts `before` back. replaced: an entry it replaced under another subject (remember's
@@ -313,3 +326,11 @@ export function isMemoryUndone(events: readonly AgentEvent[], changeId: string):
   }
   return undone;
 }
+
+/** Limited mode (event limited_mode) as the user is told about it: the chat's notice, the pill's popover, the badge's tooltip. */
+export const LIMITED_MODE = {
+  /** In a few words (the badge's tooltip). */
+  short: "Limited mode: another extension blocks Chrome's debugger here",
+  /** What it means for the run on that page. */
+  effect: "Noa's clicks and typing there are simulated, so some sites ignore them, and it can't upload files.",
+} as const;

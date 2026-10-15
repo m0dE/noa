@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hideIndicatorInPage, INDICATOR_MESSAGE, INDICATOR_TAG, isIndicatorMessage, PageIndicators, removeIndicatorInPage, showIndicatorInPage } from "../src/page-indicator.js";
+import { hideIndicatorInPage, INDICATOR_MESSAGE, INDICATOR_TAG, isIndicatorMessage, NO_DETAILS, PageIndicators, removeIndicatorInPage, showIndicatorInPage } from "../src/page-indicator.js";
 import { AgentTab } from "../src/agent-tab.js";
 import { Cdp } from "../src/cdp.js";
 import { Driver } from "../src/driver.js";
@@ -15,7 +15,7 @@ describe("PageIndicators", () => {
   it("shows the overlay in the tab's top frame and removes it", async () => {
     const { pages, calls } = recording();
     await pages.show(4, "working");
-    expect(calls).toEqual([[4, showIndicatorInPage.name, [INDICATOR_TAG, "working", INDICATOR_MESSAGE]]]);
+    expect(calls).toEqual([[4, showIndicatorInPage.name, [INDICATOR_TAG, "working", INDICATOR_MESSAGE, NO_DETAILS]]]);
     expect(pages.has(4)).toBe(true);
     await pages.remove(4);
     expect(calls.at(-1)).toEqual([4, removeIndicatorInPage.name, []]);
@@ -62,7 +62,7 @@ describe("PageIndicators", () => {
     expect(order).toEqual([`${hideIndicatorInPage.name}(["pill"])`, `${hideIndicatorInPage.name}([null])`]);
     unfreeze();
     await next;
-    expect(order.at(-1)).toBe(`${showIndicatorInPage.name}(${JSON.stringify([INDICATOR_TAG, "needs-you", INDICATOR_MESSAGE])})`);
+    expect(order.at(-1)).toBe(`${showIndicatorInPage.name}(${JSON.stringify([INDICATOR_TAG, "needs-you", INDICATOR_MESSAGE, NO_DETAILS])})`);
   });
 
   it("a tab without the overlay runs the call as it is (no page script)", async () => {

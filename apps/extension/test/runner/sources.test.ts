@@ -27,7 +27,7 @@ describe("Runner: local tasks", () => {
     expect(start.task).toEqual({ id: t.id, instructions: "Post hello", account: "@me", timeZone: localTimeZone(), approvals: automationPromptLine("full_within_task") });
     expect(start.mediaPaths).toEqual(["C:\\dl\\a.png"]);
     // Scheduled runs use the agent's own tab, in the background.
-    expect(h.prepared).toEqual([{ mode: "own-tab" }]);
+    expect(h.prepared).toEqual([{ mode: "own-tab", userTabs: true }]);
     expect(start.config).toMatchObject({ isRetry: false, maxToolCalls: 60, jevEnabled: true, model: "claude-sonnet-5" });
     expect(h.materialized[0]!.sources[0]).toMatchObject({ kind: "blob", name: "a.png" });
     expect(h.cleanups).toBe(1);
@@ -204,7 +204,7 @@ describe("Runner: adhoc sessions", () => {
     expect((await h.sessions.get(sessionId))!.attachments).toEqual([{ ...ref, thumb: "data:image/jpeg;base64,AA" }]);
     expect(h.brain.starts[0]!.attachments).toEqual([{ ref, fresh: true, blob: expect.any(Blob), path: "C:\\dl\\x.png", base64: btoa("x") }]);
     // One-off runs act on the tab the user is looking at.
-    expect(h.prepared).toEqual([{ mode: "current-tab" }]);
+    expect(h.prepared).toEqual([{ mode: "current-tab", userTabs: true }]);
     expect(await h.store.list()).toEqual([]);
     expect(await h.runner.say("late")).toBe(false);
   });

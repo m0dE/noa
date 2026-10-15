@@ -13,7 +13,7 @@
       <header class="head">
         <img class="brand" src="icons/icon48.png" alt="" width="40" height="40" />
         <div class="head-text">
-          <h1>Noa extension settings</h1>
+          <div class="head-title"><h1>Noa extension settings</h1><span id="head-version" class="head-version"></span></div>
           <p class="head-sub">Choose how Noa runs your tasks. Changes save as you make them.</p>
         </div>
         <span id="head-acct"></span>
@@ -97,38 +97,10 @@
             <h3 class="group-title" id="h-brain">Source</h3>
             <p class="group-hint">Which Claude runs your tasks.</p>
             <div class="box options" role="radiogroup" aria-labelledby="h-brain">
-              <div class="opt" data-brain="auto">
-                <label class="opt-head">
-                  <input type="radio" name="brain" value="auto" />
-                  <span class="opt-text"><b>Auto</b><small class="opt-detail"></small></span>
-                </label>
-                <div class="reveal"><div class="reveal-inner">
-                  <p id="auto-pick" class="inline-status"><span class="dot"></span><span class="t"></span></p>
-                </div></div>
-              </div>
-
-              <div class="opt" data-brain="noa">
-                <label class="opt-head">
-                  <input type="radio" name="brain" value="noa" aria-describedby="hosted-aside" />
-                  <span class="opt-text"><b>Noa AI</b><small class="opt-detail"></small></span>
-                </label>
-                <div id="hosted-aside" class="opt-aside">
-                  <div id="hosted-out" class="row" hidden>
-                    <button id="hosted-signin" type="button" class="small primary">Log in to use Noa AI</button>
-                    <span id="hosted-signin-msg" class="msg"></span>
-                  </div>
-                  <div id="hosted-in" class="row" hidden>
-                    <span class="chip" id="hosted-plan"></span>
-                    <span class="chip" id="hosted-credit"></span>
-                    <button id="hosted-action" type="button" class="small link" hidden></button>
-                  </div>
-                </div>
-              </div>
-
               <div class="opt" data-brain="claude-code">
                 <label class="opt-head">
                   <input type="radio" name="brain" value="claude-code" />
-                  <span class="opt-text"><b>Local Claude Code (Recommended)</b><small class="opt-detail"></small></span>
+                  <span class="opt-text"><b>Local Claude Code</b><small class="opt-detail"></small></span>
                 </label>
                 <div class="reveal"><div class="reveal-inner">
                   <div class="helper" id="helper-box">
@@ -149,11 +121,31 @@
                           <button id="helper-copy" type="button" class="small primary">Copy</button>
                         </div>
                       </li>
-                      <li id="helper-step-repo" hidden><span id="helper-repo-why"></span> From a copy of the Noa repository, run <code>pnpm install</code>, <code>pnpm build</code>, then <code>node apps/helper/dist/install.js</code>.</li>
-                      <li>Come back to this page. It connects by itself; if not, click <b id="helper-connect-name">Connect</b>.</li>
+                      <li id="helper-step-repo" hidden><span id="helper-repo-why">The installer for this version of Noa is not on noa.bot yet, so there is nothing to run right now.</span> Click <b class="helper-recheck-name">Connect</b> again in a few minutes.
+                        <p class="hint" style="margin-top: 4px">Only if you build Noa from its source code: in that folder run <code>pnpm install</code> and <code>pnpm build</code>, then <code>node apps/helper/dist/install.js</code></p>
+                      </li>
+                      <li id="helper-step-back">Come back to this page. It connects by itself; if not, click <b id="helper-connect-name">Connect</b>.</li>
                     </ol>
                   </div>
                 </div></div>
+              </div>
+
+              <div class="opt" data-brain="noa">
+                <label class="opt-head">
+                  <input type="radio" name="brain" value="noa" aria-describedby="hosted-aside" />
+                  <span class="opt-text"><b>Noa AI</b><small class="opt-detail"></small></span>
+                </label>
+                <div id="hosted-aside" class="opt-aside">
+                  <div id="hosted-out" class="row" hidden>
+                    <button id="hosted-signin" type="button" class="small primary">Log in to use Noa AI</button>
+                    <span id="hosted-signin-msg" class="msg"></span>
+                  </div>
+                  <div id="hosted-in" class="row" hidden>
+                    <span class="chip" id="hosted-plan"></span>
+                    <span class="chip" id="hosted-credit"></span>
+                    <button id="hosted-action" type="button" class="small link" hidden></button>
+                  </div>
+                </div>
               </div>
 
               <div class="opt" data-brain="claude-api">
@@ -395,6 +387,14 @@
               <div class="srow">
                 <label class="srow-label" for="f-showControlOverlay"><b>Show when Noa controls a tab</b><small>A glow around the page and a "Noa is working" bar with Stop. The Noa tab group always shows it.</small></label>
                 <div class="srow-control"><span class="switch"><input id="f-showControlOverlay" type="checkbox" role="switch" /></span></div>
+              </div>
+              <div class="srow" id="tab-switching-row">
+                <label class="srow-label" for="f-autoTabSwitching"><b>Auto tab switching</b><small>Noa switches to its tab when it needs to see the page (to take a screenshot), so a tab may come to the front while you work. Off: Noa asks first, and without your OK it can't see tabs you're not looking at, which limits what it can do.</small></label>
+                <div class="srow-control"><span class="switch"><input id="f-autoTabSwitching" type="checkbox" role="switch" /></span></div>
+              </div>
+              <div class="srow" id="share-tabs-row">
+                <label class="srow-label" for="f-shareOtherTabs"><b>Use my other tabs</b><small>A chat you start from a tab is told about your other tabs in that window (their titles and addresses, without the part after "?" or "#") and can read them. Off: Noa only sees the tab you start from and the tabs it opens.</small></label>
+                <div class="srow-control"><span class="switch"><input id="f-shareOtherTabs" type="checkbox" role="switch" /></span></div>
               </div>
             </div>
           </div>

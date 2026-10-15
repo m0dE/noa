@@ -104,6 +104,22 @@ describe("mcp-server.js over stdio", () => {
     }
   });
 
+  it("offers find_text (the text required, a place number optional) and relays it", async () => {
+    const client = await connect("read_page,find_text");
+    try {
+      const { tools } = await client.listTools();
+      const find = tools.find((t) => t.name === "find_text")!;
+      expect(find.description).toMatch(/Find text anywhere on the current page/);
+      expect((find.inputSchema as any).required).toEqual(["text"]);
+      expect((find.inputSchema as any).properties.place.type).toBe("integer");
+      received.length = 0;
+      await client.callTool({ name: "find_text", arguments: { text: "Order 4417" } });
+      expect(received).toEqual([{ taskId: "T9", name: "find_text", args: { text: "Order 4417" } }]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("exits when Claude Code goes away (stdin closes), though the helper's pipe is still open", async () => {
     const child = spawn(process.execPath, [MCP_JS], {
       env: { ...getDefaultEnvironment(), NOA_PIPE: pipePath, NOA_PIPE_TOKEN: TOKEN, NOA_TASK: "T9", NOA_TOOLS: "read_page" },

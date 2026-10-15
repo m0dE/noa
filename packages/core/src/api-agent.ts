@@ -8,7 +8,7 @@
  * the next turn on top of it, like a chat.
  */
 import { ANTHROPIC_MESSAGES_URL, ATTACHMENT_LIMITS, delay, DeltaBatcher, errorMessage, stopwatch, toolsFor, traceText, type AgentEvent, type RunConfig, type Sleep, type TaskRunResult, type ToolName, type TraceDraft } from "@noa/shared";
-import type { AgentSession, ApiAgentOptions } from "./types.js";
+import type { AgentSession, ApiAgentOptions, ToolExecutor } from "./types.js";
 import { attachmentBlocks, withAttachmentLines, type ApiAttachment } from "./attachments.js";
 import { createToolExecutor } from "./executor.js";
 import { agentError, CLAUDE_DECLINED, ENDED_WITHOUT_RESULT } from "./failures.js";
@@ -169,7 +169,12 @@ export function startApiAgentWith(opts: ApiAgentOptions, internals: ApiAgentInte
       /* listeners must not break the loop */
     }
   });
+  /** The executor, once it exists: task_complete checks the answer text the user reads, and may hold it back (noteText). */
+  let textGate: Pick<ToolExecutor, "noteText" | "flushText"> | undefined;
   const emit = (e: AgentEvent) => {
+    if (e.type === "assistant_text" || e.type === "assistant_text_delta") {
+      if (textGate?.noteText?.(e)) return;
+    } else if (e.type !== "trace") textGate?.flushText?.();
     reasoning.observe(e);
     batcher.emit(e);
   };
@@ -212,6 +217,7 @@ export function startApiAgentWith(opts: ApiAgentOptions, internals: ApiAgentInte
     ...(opts.todo ? { todo: opts.todo } : {}),
     ...(opts.memory ? { memory: opts.memory } : {}),
   });
+  textGate = executor;
 
   const tools = toolsFor({ images: opts.config.imageGeneration !== false });
   const system = buildSystemPrompt({ tools, jev: jevOn });
@@ -501,12 +507,12 @@ export function startApiAgentWith(opts: ApiAgentOptions, internals: ApiAgentInte
     emit({ type: "user_message", text });
     const attachments = next.attachments ?? [];
     executor.allowMedia(uploadPaths(attachments));
-    addUserText(withAttachmentLines(`${FOLLOW_UP_PREFIX}${text}`, attachments, "blocks"), attachmentBlocks(attachments));
+    addUserText(withAttachmentLines(`${FOLLOW_UP_PREFIX}${text}`, attachments), attachmentBlocks(attachments));
     return runTurn(next.config ?? opts.config);
   }
 
   const attachments = opts.attachments ?? [];
-  const taskPrompt = buildTaskPrompt(opts.task, opts.mediaPaths, { isRetry: opts.config.isRetry, attachments, view: "blocks" });
+  const taskPrompt = buildTaskPrompt(opts.task, opts.mediaPaths, { isRetry: opts.config.isRetry, attachments });
   messages.push({ role: "user", content: [...attachmentBlocks(attachments), { type: "text", text: taskPrompt }] });
   emit({ type: "status", text: `${label} (${opts.model})${jevOn ? " with Jev" : ""}` });
   return runTurn(opts.config);

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChromeFake } from "./chrome-fake.js";
 import { driverHarness, userWindow as openWindow } from "./driver-harness.js";
-import { AgentTab } from "../src/agent-tab.js";
+import { addressOnly, AgentTab, keptChatTabs } from "../src/agent-tab.js";
 import { DEBUGGER_CANCELED, type Cdp } from "../src/cdp.js";
 import type { Driver } from "../src/driver.js";
 import { PAGE_MARKS } from "../src/driver-common.js";
@@ -35,6 +35,17 @@ const inputCommands = () => chrome.debugger.commands.filter((c) => c.method.star
 
 /** A focused normal window whose active tab shows `url`. */
 const userWindow = (url: string) => openWindow(chrome, url);
+
+/**
+ * coverInPage's answer before a click on what is no checkbox: a click at (x, y) reaches it; armed: whether it armed the
+ * click's input check there (it does when the driver gives it one).
+ */
+const freeAt = (x: number, y: number, armed?: boolean): [string, unknown] => [
+  "function coverInPage",
+  { ok: true, value: { state: { checkable: false, checked: false, radio: false }, cover: { x, y }, ...(armed === undefined ? {} : { armed }) } },
+];
+/** The expressions the driver evaluated, in order. */
+const evaluated = () => chrome.debugger.commands.filter((c) => c.method === "Runtime.evaluate").map((c) => String((c.params as { expression: string }).expression));
 
 describe("AgentTab", () => {
   it("one-off runs act on the tab the user is looking at, in a Noa group", async () => {
@@ -85,7 +96,8 @@ describe("AgentTab", () => {
     chrome.tabs.byId.get(popup.id!)!.title = "Grok Imagine";
     expect(await agent.adopt(popup.id!, tabId)).toEqual({ id: "t2", tabId: popup.id, opened: true, fromPage: true });
     expect(await agent.adopt(popup.id!, tabId)).toBeNull();
-    expect((await agent.list()).map((t) => t.id)).toEqual(["t1", "t2"]);
+    // The run's tabs, then the user's other tab in the window (opened after prepare: it is listed with the next id).
+    expect((await agent.list()).map((t) => [t.id, t.tabId, !!t.user])).toEqual([["t1", tabId, false], ["t2", popup.id, false], ["t3", other.id, true]]);
     expect(chrome.tabGroups.byId.get(chrome.tabs.byId.get(popup.id!)!.groupId)!.title).toBe("Noa");
     expect((await chrome.tabs.get(popup.id!)).active).toBe(false);
     expect(await agent.takeNewTabs()).toEqual([{ id: "t2", url: "https://x.test/grok", title: "Grok Imagine" }]);
@@ -94,6 +106,99 @@ describe("AgentTab", () => {
     await agent.closeOpened();
     expect(await chrome.tabs.get(popup.id!)).toBeDefined();
     expect(await agent.isAgentTab(popup.id!)).toBe(false);
+  });
+
+  it("a run from the user's tab may use their other tabs in that window: listed with ids, read without switching, never closed", async () => {
+    const { windowId, tabId } = await userWindow("https://forms.test/new");
+    const source = await chrome.tabs.create({ windowId, url: "https://records.test/7", active: false });
+    chrome.tabs.byId.get(source.id!)!.title = "Record 7";
+    await chrome.tabs.create({ windowId, url: "chrome://settings/", active: false });
+    await chrome.tabs.create({ windowId, url: "about:blank", active: false });
+    const elsewhere = await chrome.windows.create({ url: "https://other-window.test/", focused: false });
+    await agent.prepare("current-tab");
+    // Only the pages the agent can use, in this window; the run's own tab is t1.
+    expect(await agent.userTabs()).toEqual({ tabs: [{ id: "t2", url: "https://records.test/7", title: "Record 7" }], more: 0 });
+    expect(await agent.isAgentTab(source.id!)).toBe(false);
+    expect(elsewhere).toBeDefined();
+    // open_tabs numbers after them and does not count them.
+    const opened = (await agent.open(["https://more.test/"]))[0]!;
+    expect(opened.id).toBe("t3");
+    // Using one makes it the run's (not grouped, not activated); the user keeps their tab in front.
+    expect(await agent.resolve("t2")).toBe(source.id);
+    expect(await agent.isAgentTab(source.id!)).toBe(true);
+    expect(chrome.tabs.byId.get(source.id!)!.groupId).toBe(-1);
+    expect((await chrome.tabs.get(tabId)).active).toBe(true);
+    await expect(agent.close(["t2"])).rejects.toThrow("t2 is one of the user's own tabs; it is never closed");
+    // The run's end closes what it opened, never the user's tab.
+    await agent.closeOpened();
+    expect(chrome.tabs.byId.has(opened.tabId)).toBe(false);
+    expect(chrome.tabs.byId.has(source.id!)).toBe(true);
+    expect(await agent.isAgentTab(source.id!)).toBe(false);
+  });
+
+  it("a user's tab another run uses is not offered; a chat's next turn finds the user's tabs again instead of keeping them", async () => {
+    const { windowId } = await userWindow("https://forms.test/new");
+    const busy = await chrome.tabs.create({ windowId, url: "https://busy.test/", active: false });
+    const free = await chrome.tabs.create({ windowId, url: "https://free.test/", active: false });
+    const taken = new AgentTab(0, { isTaken: (id) => id === busy.id });
+    await taken.prepare("current-tab", { owner: "chat-1" });
+    expect((await taken.userTabs()).tabs.map((t) => t.url)).toEqual(["https://free.test/"]);
+    await taken.resolve("t2");
+    await taken.park("chat-1");
+    // Not kept as one of the chat's opened tabs: still the user's.
+    expect(await keptChatTabs()).toEqual({});
+    expect(await taken.isAgentTab(free.id!)).toBe(false);
+    await taken.prepare("current-tab", { owner: "chat-1" });
+    // Same ids as the turn before.
+    expect((await taken.list()).map((t) => [t.id, !!t.user])).toEqual([["t1", false], ["t2", true]]);
+  });
+
+  it("the user's tabs are given without the query and #part of their address until the run uses them", async () => {
+    const { windowId } = await userWindow("https://forms.test/new");
+    const reset = await chrome.tabs.create({ windowId, url: "https://login.test/reset?token=s3cr3t-r3set#code=oauth-c0de", active: false });
+    chrome.tabs.byId.get(reset.id!)!.title = "Reset your password";
+    await agent.prepare("current-tab");
+    expect(await agent.userTabs()).toEqual({ tabs: [{ id: "t2", url: "https://login.test/reset", title: "Reset your password" }], more: 0 });
+    expect((await driver.listTabs()).tabs.find((t) => t.id === "t2")).toMatchObject({ url: "https://login.test/reset", user: true });
+    // Once the agent reads it (or works in it), its full address is what it sees anyway.
+    await agent.resolve("t2");
+    expect((await driver.listTabs()).tabs.find((t) => t.id === "t2")!.url).toBe("https://login.test/reset?token=s3cr3t-r3set#code=oauth-c0de");
+  });
+
+  it("addressOnly keeps origin and path", () => {
+    expect(addressOnly("https://a.test/p/q?x=1#y")).toBe("https://a.test/p/q");
+    expect(addressOnly("https://a.test")).toBe("https://a.test/");
+    expect(addressOnly("file:///home/me/doc.html?v=2")).toBe("file:///home/me/doc.html");
+    expect(addressOnly("not a url?x#y")).toBe("not a url");
+  });
+
+  it("only the user's 12 tabs used last are given, with how many were left out", async () => {
+    const { windowId } = await userWindow("https://forms.test/new");
+    for (let i = 1; i <= 15; i++) {
+      const t = await chrome.tabs.create({ windowId, url: `https://site${i}.test/`, active: false });
+      chrome.tabs.byId.get(t.id!)!.lastAccessed = i;
+    }
+    await agent.prepare("current-tab");
+    const { tabs, more } = await agent.userTabs();
+    expect(tabs.map((t) => t.url)).toEqual(Array.from({ length: 12 }, (_, i) => `https://site${i + 4}.test/`));
+    expect(more).toBe(3);
+  });
+
+  it("with Use my other tabs off, the run is given none of the user's tabs and cannot use them", async () => {
+    const { windowId } = await userWindow("https://forms.test/new");
+    await chrome.tabs.create({ windowId, url: "https://records.test/7", active: false });
+    await agent.prepare("current-tab", { userTabs: false });
+    expect(await agent.userTabs()).toEqual({ tabs: [], more: 0 });
+    expect((await agent.list()).map((t) => t.id)).toEqual(["t1"]);
+    await expect(agent.resolve("t2")).rejects.toThrow('unknown tab "t2"');
+  });
+
+  it("scheduled runs (own tab) are not given the user's tabs", async () => {
+    const { windowId } = await userWindow("https://forms.test/new");
+    await chrome.tabs.create({ windowId, url: "https://records.test/7", active: false });
+    await agent.prepare("own-tab");
+    expect(await agent.userTabs()).toEqual({ tabs: [], more: 0 });
+    expect((await agent.list()).map((t) => t.id)).toEqual(["t1"]);
   });
 
   it("the driver's next result tells the agent about a tab the page opened", async () => {
@@ -289,30 +394,52 @@ describe("Cdp", () => {
 
 describe("Driver", () => {
   it("click scrolls the element into view and sends a trusted mouse click at its center", async () => {
-    evalResults.push(["scrollIntoView", { x: 110, y: 220 }]);
+    evalResults.push(freeAt(110, 220, true), ['"gone" : p.seen', "seen"]);
     await driver.click({ index: 3 });
     expect(inputCommands().map((c) => c.params)).toEqual([
       { type: "mouseMoved", x: 110, y: 220, button: "none" },
       { type: "mousePressed", x: 110, y: 220, button: "left", buttons: 1, clickCount: 1 },
       { type: "mouseReleased", x: 110, y: 220, button: "left", buttons: 0, clickCount: 1 },
     ]);
+    // One page script before the click (its check state, scrolled into view, the point, and the input check armed
+    // there), then the check read after it, under the nonce the first one armed.
+    const [aim, read] = evaluated();
+    expect(evaluated()).toHaveLength(2);
+    const nonce = /"key":"noa\.inputProbe","nonce":"([^"]+)"/.exec(aim!)?.[1];
+    expect(aim!.startsWith("(function coverInPage")).toBe(true);
+    expect(nonce).toBeTruthy();
+    expect(read).toContain(JSON.stringify(nonce));
+  });
+
+  it("click with no answer to the cover check arms the input check itself, and fails when the page got none of the click", async () => {
+    evalResults.push(["(function coverInPage", undefined], ["function armInputProbe", true], ['"gone" : p.seen', "none"], ["scrollIntoView", { x: 7, y: 8 }]);
+    await expect(driver.click({ index: 3 })).rejects.toThrow(/never reached the page.*Chrome dialog/);
+    expect(evaluated().map((e) => /^\(function (\w+)/.exec(e)?.[1] ?? "expression")).toEqual(["coverInPage", "expression", "armInputProbe", "expression"]);
+  });
+
+  it("click with no answer from the page (navigating) is no verdict: a click at the element's center", async () => {
+    evalResults.push(["scrollIntoView({ block: \"center\", inline: \"center\", behavior: \"instant\" });\n        const r", { x: 7, y: 8 }]);
+    await driver.click({ index: 3 });
+    expect(inputCommands().map((c) => [(c.params as { x: number }).x, (c.params as { y: number }).y])).toEqual([[7, 8], [7, 8], [7, 8]]);
   });
 
   // Measured in real Chromium (2026-10-09): after a sign-in, Chrome's own "password found in a data breach" dialog held
   // the tab's input; every click "succeeded" while the page got nothing, and the agent tried for two minutes.
   it("click fails, saying why, when the page received none of it (input held outside the page)", async () => {
-    evalResults.push(["scrollIntoView", { x: 110, y: 220 }], ["addEventListener(t, mark", true], ['"gone" : p.seen', "none"]);
+    evalResults.push(freeAt(110, 220, true), ['"gone" : p.seen', "none"]);
     await expect(driver.click({ index: 3 })).rejects.toThrow(/never reached the page.*Chrome dialog/);
   });
 
   it("click succeeds when the page got the click, or it navigated (a new document), or the point is over a frame", async () => {
-    evalResults.push(["scrollIntoView", { x: 110, y: 220 }], ["addEventListener(t, mark", true], ['"gone" : p.seen', "seen"]);
+    evalResults.push(freeAt(110, 220, true), ['"gone" : p.seen', "seen"]);
     await driver.click({ index: 3 });
-    evalResults = [["scrollIntoView", { x: 110, y: 220 }], ["addEventListener(t, mark", true], ['"gone" : p.seen', "gone"]];
+    evalResults = [freeAt(110, 220, true), ['"gone" : p.seen', "gone"]];
     await driver.click({ index: 3 });
     // Not armed (a frame under the point): no answer is read.
-    evalResults = [["scrollIntoView", { x: 110, y: 220 }], ["addEventListener(t, mark", false], ['"gone" : p.seen', "none"]];
+    chrome.debugger.commands.length = 0;
+    evalResults = [freeAt(110, 220, false), ['"gone" : p.seen', "none"]];
     await driver.click({ index: 3 });
+    expect(evaluated()).toHaveLength(1);
   });
 
   it("click reports a missing element", async () => {
@@ -326,31 +453,78 @@ describe("Driver", () => {
       .map((c) => /^\(function (\w+)/.exec(String((c.params as { expression: string }).expression))?.[1] ?? "expression");
 
   it("type into a field: checks what it is, clicks it, selects its value so the text replaces it, then inserts text", async () => {
-    evalResults.push(["typeTargetInPage", { ok: true, value: "field" }], ["prepareTypingInPage", { ok: true, value: true }], ["scrollIntoView", { x: 1, y: 2 }]);
+    evalResults.push(["function coverInPage", { ok: true, value: { cover: { x: 1, y: 2 }, target: "field", armed: true } }], ["prepareTypingInPage", { ok: true, value: true }], ['"gone" : p.seen', "seen"]);
     expect(await driver.type({ index: 2, text: "hello" })).toEqual({ ok: true });
     const methods = inputCommands().map((c) => c.method);
     expect(methods).toEqual(["Input.dispatchMouseEvent", "Input.dispatchMouseEvent", "Input.dispatchMouseEvent", "Input.insertText"]);
     expect(inputCommands().at(-1)!.params).toEqual({ text: "hello" });
-    // The element's center, then the check that the click reaches the page (not armed here: the fake page answers nothing).
-    expect(pageCalls()).toEqual(["typeTargetInPage", "expression", "expression", "prepareTypingInPage"]);
+    // First, in one script, whether an open modal dialog covers it, where a click reaches it, what typing into it
+    // means, and the click's input check armed there; then that check read after the click; after the text, the field's
+    // suggestions (the fake page gives no verdict: none).
+    expect(pageCalls()).toEqual(["coverInPage", "expression", "prepareTypingInPage", "suggestionsInPage"]);
+  });
+
+  it("type with empty text empties the element: it is prepared whole (an editor too), then the empty text replaces the selection", async () => {
+    evalResults.push(
+      ["function coverInPage", { ok: true, value: { cover: { x: 1, y: 2 }, target: "field" } }],
+      ["prepareTypingInPage", { ok: true, value: true }],
+      ["scrollIntoView", { x: 1, y: 2 }],
+      ["typedTextInPage", { ok: true, value: "" }],
+    );
+    expect(await driver.type({ index: 2, text: "" })).toEqual({ ok: true });
+    expect(inputCommands().map((c) => c.method)).toEqual(["Input.dispatchMouseEvent", "Input.dispatchMouseEvent", "Input.dispatchMouseEvent", "Input.insertText"]);
+    expect(inputCommands().at(-1)!.params).toEqual({ text: "" });
+    // Read once, right after the deletion: empty, so not again.
+    expect(pageCalls().filter((c) => c === "typedTextInPage")).toHaveLength(1);
+    const prepare = chrome.debugger.commands.map((c) => String((c.params as { expression?: string })?.expression ?? "")).find((e) => e.startsWith("(function prepareTypingInPage"));
+    expect(prepare).toMatch(/\)\(\{.*\}, 2, true\)$/s);
+  });
+
+  it("type with empty text where text is left (an editor that ignores the inserted nothing): its whole text selected again, a Backspace on it, then an error if it stays", async () => {
+    evalResults.push(
+      ["function coverInPage", { ok: true, value: { cover: { x: 1, y: 2 }, target: "editor" } }],
+      ["prepareTypingInPage", { ok: true, value: true }],
+      ["scrollIntoView", { x: 1, y: 2 }],
+      ["typedTextInPage", { ok: true, value: "old text" }],
+    );
+    await expect(driver.type({ index: 2, text: "" })).rejects.toThrow('element 2 still holds "old text" after its whole text was selected and deleted');
+    expect(inputCommands().slice(3).map((c) => [c.method, (c.params as { key?: string }).key])).toEqual([
+      ["Input.insertText", undefined],
+      ["Input.dispatchKeyEvent", "Backspace"],
+      ["Input.dispatchKeyEvent", "Backspace"],
+    ]);
+    // Prepared twice (an editor may move the selection back after the click's focus), read, selected whole again
+    // right before the Backspace, then read until the 1 s wait runs out.
+    const typing = pageCalls().filter((c) => c === "prepareTypingInPage" || c === "typedTextInPage");
+    expect(typing.slice(0, 4)).toEqual(["prepareTypingInPage", "prepareTypingInPage", "typedTextInPage", "prepareTypingInPage"]);
+    expect(typing.slice(4).every((c) => c === "typedTextInPage")).toBe(true);
+  });
+
+  it("type with text prepares an editor as usual (the caret at its end), twice: again once its own selection restore has run", async () => {
+    evalResults.push(["function coverInPage", { ok: true, value: { cover: { x: 1, y: 2 }, target: "editor" } }], ["prepareTypingInPage", { ok: true, value: true }], ["scrollIntoView", { x: 1, y: 2 }]);
+    await driver.type({ index: 2, text: "more" });
+    const prepares = chrome.debugger.commands.map((c) => String((c.params as { expression?: string })?.expression ?? "")).filter((e) => e.startsWith("(function prepareTypingInPage"));
+    expect(prepares).toHaveLength(2);
+    for (const p of prepares) expect(p).toMatch(/\)\(\{.*\}, 2, false\)$/s);
+    expect(inputCommands().at(-1)).toMatchObject({ method: "Input.insertText", params: { text: "more" } });
   });
 
   it("type into a dropdown chooses the option in the page: no click (it would open the native popup), no text input", async () => {
-    evalResults.push(["typeTargetInPage", { ok: true, value: "select" }], ["selectOptionInPage", { ok: true, value: "United Kingdom" }]);
+    evalResults.push(["function coverInPage", { ok: true, value: { cover: { x: 1, y: 2 }, target: "select" } }], ["selectOptionInPage", { ok: true, value: "United Kingdom" }]);
     expect(await driver.type({ index: 8, text: "united kingdom" })).toEqual({ ok: true, selected: "United Kingdom" });
     expect(inputCommands()).toEqual([]);
-    expect(pageCalls()).toEqual(["typeTargetInPage", "selectOptionInPage"]);
+    expect(pageCalls()).toEqual(["coverInPage", "selectOptionInPage"]);
   });
 
   it("type into what takes no text (a checkbox, a button) fails before anything is clicked or typed", async () => {
-    evalResults.push(["typeTargetInPage", { ok: false, error: "element 14 is a checkbox or radio button, which takes no text: set it with checked (true or false) instead" }]);
+    evalResults.push(["function coverInPage", { ok: false, error: "element 14 is a checkbox or radio button, which takes no text: set it with checked (true or false) instead" }]);
     await expect(driver.type({ index: 14, text: "yes" })).rejects.toThrow(/set it with checked/);
     expect(inputCommands()).toEqual([]);
   });
 
   it("type stops when the click focused no text field: the text never goes to the field focused before", async () => {
     evalResults.push(
-      ["typeTargetInPage", { ok: true, value: "other" }],
+      ["function coverInPage", { ok: true, value: { cover: { x: 1, y: 2 }, target: "other" } }],
       ["prepareTypingInPage", { ok: false, error: "element 5 did not focus a text field when clicked, so nothing was typed" }],
       ["scrollIntoView", { x: 1, y: 2 }],
     );
@@ -364,8 +538,15 @@ describe("Driver", () => {
       if (method === "Input.dispatchMouseEvent" && (params as { type: string }).type === "mouseReleased") checked = !checked;
       if (method !== "Runtime.evaluate") return {};
       const expr = String((params as { expression: string }).expression);
-      if (expr.includes("checkStateInPage")) return { result: { value: { ok: true, value: { checkable: true, checked, radio: false } } } };
-      return { result: { value: { x: 5, y: 6 } } };
+      const state = { checkable: true, checked, radio: false };
+      if (expr.includes("function checkStateInPage")) return { result: { value: { ok: true, value: state } } };
+      if (expr.includes("function coverInPage")) {
+        // As the page decides: with checked and the box so already, nothing over it is checked (no click follows).
+        const act = /, "(\w+)"\)$/.exec(expr)?.[1];
+        const already = (act === "check" && checked) || (act === "uncheck" && !checked);
+        return { result: { value: { ok: true, value: already ? { state } : { state, cover: { x: 5, y: 6 } } } } };
+      }
+      return { result: { value: undefined } };
     };
     expect(await driver.click({ index: 14, checked: true })).toEqual({ ok: true, checked: true });
     // A second call does not toggle it back.
@@ -376,16 +557,16 @@ describe("Driver", () => {
   });
 
   it("click with checked on what is not a checkbox fails without clicking", async () => {
-    evalResults.push(["checkStateInPage", { ok: true, value: { checkable: false, checked: false, radio: false } }]);
+    evalResults.push(["function coverInPage", { ok: true, value: { state: { checkable: false, checked: false, radio: false } } }]);
     await expect(driver.click({ index: 4, checked: true })).rejects.toThrow(/not a checkbox, radio button or switch/);
     expect(inputCommands()).toEqual([]);
   });
 
   it("click with checked sets the state in the page when the click did not (something covers the box)", async () => {
     evalResults.push(
-      ["checkStateInPage", { ok: true, value: { checkable: true, checked: false, radio: false } }],
+      ["function coverInPage", { ok: true, value: { state: { checkable: true, checked: false, radio: false }, cover: { x: 1, y: 2 } } }],
+      ["function checkStateInPage", { ok: true, value: { checkable: true, checked: false, radio: false } }],
       ["setCheckedInPage", { ok: true, value: true }],
-      ["scrollIntoView", { x: 1, y: 2 }],
     );
     expect(await driver.click({ index: 14, checked: true })).toEqual({ ok: true, checked: true });
     expect(pageCalls()).toContain("setCheckedInPage");
@@ -403,7 +584,7 @@ describe("Driver", () => {
   });
 
   it("scroll wheels at the viewport center by amount x 0.8 x viewport", async () => {
-    evalResults.push(["innerWidth", { w: 1000, h: 800 }]);
+    evalResults.push(["scrollViewInPage", { ok: true, value: { w: 1000, h: 800, stepW: 1000, stepH: 800 } }]);
     await driver.scroll({ direction: "down", amount: 2 });
     await driver.scroll({ direction: "left" });
     expect(inputCommands().map((c) => c.params)).toEqual([
@@ -427,7 +608,7 @@ describe("Driver", () => {
     }
 
     it("the page moved: reports pixels and the new position, after the smooth scroll settled", async () => {
-      evalResults.push(["innerWidth", { w: 1000, h: 800 }]);
+      evalResults.push(["scrollViewInPage", { ok: true, value: { w: 1000, h: 800, stepW: 1000, stepH: 800 } }]);
       probe({ entries: [pageEntry(640)], overFrame: false }, [
         { entries: [pageEntry(900)], overFrame: false },
         { entries: [pageEntry(1280)], overFrame: false },
@@ -438,21 +619,21 @@ describe("Driver", () => {
     });
 
     it("at the bottom nothing moved", async () => {
-      evalResults.push(["innerWidth", { w: 1000, h: 800 }]);
+      evalResults.push(["scrollViewInPage", { ok: true, value: { w: 1000, h: 800, stepW: 1000, stepH: 800 } }]);
       const bottom = { entries: [pageEntry(4600)], overFrame: false };
       probe(bottom, [bottom]);
       expect(await driver.scroll({ direction: "down" })).toEqual({ ok: true, moved: 0, target: "page", position: 4600, size: 5400, view: 800, reason: "end" });
     });
 
     it("an inner container scrolled instead of the window", async () => {
-      evalResults.push(["innerWidth", { w: 1000, h: 800 }]);
+      evalResults.push(["scrollViewInPage", { ok: true, value: { w: 1000, h: 800, stepW: 1000, stepH: 800 } }]);
       const inner = (top: number) => ({ page: false, index: 7, top, left: 0, sh: 2000, sw: 300, ch: 500, cw: 300, oy: true, ox: false });
       probe({ entries: [inner(0), pageEntry(0, 800)], overFrame: false }, [{ entries: [inner(640), pageEntry(0, 800)], overFrame: false }]);
       expect(await driver.scroll({ direction: "down" })).toEqual({ ok: true, moved: 640, target: "container", containerIndex: 7, position: 640, size: 2000, view: 500 });
     });
 
     it("a page that cannot be measured still scrolls", async () => {
-      evalResults.push(["innerWidth", { w: 1000, h: 800 }]);
+      evalResults.push(["scrollViewInPage", { ok: true, value: { w: 1000, h: 800, stepW: 1000, stepH: 800 } }]);
       expect(await driver.scroll({ direction: "down" })).toEqual({ ok: true });
       expect(inputCommands()).toHaveLength(1);
     });
@@ -610,7 +791,7 @@ describe("snapshotExpression", () => {
   it("is a self-contained expression with the limits baked in", () => {
     const expr = snapshotExpression();
     expect(expr).toMatch(/^\(function/);
-    expect(expr).toContain(`(${JSON.stringify(PAGE_MARKS)}, 8000, 300, 30)`);
+    expect(expr).toContain(`(${JSON.stringify(PAGE_MARKS)}, 8000, 300, 30, 160, 60, 8)`);
     expect(expr).not.toMatch(/__name|__vite|_interop|import\(/);
     expect(() => new Function(`return ${expr}`)).not.toThrow();
   });

@@ -15,7 +15,8 @@
  * folded into a header that is plain text, no element anything can click. The
  * re-render (0.3-1.6 s after the menu opens) replaces the menu's nodes, and
  * every later opening in that page load shows the delegate view at once. So
- * the switch reloads X home, opens the menu fresh, and picks the entry with
+ * the switch opens the menu fresh (on the X page the tab shows, else on X home
+ * reloaded), and picks the entry with
  * browser.clickXAccountEntry: found and clicked in one synchronous step in the
  * page, the moment the menu shows its accounts. (A debugger mouse press waits
  * about a second for a frame, and so once landed on the "Act as" cell that had
@@ -92,6 +93,17 @@ const shows = (s: PageSnapshot, handle: string) => {
   return !!active && sameHandle(active, handle);
 };
 
+/** pollUntil from a value already read: checked as it is, then read again every interval (no read right after it). */
+async function pollFrom<T>(first: T, read: () => Promise<T>, done: (value: T) => boolean, opts: { intervalMs: number; timeoutMs: number; sleep: Sleep }): Promise<{ value: T; ok: boolean }> {
+  const polls = opts.intervalMs > 0 ? Math.ceil(opts.timeoutMs / opts.intervalMs) : 0;
+  let value = first;
+  for (let i = 0; i < polls && !done(value); i++) {
+    await opts.sleep(opts.intervalMs);
+    value = await read();
+  }
+  return { value, ok: done(value) };
+}
+
 export interface SwitchDeps {
   sleep: Sleep;
 }
@@ -151,26 +163,46 @@ export async function switchXAccount(browser: BrowserCaller, rawHandle: string, 
   let unopened = 0;
   /** The page ignored its own click on the entry once: a real mouse press from then on. */
   let press = false;
-  for (let attempt = 1; attempt <= SWITCH_ATTEMPTS; attempt++) {
-    // A fresh page load: the menu X opens first lists the personal accounts (see the top of this file). A tab just
-    // opened on X home is one already.
-    if (attempt > 1 || !leftTab) await browser.call("browser.navigate", { url: X_HOME_URL });
-    page = (await pollUntil(readPage, (s) => !!findSwitcher(s) || !!pauseReasonForUrl(s.url), { ...LOAD_POLL, sleep })).value;
-    const blocked = pauseReasonForUrl(page.url);
-    if (blocked) return needsUser(page, blocked);
-    const switcher = findSwitcher(page);
-    if (!switcher) return fail(`the account switcher button (testid=${X_SWITCHER_TEST_ID}) was not found on ${page.url}`);
-    if (shows(page, handle)) return { text: `Already on ${handle}.${leftTab}` };
+  // A tab already on X with its switcher showing (read above) is tried as it is first: X's own switch reloads the
+  // page anyway, and the menu's first opening in this page load still lists the personal accounts. Should the menu
+  // not offer the entry (opened before in this page load and flipped, or not opening), the reloads below follow as
+  // they would have; this try counts as none of them. Every click and check is the same as on a reloaded page.
+  const asIs = isXUrl(page.url) && !!findSwitcher(page);
+  for (let attempt = asIs ? 0 : 1; attempt <= SWITCH_ATTEMPTS; attempt++) {
+    const reloaded = attempt > 0;
+    if (reloaded) {
+      // A fresh page load: the menu X opens first lists the personal accounts (see the top of this file). A tab just
+      // opened on X home is one already.
+      if (attempt > 1 || !leftTab) await browser.call("browser.navigate", { url: X_HOME_URL });
+      page = (await pollUntil(readPage, (s) => !!findSwitcher(s) || !!pauseReasonForUrl(s.url), { ...LOAD_POLL, sleep })).value;
+      const blocked = pauseReasonForUrl(page.url);
+      if (blocked) return needsUser(page, blocked);
+      if (!findSwitcher(page)) return fail(`the account switcher button (testid=${X_SWITCHER_TEST_ID}) was not found on ${page.url}`);
+      if (shows(page, handle)) return { text: `Already on ${handle}.${leftTab}` };
+    }
+    const switcher = findSwitcher(page)!;
 
-    await browser.call("browser.click", { index: switcher.index });
+    try {
+      await browser.call("browser.click", { index: switcher.index });
+    } catch (err) {
+      // The page as it is would not take the click (e.g. something covers the switcher): a reload clears it.
+      if (reloaded) throw err;
+      continue;
+    }
     let pick = await browser.call("browser.clickXAccountEntry", { handle, waitMs: MENU_WAIT_MS, ...(press ? { press } : {}) });
     if (!pick.clicked) {
       const why = withoutEntry(await readPage());
-      if (why === "unopened") unopened++;
-      else if (why === "flipped") flipped++;
-      else return why;
+      if (typeof why !== "string") return why;
+      if (reloaded && why === "unopened") unopened++;
+      else if (reloaded) flipped++;
       continue;
     }
+    // Nothing but the entry is ever clicked or pressed, but should X show its delegate-switch confirm or the flipped
+    // menu, still open, no switch is coming: reload and try again.
+    const missed = (s: PageSnapshot) => DELEGATE_SWITCH_URL.test(s.url) || delegateView(s);
+    const finished = (s: PageSnapshot) => shows(s, handle) || !!pauseReasonForUrl(s.url) || missed(s);
+    /** The read that saw the entry's click take effect (taken after it): the switch poll's first. */
+    let after: PageSnapshot | null = null;
     if (!press) {
       // X closes the menu when it starts the switch: the entry still showing means the page ignored the click.
       const effect = await pollUntil(readPage, (s) => !entryFor(s, handle) || shows(s, handle) || !!pauseReasonForUrl(s.url), { ...TAKE_EFFECT_POLL, sleep });
@@ -178,18 +210,19 @@ export async function switchXAccount(browser: BrowserCaller, rawHandle: string, 
         press = true;
         pick = await browser.call("browser.clickXAccountEntry", { handle, waitMs: 0, press });
         if (!pick.clicked) {
-          flipped++; // X replaced the entry before the press: reload and try again.
+          if (reloaded) flipped++; // X replaced the entry before the press: reload and try again.
           continue;
         }
+      } else {
+        after = effect.value;
       }
     }
 
-    // Nothing but the entry is ever clicked or pressed, but should X show its delegate-switch confirm or the flipped
-    // menu, still open, no switch is coming: reload and try again.
-    const missed = (s: PageSnapshot) => DELEGATE_SWITCH_URL.test(s.url) || delegateView(s);
-    const switched = await pollUntil(readPage, (s) => shows(s, handle) || !!pauseReasonForUrl(s.url) || missed(s), { ...SWITCH_POLL, sleep });
+    // That read is checked as it is and the page read again only after the poll's interval: a read right after it,
+    // with nothing done in between, shows nothing new. After a press, the poll reads first.
+    const switched = after ? await pollFrom(after, readPage, finished, { ...SWITCH_POLL, sleep }) : await pollUntil(readPage, finished, { ...SWITCH_POLL, sleep });
     if (!shows(switched.value, handle) && missed(switched.value)) {
-      flipped++;
+      if (reloaded) flipped++;
       continue;
     }
     const stop = pauseReasonForUrl(switched.value.url);

@@ -1,7 +1,7 @@
 /** switch_x_account on the account menu's harder layouts, and the X account check around publishing. */
 import { describe, expect, it } from "vitest";
 import { createToolExecutor } from "../src/index.js";
-import { switchXAccount, TAKE_EFFECT_POLL } from "../src/x-account.js";
+import { SWITCH_ATTEMPTS, SWITCH_POLL, switchXAccount, TAKE_EFFECT_POLL } from "../src/x-account.js";
 import { FakeX } from "./fake-x.js";
 import { collect, noSleep } from "./helpers.js";
 
@@ -22,7 +22,7 @@ describe("switchXAccount", () => {
 
   it("the entry is clicked in the page right as the menu opens, before X flips it (no read in between)", async () => {
     // The flip comes on the second call after the menu opened: a read first, then a click, would find it flipped.
-    const x = new FakeX({ ...OWNER, url: "https://x.com/home", flipAfter: [Infinity, 2] });
+    const x = new FakeX({ ...OWNER, url: "https://x.com/home", flipAfter: [2] });
     const r = await switchXAccount(x.caller(), "@getbnty", { sleep: noSleep });
     expect(r.text).toMatch(/^Switched to @getbnty/);
     expect(x.account).toBe("getbnty");
@@ -43,8 +43,8 @@ describe("switchXAccount", () => {
   });
 
   it("X flips the menu before the page can click the entry: nothing is clicked, X is reloaded and the switch tried again", async () => {
-    // First try: the menu flips on the very call that picks the entry; second try: it stays.
-    const x = new FakeX({ ...OWNER, url: "https://x.com/getbnty", flipAfter: [Infinity, 1, Infinity] });
+    // The page as it is and the first reload: the menu flips on the very call that picks the entry; the second reload: it stays.
+    const x = new FakeX({ ...OWNER, url: "https://x.com/getbnty", flipAfter: [1, 1, Infinity] });
     const r = await switchXAccount(x.caller(), "@rooftopchat", { sleep: noSleep });
     expect(r.text).toMatch(/^Switched to @rooftopchat/);
     expect(x.entryClicks).toEqual([{ handle: "@rooftopchat", press: false }]);
@@ -72,7 +72,7 @@ describe("switchXAccount", () => {
   });
 
   it("the menu does not open after a reload (Sep 30, @rooftopchat): X is reloaded and the switch tried again", async () => {
-    const x = new FakeX({ ...OWNER, url: "https://x.com/home", deadSwitcherLoads: 1 });
+    const x = new FakeX({ ...OWNER, url: "https://x.com/home", deadSwitcherLoads: 2 });
     const r = await switchXAccount(x.caller(), "@rooftopchat", { sleep: noSleep });
     expect(r.text).toMatch(/^Switched to @rooftopchat/);
     expect(x.calls.filter((c) => c.method === "browser.navigate")).toHaveLength(2);
@@ -114,7 +114,7 @@ describe("switchXAccount", () => {
   it("the click ignored and X flips before the press: the press finds no entry (nothing pressed), reload, and a press on the next try", async () => {
     // Calls after the menu opens: the pick (1), the reads that watch it take effect, then the press, which X's flip beats.
     const reads = 1 + Math.ceil(TAKE_EFFECT_POLL.timeoutMs / TAKE_EFFECT_POLL.intervalMs);
-    const x = new FakeX({ ...OWNER, url: "https://x.com/home", ignoresPageClicks: true, flipAfter: [Infinity, 2 + reads, Infinity] });
+    const x = new FakeX({ ...OWNER, url: "https://x.com/home", ignoresPageClicks: true, flipAfter: [2 + reads, Infinity] });
     const r = await switchXAccount(x.caller(), "@getbnty", { sleep: noSleep });
     expect(r.text).toMatch(/^Switched to @getbnty/);
     expect(x.entryClicks).toEqual([
@@ -135,6 +135,67 @@ describe("switchXAccount", () => {
     expect(x.account).toBe("mecharoyalecom");
     expect(x.leftTabs).toEqual([page]);
     expect(x.calls.find((c) => c.method === "browser.openTabs")!.params).toEqual({ urls: ["https://x.com/home"], background: false });
+    neverClicksACell(x);
+  });
+
+  it("a tab already on X: switches on the page as it is, no reload, and one read after the click answers both checks", async () => {
+    const x = new FakeX({ ...OWNER, url: "https://x.com/getbnty" });
+    const r = await switchXAccount(x.caller(), "@rooftopchat", { sleep: noSleep });
+    expect(r.text).toMatch(/^Switched to @rooftopchat/);
+    expect(x.account).toBe("rooftopchat");
+    expect(x.calls.map((c) => c.method)).toEqual(["browser.readPage", "browser.click", "browser.clickXAccountEntry", "browser.readPage"]);
+    neverClicksACell(x);
+  });
+
+  it("a switch that takes a while: the read that saw the menu close is not repeated at once; the next comes after the poll's interval", async () => {
+    const x = new FakeX({ ...OWNER, url: "https://x.com/home", switchCalls: 2 });
+    const slept: number[] = [];
+    const r = await switchXAccount(x.caller(), "@getbnty", { sleep: async (ms) => void slept.push(ms) });
+    expect(r.text).toMatch(/^Switched to @getbnty/);
+    const methods = x.calls.map((c) => c.method);
+    // After the pick: the read that sees the menu closed (old account still shown), then one read per SWITCH_POLL interval.
+    expect(methods.slice(methods.indexOf("browser.clickXAccountEntry") + 1)).toEqual(["browser.readPage", "browser.readPage", "browser.readPage"]);
+    expect(slept).toEqual([SWITCH_POLL.intervalMs, SWITCH_POLL.intervalMs]);
+  });
+
+  it("a tab already on X whose menu was opened before in this page load (delegate view): reloads, and that try counts as none of the reloads", async () => {
+    const x = new FakeX({ ...OWNER, url: "https://x.com/home", menuOpenedBefore: true, flipAfter: [0, 0, 0, 0] });
+    const r = await switchXAccount(x.caller(), "@getbnty", { sleep: noSleep });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/3 of 3 times X switched its account menu to the delegate accounts/);
+    expect(x.calls.filter((c) => c.method === "browser.navigate")).toHaveLength(SWITCH_ATTEMPTS);
+    expect(x.entryClicks).toEqual([]);
+    neverClicksACell(x);
+  });
+
+  it("a tab already on X where the switcher does not take the click (something covers it): reloads X and switches", async () => {
+    const x = new FakeX({ ...OWNER, url: "https://x.com/home" });
+    let refused = false;
+    const caller = x.caller();
+    const r = await switchXAccount(
+      {
+        call: (method, params) => {
+          if (method === "browser.click" && !refused) {
+            refused = true;
+            return Promise.reject(new Error("element 0 is covered by another element"));
+          }
+          return caller.call(method, params);
+        },
+      },
+      "@getbnty",
+      { sleep: noSleep },
+    );
+    expect(r.text).toMatch(/^Switched to @getbnty/);
+    expect(x.calls.filter((c) => c.method === "browser.navigate")).toHaveLength(1);
+    neverClicksACell(x);
+  });
+
+  it("a tab already on X, account not signed in: the user is told from the page as it is, without a reload", async () => {
+    const x = new FakeX({ ...OWNER, url: "https://x.com/home" });
+    const r = await switchXAccount(x.caller(), "@nobody", { sleep: noSleep });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/@nobody is not signed in.*lists .*@getbnty/s);
+    expect(x.calls.map((c) => c.method)).toEqual(["browser.readPage", "browser.click", "browser.clickXAccountEntry", "browser.readPage"]);
     neverClicksACell(x);
   });
 

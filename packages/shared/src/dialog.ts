@@ -76,6 +76,40 @@ export function isInputBlockedText(text: string): boolean {
   return text.includes(INPUT_BLOCKED_TEXT.slice(0, 40));
 }
 
+/** Starts the text of coveredText, after the element's number. */
+const COVERED_MARK = "is behind the open dialog";
+
+/**
+ * The error of a click or typing on an element an open modal dialog covers (ElementInfo.covered): a person's click
+ * there lands on the dialog or its backdrop, and the page behind it takes no input until the dialog is closed.
+ * dialog: its name ("" without one).
+ */
+export function coveredText(index: number, dialog: string): string {
+  const which = dialog ? ` ${JSON.stringify(dialog)}` : "";
+  return `element ${index} ${COVERED_MARK}${which}: a click there lands on the dialog or its backdrop, not on the element, so nothing was done. Use the dialog's own fields and buttons, or close the dialog first (e.g. its Cancel or Close button) to use the page behind it.`;
+}
+
+/** Starts the text of overlaidText, after the element's number. */
+const OVERLAID_MARK = "is covered by";
+
+/**
+ * The error of a click (or typing, which clicks first) on an element something else covers where a click would land
+ * (a suggestion list, a sticky header, a cookie banner, a toast): the click would reach that instead, e.g. pick one of
+ * the list's options. over: what covers it (`the list "Address suggestions"`); lands: what a click at the element's
+ * center would land on (`option "41 Harbor Rd"`); list: a list or menu, which a pick or Escape closes.
+ */
+export function overlaidText(index: number, { over, lands, list }: { over: string; lands: string; list: boolean }): string {
+  const next = list
+    ? "Pick from it first if one of its options is what you want; otherwise close it (press Escape) and try again"
+    : "Get it out of the way without losing anything first: scroll so the element is clear, or dismiss it with its own button (a banner's or a toast's close button); then try again";
+  return `element ${index} ${OVERLAID_MARK} ${over}: a click there would land on its ${lands}, not on the element, so nothing was clicked. ${next}.`;
+}
+
+/** Whether an error text says the element is behind an open modal dialog (coveredText) or covered by something else (overlaidText). */
+export function isCoveredText(text: string): boolean {
+  return text.includes(COVERED_MARK) || text.includes(OVERLAID_MARK);
+}
+
 /** A run's line for an answered dialog: `Dialog: Delete this item? → Cancel (automatically after 10 s)`. */
 export function dialogLine(e: { dialog: JsDialog; outcome: DialogAnswer; by: DialogAnsweredBy; text?: string | undefined }): string {
   const by = e.by === "auto" ? ` (automatically after ${DIALOG_AUTO_DISMISS_MS / 1000} s)` : e.by === "user" ? " (in the browser)" : "";

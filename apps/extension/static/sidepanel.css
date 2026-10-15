@@ -563,6 +563,37 @@ button[aria-disabled="true"]:hover { border-color: var(--border); }
   margin: 0; max-width: 100%; max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
   font-size: var(--text-xs); user-select: text; color: var(--muted);
 }
+/* A tab in limited mode (event-render.ts renderLimited): a warning in the thread, never folded into the steps. */
+.ev-limited {
+  display: flex; flex-direction: column; gap: 3px; min-width: 0;
+  font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; color: var(--text);
+  padding: 7px 10px; border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warn-soft) 80%, transparent);
+  border-left: 3px solid color-mix(in srgb, var(--warn) 70%, transparent);
+}
+.ev-limited .lim-msg { font-weight: 600; color: color-mix(in srgb, var(--warn) 80%, var(--text)); }
+.ev-limited .lim-hint { color: var(--muted); }
+.ev-limited .lim-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+/* Auto tab switching brought a tab forward (event-render.ts renderTabSwitch): a line in the thread, its (i) opens why. */
+.ev-tabswitch {
+  display: flex; flex-direction: column; gap: 4px; min-width: 0;
+  font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; color: var(--text);
+  padding: 6px 10px; border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-left: 3px solid color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.ev-tabswitch .ts-line { display: flex; align-items: center; gap: 6px; }
+.ev-tabswitch .ts-msg { font-weight: 600; }
+.ev-tabswitch .ts-info {
+  flex: none; width: 18px; height: 18px; padding: 0; border-radius: 50%;
+  border: 1px solid var(--border); background: transparent; color: var(--muted);
+  font: italic 600 11px/16px Georgia, serif; text-align: center; cursor: pointer;
+}
+.ev-tabswitch .ts-info:hover, .ev-tabswitch .ts-info[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
+.ev-tabswitch .ts-info:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ev-tabswitch .ts-hint { color: var(--muted); }
+.ev-tabswitch .ts-hint p { margin: 0; }
+.ev-tabswitch .ts-actions { display: flex; gap: 6px; margin-top: 6px; }
 .log .empty { margin: auto; max-width: 240px; }
 
 /* Composer pinned under both views: textarea on top, a compact control row below. */
@@ -927,6 +958,11 @@ body:has(.voice-orb:not([hidden])) .composer { z-index: var(--z-above-veil); }
   max-height: 9.5em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
   padding: 6px 8px; border-radius: var(--radius-sm); background: var(--surface); border: 1px solid var(--border); color: var(--text);
 }
+.log .ev-approval .appr-target {
+  padding-left: 8px; border-left: 2px solid var(--border); color: var(--muted); font-size: var(--text-xs); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+}
+.log .ev-approval .appr-target-label { color: var(--text); }
 .log .ev-approval .appr-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .log .ev-approval .appr-note { font-size: var(--text-xs); color: var(--muted); }
 .log .ev-approval .appr-note.bad { color: color-mix(in srgb, var(--bad) 75%, var(--text)); }

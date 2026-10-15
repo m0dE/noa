@@ -99,6 +99,7 @@ import { spokenApprovalAnswer, WaitingApprovals } from "../voice/approval-voice.
 import { ECHO_WINDOW_MS, echoesSpoken } from "../voice/narrator-policy.js";
 import { asRealtimeFailure } from "../voice/realtime-client.js";
 import { VoiceError } from "../voice/transcribe.js";
+import { MicError } from "../voice/mic-errors.js";
 import { errorHelp } from "./error-help.js";
 import { Earcons, type Earcon } from "../voice/earcons.js";
 import { isMuteKey, LISTENING_CAPTION, notListeningCaption, remoteBarView, VoiceActivity, voiceBarView, type StartStep, type VoiceBarView } from "../voice/voice-bar-view.js";
@@ -698,13 +699,14 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
 
   /** An engine could not start or go on: an error in the trace of the chat the session talks to. */
   function traceFailure(id: VoiceEngineId | null, err: unknown): void {
-    const message = asRealtimeFailure(err)?.message ?? errorMessage(err);
+    const message = err instanceof MicError ? err.detail : (asRealtimeFailure(err)?.message ?? errorMessage(err));
     trace?.record({ t: Date.now(), cat: "error", name: "voice.failed", data: { engine: id, error: message.slice(0, 160) } });
   }
 
   /** What to say when voice could not start or go on (on engine `id`), with what the user can do about it (never done for them). */
   function failureTip(err: unknown, id: VoiceEngineId | null = null): VoiceTip {
     if (err instanceof VoiceError) return errorTip(err, deps.openBilling);
+    if (err instanceof MicError) return { text: err.message, level: "error", actions: [{ label: "Try again", run: () => void start(id) }] };
     const f = asRealtimeFailure(err);
     const rt = id && isRealtimeEngine(id) ? id : "realtime";
     const standard = { label: BROWSER_VOICE_LABEL, run: () => void start("standard") };
@@ -826,7 +828,7 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
       if (r === "stopped") return;
       if (r !== "open") {
         finish(null, "error");
-        deps.notify(failureTip(r.failed));
+        deps.notify(failureTip(r.failed, id));
         return;
       }
       // The engine is open (it listens once its audio flows: checkReady).

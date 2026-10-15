@@ -5,17 +5,16 @@
  * open so the human can add messages while it runs. Single-turn: stdin is
  * closed after a task_* tool call (or when Claude ends its turn without
  * one). Persistent: stdin stays open for follow-up turns until the runner
- * ends the session. Claude gets the Noa MCP tools and, in a task
- * session, its own Read on the files the user attached (it runs in the
- * attachments folder and may read nothing else): no shell, web or other file
- * access.
+ * ends the session. Claude gets the Noa MCP tools and none of its own: no
+ * shell, web or file access. Images and PDFs the user attached come as image
+ * and document blocks in the user message that brings them.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DEFAULT_REASONING, DeltaBatcher, MAX_ASSISTANT_TEXT, clipEventText, type AgentEvent } from "@noa/shared";
-import { plainErrorText, raiseNote, THINKING_BUDGET_TOKENS } from "@noa/core";
+import { plainErrorText, raiseNote, THINKING_BUDGET_TOKENS, type ContentBlock } from "@noa/core";
 import { claudeEnv, isolatedClaudeArgs, killTree } from "../claude-process.js";
 import { LineSplitter } from "../line-framing.js";
 import { ClaudeStreamTimer } from "./claude-timing.js";
@@ -24,12 +23,6 @@ import type { Brain, BrainContext } from "./brain.js";
 
 /** Claude Code's settings that turn its extended thinking off (it then answers at once). */
 export const NO_THINKING_SETTINGS = JSON.stringify({ alwaysThinkingEnabled: false });
-
-/**
- * Claude Code's own Read, for a session's attachments: allowed in its working directory (the attachments folder,
- * see WarmSpec.readDir); dontAsk refuses every call that would need a permission prompt, so any other path is refused.
- */
-export const READ_ATTACHMENTS_ARGS = { tool: "Read", allow: "Read(./**)", permissionMode: "dontAsk" } as const;
 
 /**
  * The file a session's system prompt is passed in (Claude Code's --append-system-prompt-file), in its run folder
@@ -42,8 +35,7 @@ export function systemPromptFile(mcpConfigPath: string, systemPrompt: string): s
   return join(dirname(mcpConfigPath), `system-prompt-${hash}.txt`);
 }
 
-export function buildClaudeArgs(opts: { systemPrompt: string; mcpConfigPath: string; allowedTools: string[]; read?: boolean; model: string; thinking?: boolean }): string[] {
-  const read = opts.read === true;
+export function buildClaudeArgs(opts: { systemPrompt: string; mcpConfigPath: string; allowedTools: string[]; model: string; thinking?: boolean }): string[] {
   return [
     "-p",
     "--input-format",
@@ -59,12 +51,11 @@ export function buildClaudeArgs(opts: { systemPrompt: string; mcpConfigPath: str
     "--mcp-config",
     opts.mcpConfigPath,
     "--allowedTools",
-    [...opts.allowedTools, ...(read ? [READ_ATTACHMENTS_ARGS.allow] : [])].join(","),
-    ...(read ? ["--permission-mode", READ_ATTACHMENTS_ARGS.permissionMode] : []),
+    opts.allowedTools.join(","),
     "--append-system-prompt-file",
     systemPromptFile(opts.mcpConfigPath, opts.systemPrompt),
     ...(opts.thinking === false ? ["--settings", NO_THINKING_SETTINGS] : []),
-    ...isolatedClaudeArgs(opts.model, read ? [READ_ATTACHMENTS_ARGS.tool] : []),
+    ...isolatedClaudeArgs(opts.model),
   ];
 }
 
@@ -94,9 +85,13 @@ function asStreamLine(value: unknown): StreamLine | null {
   return value && typeof value === "object" ? (value as StreamLine) : null;
 }
 
-/** One stream-json input line carrying a user message. */
-export function userMessageLine(text: string): string {
-  return JSON.stringify({ type: "user", message: { role: "user", content: text } }) + "\n";
+/**
+ * One stream-json input line carrying a user message: its text, after the blocks it shows (attached images and
+ * PDFs, see attachmentBlocks), if any.
+ */
+export function userMessageLine(text: string, blocks: readonly ContentBlock[] = []): string {
+  const content = blocks.length ? [...blocks, { type: "text", text }] : text;
+  return JSON.stringify({ type: "user", message: { role: "user", content } }) + "\n";
 }
 
 /**
@@ -225,8 +220,6 @@ export interface WarmSpec {
   systemPrompt: string;
   mcpConfigPath: string;
   allowedTools: string[];
-  /** The attachments folder: Claude Code runs there, with its Read tool (see READ_ATTACHMENTS_ARGS). */
-  readDir?: string;
   model?: string;
   /** The Reasoning setting's thinking; absent: DEFAULT_REASONING's. */
   thinking?: boolean;
@@ -318,16 +311,16 @@ export class ClaudeCodeBrain implements Brain {
       systemPrompt: spec.systemPrompt,
       mcpConfigPath: spec.mcpConfigPath,
       allowedTools: spec.allowedTools,
-      ...(spec.readDir ? { read: true } : {}),
       model,
       ...(thinking ? {} : { thinking: false }),
     });
     return { args, model, thinking };
   }
 
-  private spawnClaude(args: string[], spec: Pick<WarmSpec, "mcpConfigPath" | "readDir">): ChildProcess {
+  /** Runs in the session's run folder (the MCP config's). */
+  private spawnClaude(args: string[], spec: Pick<WarmSpec, "mcpConfigPath">): ChildProcess {
     return spawn(this.opts.claudePath, [...(this.opts.prefixArgs ?? []), ...args], {
-      cwd: spec.readDir ?? dirname(spec.mcpConfigPath),
+      cwd: dirname(spec.mcpConfigPath),
       windowsHide: true,
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
@@ -384,10 +377,10 @@ export class ClaudeCodeBrain implements Brain {
       /** An interrupt was sent: its error result is expected, not a failure. */
       let interrupted = false;
       const writable = () => !stdin.destroyed && !stdin.writableEnded;
-      const send = (text: string) => {
+      const send = (text: string, blocks?: readonly ContentBlock[]) => {
         if (!writable()) return;
         turn.wrote();
-        stdin.write(userMessageLine(text));
+        stdin.write(userMessageLine(text, blocks));
         timer.sent();
       };
       /** Hands the user's waiting messages to Claude as a message of their own. */
@@ -484,10 +477,10 @@ export class ClaudeCodeBrain implements Brain {
         ctx.log({ type: "claude_model_refused", model: next, error: why });
         return { type: "status", text: `The model was not switched to ${next} (${why}): this session keeps ${model}` };
       };
-      send(ctx.prompt);
-      ctx.input.onMessage((text) => {
-        ctx.log({ type: "claude_user_message", kind: "followup", chars: text.length });
-        send(text);
+      send(ctx.prompt, ctx.blocks);
+      ctx.input.onMessage((text, blocks) => {
+        ctx.log({ type: "claude_user_message", kind: "followup", chars: text.length, ...(blocks?.length ? { blocks: blocks.length } : {}) });
+        send(text, blocks);
       });
       // A message typed mid-turn goes to stdin at once: Claude Code reads it at its next step (with the
       // running tool's result). While the model only thinks or writes, that request is stopped so it reads it now.

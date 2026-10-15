@@ -127,12 +127,19 @@ function nav(acct, flipMs) {
   menu.addEventListener("mousedown", function (e) { note("press " + target(e)); });
   // switch_x_account clicks the entry in the page (no mouse press): its click, trusted or not.
   menu.addEventListener("click", function (e) { note((e.isTrusted ? "click " : "page click ") + target(e)); });
+  // setSlowness({ menuMs }): the menu opens empty and shows its accounts only this long after (the flip counts from then).
+  var menuMs = window.__fakeXMenuMs || 0, showing = null;
   document.getElementById("acct-btn").addEventListener("click", function () {
-    if (menu.style.display === "block") { menu.style.display = "none"; note("close"); return; }
-    render();
+    if (menu.style.display === "block") { menu.style.display = "none"; clearTimeout(showing); note("close"); return; }
+    var show = function () {
+      render();
+      note(delegatesIn ? "open (delegate view)" : "open (personal accounts)");
+      if (!delegatesIn && !timer) timer = setTimeout(function () { delegatesIn = true; if (menu.style.display === "block") render(); note("flip to delegate view"); }, D.flipMs);
+    };
+    menu.replaceChildren();
     menu.style.display = "block";
-    note(delegatesIn ? "open (delegate view)" : "open (personal accounts)");
-    if (!delegatesIn && !timer) timer = setTimeout(function () { delegatesIn = true; if (menu.style.display === "block") render(); note("flip to delegate view"); }, D.flipMs);
+    if (menuMs > 0) showing = setTimeout(show, menuMs);
+    else show();
   });
 })();
 </script>`;
@@ -181,6 +188,81 @@ btn.addEventListener('click', async () => {
 </script>`);
 }
 
+/**
+ * A post's page with X's action bar. Repost is a menu button: its attributes (aria-haspopup="menu",
+ * aria-expanded) are those of the Repost button on x.com's logged-out post page (checked Oct 2026); the test id
+ * and "N reposts. Repost" label are from the owner's logged-in trace. That the logged-in button carries the same
+ * ARIA is assumed. Its menu (Repost, Quote) and the quote composer (a modal dialog with the quoted post and Post)
+ * are built after the owner's description, not copied from X's HTML. The menu opens on click and closes on
+ * Escape or a press outside it, like a WAI-ARIA menu button. Everything the menu and the button saw goes to
+ * /api/menu-event (fakeX.menuEvents()).
+ */
+function statusPage(acct, post, menuFlipMs) {
+  const id = post.id;
+  const reposts = post.reposts?.length ?? 0;
+  return page(
+    `${post.account} on X`,
+    `${nav(acct, menuFlipMs)}<main><article data-testid="tweet" role="article">
+<div data-testid="User-Name"><b>${esc(post.name ?? post.account.slice(1))}</b> ${esc(post.account)}</div>
+<div data-testid="tweetText"><p>${esc(post.text)}</p></div><p>${post.media.map((m) => esc(m.name)).join(", ")}</p>
+${post.quote ? `<div role="link" tabindex="0" data-testid="quotedTweet">Quote of ${esc(post.quote.account)}: ${esc(post.quote.text)}</div>` : ""}
+<div role="group" aria-label="${reposts} reposts">
+  <button data-testid="reply" aria-label="0 Replies. Reply">Reply</button>
+  <button data-testid="retweet" id="rt" aria-label="${reposts} reposts. Repost" aria-haspopup="menu" aria-expanded="false">${reposts}</button>
+  <button data-testid="like" aria-label="0 Likes. Like">Like</button>
+</div>
+</article>
+<div id="rt-menu" role="menu" data-testid="Dropdown" style="display:none;position:absolute;background:#fff;border:1px solid #ccc;padding:8px">
+  <div role="menuitem" tabindex="0" data-testid="retweetConfirm" id="rt-confirm">Repost</div>
+  <a role="menuitem" href="/compose/post?quote=${id}" id="rt-quote">Quote</a>
+</div></main>
+<script>
+(function () {
+  var t0 = Date.now();
+  function note(what) { navigator.sendBeacon("/api/menu-event", JSON.stringify({ what: what, ms: Date.now() - t0, path: location.pathname })); }
+  var btn = document.getElementById("rt"), menu = document.getElementById("rt-menu");
+  function open() { var r = btn.getBoundingClientRect(); menu.style.left = r.left + "px"; menu.style.top = (r.bottom + window.scrollY) + "px"; menu.style.display = "block"; btn.setAttribute("aria-expanded", "true"); }
+  function close(why) { if (menu.style.display === "none") return; menu.style.display = "none"; btn.setAttribute("aria-expanded", "false"); note("repost menu closed (" + why + ")"); }
+  btn.addEventListener("click", function (e) {
+    if (menu.style.display === "block") { close("button pressed again"); return; }
+    open();
+    note("repost menu opened (" + (e.isTrusted ? "trusted" : "untrusted") + " click)");
+  });
+  document.addEventListener("pointerdown", function (e) { if (!menu.contains(e.target) && !btn.contains(e.target)) close("press outside"); }, true);
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") close("Escape"); });
+  document.getElementById("rt-confirm").addEventListener("click", function () {
+    note("repost confirmed");
+    fetch("/api/repost", { method: "POST", body: ${JSON.stringify(String(id))} }).then(function () { close("reposted"); });
+  });
+  document.getElementById("rt-quote").addEventListener("click", function () { note("quote chosen"); });
+})();
+</script>`,
+  );
+}
+
+/** The quote composer: a modal dialog over the page with the post being quoted, a text box and Post. */
+function quoteComposer(acct, quoted, menuFlipMs) {
+  return page(
+    "Compose new post / X",
+    `${nav(acct, menuFlipMs)}<main><div role="dialog" aria-modal="true" aria-label="Compose post" style="border:1px solid #888;padding:12px">
+<div contenteditable="true" role="textbox" aria-label="Post text" data-testid="tweetTextarea_0" id="editor"></div>
+<div role="link" tabindex="0" data-testid="quotedTweet"><b>${esc(quoted.name ?? quoted.account.slice(1))}</b> ${esc(quoted.account)}<p>${esc(quoted.text)}</p></div>
+<button data-testid="tweetButton" id="post" disabled>Post</button>
+</div></main>
+<script>
+const editor = document.getElementById('editor');
+const btn = document.getElementById('post');
+editor.addEventListener('input', () => { btn.disabled = editor.innerText.trim().length === 0; });
+btn.addEventListener('click', async () => {
+  const res = await fetch('/api/post', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: editor.innerText.trim(), media: [], quote: ${JSON.stringify(String(quoted.id))} }) });
+  const { url } = await res.json();
+  location.href = url;
+});
+</script>`,
+  );
+}
+
 /** A notes board: a text box and a Post button (the same test ids as X's, so the scripted brain can use it). */
 function notesPage(board) {
   return page(`Notes ${board}`, `<main>
@@ -207,6 +289,8 @@ export function createFakeX() {
   let notes = [];
   /** Follow clicks: { by, handle } (the agent must never follow an account). */
   const follows = [];
+  /** Repost confirms: { by, id }. */
+  const reposts = [];
   /** Accounts a switch to silently does not reach (X stays on the account it was on), as real switches sometimes do. */
   const stuck = new Set();
   /** Images made on /grok/imagine (a tab the composer's "Generate with Grok" opens, like X's). */
@@ -217,16 +301,42 @@ export function createFakeX() {
   let menuFlipMs = 1000;
   /** The account menu's events as the page saw them: opened, flipped, pressed (ms since the page loaded). */
   const menuEvents = [];
+  /**
+   * A slow X (setSlowness), all 0 by default. appMs: an X page shows nothing (its app hidden) this long after it is
+   * parsed, like X's splash before the app draws; menuMs: the account menu opens empty and shows its accounts this
+   * long after; switchMs: X takes this long to answer a switch (/i/switch).
+   */
+  const slowness = { appMs: 0, menuMs: 0, switchMs: 0 };
+  /** An X page (one with the side nav) as the slow X serves it. */
+  const slowed = (html) => {
+    if (typeof html !== "string" || !html.includes("<nav>")) return html;
+    const head = `<body><script>window.__fakeXMenuMs=${slowness.menuMs}</script>`;
+    if (!slowness.appMs) return html.replace("<body>", head);
+    return html
+      .replace("<body>", `${head}<div id="fake-app" style="display:none">`)
+      .replace("</body>", `</div><script>setTimeout(function(){document.getElementById("fake-app").style.display="contents"},${slowness.appMs})</script></body>`);
+  };
 
   const handler = (req, res) => {
     const url = new URL(req.url, "https://x.com");
     const acct = currentAccount(req);
     const send = (status, body, type = "text/html; charset=utf-8", headers = {}) => {
+      if (slowness.appMs || slowness.menuMs) body = slowed(body);
       res.writeHead(status, { "content-type": type, ...headers });
       res.end(body);
     };
+    if (slowness.switchMs && !req.delayed && req.method === "GET" && url.pathname === "/i/switch") {
+      req.delayed = true;
+      setTimeout(() => handler(req, res), slowness.switchMs);
+      return;
+    }
     const json = (status, obj) => send(status, JSON.stringify(obj), "application/json");
 
+    const quoting = url.pathname === "/compose/post" && url.searchParams.get("quote");
+    if (req.method === "GET" && quoting) {
+      const quoted = Object.values(feed).flat().find((p) => String(p.id) === quoting);
+      if (quoted) return send(200, quoteComposer(acct, quoted, menuFlipMs));
+    }
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/home" || url.pathname === "/compose/post")) {
       return send(200, home(acct, feed, menuFlipMs));
     }
@@ -336,17 +446,29 @@ document.getElementById("grok").addEventListener("click", () => { menu.hidden = 
       if (!post) return send(404, page("Not found / X", "<main>Not found</main>"));
       // X shows a post under its author's handle, whatever handle the URL named.
       if (`@${status[1]}` !== post.account) return send(302, "", "text/plain", { location: `/${post.account.slice(1)}/status/${post.id}` });
-      return send(200, page(`${post.account} on X`, `${nav(acct, menuFlipMs)}<main><article data-testid="tweet"><b>${esc(post.account)}</b><p>${esc(post.text)}</p><p>${post.media.map((m) => esc(m.name)).join(", ")}</p></article></main>`));
+      return send(200, statusPage(acct, post, menuFlipMs));
     }
     if (req.method === "POST" && url.pathname === "/api/post") {
       let body = "";
       req.on("data", (c) => (body += c));
       req.on("end", () => {
-        const { text, media } = JSON.parse(body || "{}");
+        const { text, media, quote } = JSON.parse(body || "{}");
         const id = nextId++;
-        const post = { id, account: acct.handle, text, media: media ?? [], at: new Date().toISOString() };
+        const quoted = quote ? Object.values(feed).flat().find((p) => String(p.id) === String(quote)) : null;
+        const post = { id, account: acct.handle, text, media: media ?? [], at: new Date().toISOString(), ...(quoted ? { quote: { id: quoted.id, account: quoted.account, text: quoted.text } } : {}) };
         (feed[acct.handle] ??= []).push(post);
         json(200, { id, url: `/${acct.handle.slice(1)}/status/${id}` });
+      });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/repost") {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        const post = Object.values(feed).flat().find((p) => String(p.id) === body);
+        if (post) (post.reposts ??= []).push(acct.handle);
+        reposts.push({ by: acct.handle, id: body });
+        json(200, { ok: !!post });
       });
       return;
     }
@@ -364,7 +486,7 @@ document.getElementById("grok").addEventListener("click", () => { menu.hidden = 
       req.on("data", (c) => (body += c));
       req.on("end", () => {
         try {
-          menuEvents.push({ account: acct.handle, ...JSON.parse(body) });
+          menuEvents.push({ account: acct.handle, at: Date.now(), ...JSON.parse(body) });
         } catch {}
         json(200, { ok: true });
       });
@@ -388,8 +510,15 @@ document.getElementById("grok").addEventListener("click", () => { menu.hidden = 
     seed: (handle, texts) => {
       for (const text of texts) (feed[handle] ??= []).push({ id: nextId++, account: handle, text, media: [], at: new Date().toISOString() });
     },
+    /** A post by another account (any handle; `name` is its display name), as if it had posted it; returns its id. */
+    seedPost: (handle, text, name) => {
+      const id = nextId++;
+      (feed[handle] ??= []).push({ id, account: handle, ...(name ? { name } : {}), text, media: [], at: new Date().toISOString() });
+      return id;
+    },
     notes: () => notes,
     follows: () => follows,
+    reposts: () => reposts,
     /** Switches to these handles fail from now on (X stays on its account). */
     failSwitches: (handles) => handles.forEach((h) => stuck.add(h)),
     images: () => images,
@@ -397,6 +526,8 @@ document.getElementById("grok").addEventListener("click", () => { menu.hidden = 
     menuEvents: () => menuEvents,
     /** Sets how soon the account menu flips to its delegate view after it opens (ms). */
     setMenuFlipMs: (ms) => (menuFlipMs = ms),
+    /** A slow X: { appMs, menuMs, switchMs } (see `slowness`); unset ones are 0. */
+    setSlowness: (s = {}) => Object.assign(slowness, { appMs: 0, menuMs: 0, switchMs: 0 }, s),
   };
 }
 

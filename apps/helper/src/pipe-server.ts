@@ -46,9 +46,15 @@ function wire<O extends MethodMap, I extends MethodMap>(
 /** A pipe call's params without the token (checked before a handler sees them). */
 type Unsigned<M extends keyof PipeMethods> = Omit<PipeMethods[M]["params"], "token">;
 
+/**
+ * client: which connection the call came on (a number from 1, one per connection while the helper runs). Each MCP
+ * server process (a task's, or the user's own Claude Code attached with --attach) holds one connection for its life.
+ */
 export interface PipeHandlers {
-  toolCall: (params: Unsigned<"tool.call">) => Promise<PipeMethods["tool.call"]["result"]>;
-  toolList: (params: Unsigned<"tool.list">) => PipeMethods["tool.list"]["result"];
+  toolCall: (params: Unsigned<"tool.call">, client: number) => Promise<PipeMethods["tool.call"]["result"]>;
+  toolList: (params: Unsigned<"tool.list">, client: number) => PipeMethods["tool.list"]["result"];
+  /** The connection closed: its MCP server process (and so its Claude Code session) is gone. */
+  closed?: (client: number) => void;
 }
 
 /** The params without their token when it is this helper's; throws otherwise (any other process of the user that finds the pipe). */
@@ -68,13 +74,18 @@ export interface PipeServer {
 /** token: what every call must carry (PipeMethods). */
 export function startPipeServer(path: string, token: string, handlers: PipeHandlers, log?: (line: string) => void): Promise<PipeServer> {
   const sockets = new Set<Socket>();
+  let clients = 0;
   const server: Server = createServer((socket) => {
+    const client = ++clients;
     sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
-    log?.("pipe client connected");
-    const peer = wire<NoMethods, PipeMethods>(socket, "p", (e) => log?.(`pipe client error: ${e.message}`));
-    peer.handle("tool.call", (p) => handlers.toolCall(signedBy(token, p)));
-    peer.handle("tool.list", (p) => handlers.toolList(signedBy(token, p)));
+    socket.on("close", () => {
+      sockets.delete(socket);
+      handlers.closed?.(client);
+    });
+    log?.(`pipe client ${client} connected`);
+    const peer = wire<NoMethods, PipeMethods>(socket, "p", (e) => log?.(`pipe client ${client} error: ${e.message}`));
+    peer.handle("tool.call", (p) => handlers.toolCall(signedBy(token, p), client));
+    peer.handle("tool.list", (p) => handlers.toolList(signedBy(token, p), client));
   });
   return new Promise((resolve, reject) => {
     server.once("error", reject);

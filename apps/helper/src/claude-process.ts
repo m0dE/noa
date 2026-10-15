@@ -13,11 +13,11 @@ export const CLAUDE_NOT_FOUND = `Claude Code was not found. Install it or set ${
 
 /**
  * Flags of every Claude Code run the helper starts: none of Claude Code's
- * own tools (or only `tools`, e.g. Read for a task's attachments), no user or
- * project settings, nothing saved, and the model.
+ * own tools (attached images and PDFs come as blocks in the user message, so
+ * no Read either), no user or project settings, nothing saved, and the model.
  */
-export function isolatedClaudeArgs(model: string, tools: readonly string[] = []): string[] {
-  return ["--tools", tools.join(","), "--setting-sources", "", "--no-session-persistence", "--model", model];
+export function isolatedClaudeArgs(model: string): string[] {
+  return ["--tools", "", "--setting-sources", "", "--no-session-persistence", "--model", model];
 }
 
 /** NOA_CLAUDE_PATH, else `where claude`, else %USERPROFILE%\.local\bin\claude.exe. */

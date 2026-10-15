@@ -1,32 +1,23 @@
-import { delay, MAX_SNAPSHOT_ELEMENTS, MAX_SNAPSHOT_OPTIONS, MAX_SNAPSHOT_TEXT, type PageSnapshot, type Screenshot, type Sleep } from "@noa/shared";
-import { isTabLoaded } from "./chrome-tabs.js";
+import { delay, errorMessage, MAX_SNAPSHOT_ELEMENTS, MAX_SNAPSHOT_OPTIONS, MAX_SNAPSHOT_TEXT, type PageSnapshot, type Screenshot, type Sleep } from "@noa/shared";
 import {
   BACKGROUND_SHOT_SKIPPED,
   clickElement,
   PAGE_MARKS,
-  POLL_MS,
-  pollUntil,
+  PAGE_SCRIPT_FAILED,
   SCREENSHOT_JPEG_QUALITY,
   SCROLL_SETTLE_MS,
   scrollDelta,
-  SETTLE_MS,
   typeIntoElement,
+  type CaptureView,
+  type PageDriver,
+  type PageFunction,
   type Params as P,
   type Result as R,
 } from "./driver-common.js";
 import { parseKeyCombo } from "./keys.js";
-import {
-  checkStateInPage,
-  clickInPage,
-  insertTextInPage,
-  prepareTypingInPage,
-  pressKeyInPage,
-  selectOptionInPage,
-  setCheckedInPage,
-  typeTargetInPage,
-  viewportInPage,
-} from "./page-input.js";
+import { clickInPage, insertTextInPage, pressKeyInPage, scrollViewInPage, viewportInPage } from "./page-input.js";
 import { foreignExtensionInPage, loadProbeInPage, waitForUsablePage, type LoadProbe } from "./page-load.js";
+import { FIND_LIMITS, findTextInPage } from "./page-find.js";
 import { snapshotPage } from "./page-snapshot.js";
 import { waitInPage, type PageWait, type PageWaitArgs } from "./page-wait.js";
 import { xAccountEntryInPage, xHandleParam, type XEntryStep } from "./page-x-account.js";
@@ -50,6 +41,10 @@ const FALLBACK_UPLOAD_ERROR =
   "upload is not possible on this page because another extension's frame blocks Chrome's debugger, " +
   "and an extension cannot attach local files without it. Ask the human to attach the file (task_pause), " +
   "or disable the other extension on this site and try again.";
+
+/** How often a capture refused for Chrome's per-second quota is tried, and how long to wait between tries. */
+const CAPTURE_QUOTA_TRIES = 4;
+const CAPTURE_QUOTA_WAIT_MS = 600;
 
 /**
  * The browser.* methods without chrome.debugger, for tabs where Chrome refuses
@@ -118,32 +113,56 @@ export class FallbackDriver {
     return res?.result as PageResult<PageWait> | undefined;
   }
 
-  async screenshot(tabId: number): Promise<Screenshot> {
+  /** find_text in the page (page-find.ts). */
+  findText(tabId: number, { text, place, scroll, again }: P<"browser.findText">): Promise<R<"browser.findText">> {
+    return this.exec(tabId, findTextInPage, [PAGE_MARKS, text, place ?? 1, scroll === true, FIND_LIMITS, again === true]);
+  }
+
+  /** seen: the tab's window and whether it is hidden from capture, as the caller just read them (else read here). */
+  async screenshot(tabId: number, seen?: CaptureView): Promise<Screenshot> {
+    const view = seen ?? (await this.captureView(tabId));
+    // captureVisibleTab only sees the visible tab (of a minimized window it never answers, measured); Driver brings it to the front first when it may.
+    if (view.hidden) throw new Error(BACKGROUND_SHOT_SKIPPED);
+    // Chrome allows a few captures per second (MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND): a refused one is tried again
+    // once that second has passed, instead of failing the screenshot.
+    for (let tries = 1; ; tries++) {
+      try {
+        const dataUrl = await chrome.tabs.captureVisibleTab(view.windowId, { format: "jpeg", quality: SCREENSHOT_JPEG_QUALITY });
+        return { base64: dataUrl.replace(/^data:[^,]*,/, ""), mimeType: "image/jpeg" };
+      } catch (err) {
+        if (tries >= CAPTURE_QUOTA_TRIES || !/MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND/.test(errorMessage(err))) throw err;
+        await this.sleep(CAPTURE_QUOTA_WAIT_MS);
+      }
+    }
+  }
+
+  private async captureView(tabId: number): Promise<CaptureView> {
     const tab = await chrome.tabs.get(tabId);
-    // captureVisibleTab only sees the visible tab; the tab is never brought to the front.
     const minimized = await chrome.windows.get(tab.windowId).then((w) => w.state === "minimized", () => false);
-    if (!tab.active || minimized) throw new Error(BACKGROUND_SHOT_SKIPPED);
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: SCREENSHOT_JPEG_QUALITY });
-    return { base64: dataUrl.replace(/^data:[^,]*,/, ""), mimeType: "image/jpeg" };
+    return { windowId: tab.windowId, hidden: !tab.active || minimized };
   }
 
   click(tabId: number, p: P<"browser.click">): Promise<R<"browser.click">> {
-    const { index } = p;
-    return clickElement(p, {
-      state: () => this.exec(tabId, checkStateInPage, [PAGE_MARKS, index]),
-      click: () => this.exec(tabId, clickInPage, [PAGE_MARKS, index]).then(() => undefined),
-      force: (checked) => this.exec(tabId, setCheckedInPage, [PAGE_MARKS, index, checked]),
-    });
+    return clickElement(p, this.page(tabId));
   }
 
-  type(tabId: number, { index, text }: P<"browser.type">): Promise<R<"browser.type">> {
-    return typeIntoElement({
-      target: () => this.exec(tabId, typeTargetInPage, [PAGE_MARKS, index]),
-      select: () => this.exec(tabId, selectOptionInPage, [PAGE_MARKS, index, text]),
-      click: () => this.exec(tabId, clickInPage, [PAGE_MARKS, index]).then(() => undefined),
-      prepare: () => this.exec(tabId, prepareTypingInPage, [PAGE_MARKS, index]).then(() => undefined),
-      insert: () => this.exec(tabId, insertTextInPage, [PAGE_MARKS, index, text]).then(() => undefined),
-    });
+  type(tabId: number, p: P<"browser.type">): Promise<R<"browser.type">> {
+    return typeIntoElement(p, this.page(tabId));
+  }
+
+  /** What clickElement and typeIntoElement need, through chrome.scripting (simulated input). */
+  private page(tabId: number): PageDriver {
+    return {
+      run: async <T>(fn: PageFunction<T>, args: unknown[]) => {
+        const [res] = await chrome.scripting.executeScript({ target: { tabId }, func: fn as (...a: unknown[]) => PageResult<T>, args: [PAGE_MARKS, ...args] });
+        // Chrome gives null when the page function threw or the page navigated away meanwhile.
+        return (res?.result as PageResult<T> | null | undefined) ?? undefined;
+      },
+      clickAt: (index, at) => this.exec(tabId, clickInPage, at ? [PAGE_MARKS, index, at] : [PAGE_MARKS, index]).then(() => undefined),
+      insertText: (index, text) => this.exec(tabId, insertTextInPage, [PAGE_MARKS, index, text]).then(() => undefined),
+      backspace: () => this.pressKey(tabId, { key: "Backspace" }).then(() => undefined),
+      sleep: this.sleep,
+    };
   }
 
   async paste(tabId: number, { text }: P<"browser.paste">): Promise<R<"browser.paste">> {
@@ -160,8 +179,8 @@ export class FallbackDriver {
 
   /** Scrolls like a wheel at the viewport center (or over element `index`) and reports what moved. */
   async scroll(tabId: number, { direction, amount = 1, index }: P<"browser.scroll">): Promise<R<"browser.scroll">> {
-    const view = await this.exec(tabId, viewportInPage, []);
-    const { dx, dy } = scrollDelta(direction, amount, view);
+    const view = await this.exec(tabId, scrollViewInPage, [PAGE_MARKS, index ?? null]);
+    const { dx, dy } = scrollDelta(direction, amount, { w: view.stepW, h: view.stepH });
     const r = (await this.exec(tabId, scrollProbeInPage, [PAGE_MARKS, "scroll", view.w / 2, view.h / 2, index ?? null, dx, dy])) as {
       before: ScrollProbe;
       after: ScrollProbe;
@@ -195,7 +214,7 @@ export class FallbackDriver {
     const [res] = await chrome.scripting.executeScript({ target: { tabId }, func, args });
     const out = res?.result as PageResult<T> | undefined;
     // Chrome returns null when the page function threw or the page navigated away meanwhile.
-    if (!out) throw new Error("Page script failed (or the page was navigating); call read_page and try again");
+    if (!out) throw new Error(PAGE_SCRIPT_FAILED);
     if (!out.ok) throw new Error(out.error);
     return out.value;
   }

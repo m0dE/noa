@@ -133,6 +133,17 @@ export const ExtensionSettings = z.object({
   language: LanguageSetting.default("auto"),
   /** A tab the agent controls shows it on the page: a glow and a "Noa is working" pill with Stop (Settings > Tasks). */
   showControlOverlay: z.boolean().default(true),
+  /**
+   * Auto tab switching: when the agent needs to see a tab that is hidden (a screenshot of a background tab, or of a
+   * minimized window's tab where Chrome cannot capture it), its tab is brought to the front without asking, and the
+   * chat says so once. Off: the agent asks first (a card in the chat), and without an OK it cannot see that tab.
+   */
+  autoTabSwitching: z.boolean().default(true),
+  /**
+   * Other tabs: a chat started from a tab is told about the user's other tabs in that window (title and address
+   * without its query or #part) and may read them. Off: it is told about none and cannot use them.
+   */
+  shareOtherTabs: z.boolean().default(true),
   /** How much the chat agent does without asking (automation.ts); enforced before each browser action. */
   automationLevel: AutomationLevel.default(DEFAULT_AUTOMATION_LEVEL),
   /** The side panel's "Permission: Full autonomy" line was closed; cleared when full autonomy is turned off (it shows again when turned on). */

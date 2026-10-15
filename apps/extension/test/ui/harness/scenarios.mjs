@@ -252,6 +252,8 @@ export function scenario(kind) {
     );
   }
   const eventsBySession = {};
+  /** Events a case pushes itself after the panel opened, by session (the stub keeps them in window.__later). */
+  const later = {};
   if (kind === "parallel") {
     // Two due tasks run at once, each in its own tab.
     const second = {
@@ -650,7 +652,7 @@ export function scenario(kind) {
     state.openConversations = ["s-dlg"];
     sessions.unshift(conv);
   }
-  if (kind === "approval-paused") {
+  if (kind === "approval-paused" || kind === "approval-pausing") {
     // A daily scheduled post ran with nobody watching: its Post click needed the user's OK, so the run paused there.
     // Its long instructions open the thread; Jev picked for it; the run said why it paused. The page shows the card
     // alone (Allow & continue, Don't); the rest is for the Raw view.
@@ -690,6 +692,15 @@ export function scenario(kind) {
       pev(-1, { type: "task_end", outcome: "paused", reason }),
     ];
     sessions.unshift(conv);
+    if (kind === "approval-pausing") {
+      // The same run still going while its page is open: the test pushes the rest (the card, the pause, the end).
+      const { endedAt, outcome, reason: _r, ...live } = conv;
+      sessions[0] = live;
+      state.running = live;
+      tasks[0] = { ...tasks[0], status: "running" };
+      delete tasks[0].pauseReason;
+      later["s-paused"] = eventsBySession["s-paused"].splice(5);
+    }
   }
   if (kind === "details") {
     // The running task has long instructions with links, files and an account; a one-off chat has a multi-line message.
@@ -831,5 +842,5 @@ No hashtags, no emoji.`;
   // Log In in the stub signs in as a subscriber (the TODO tab then shows the list).
   // The Raw view: a two-turn voice conversation with its timing trace (raw-scenario.mjs).
   const traces = kind === "raw" ? { [rawSessionId]: rawScenario({ state, sessions, eventsBySession }) } : {};
-  return { state, tasks, seriesRows, tasksSource, tasksLocked, signInPlan: PLUS, events, sessions, eventsBySession, traces, shortcut, voiceShortcut, pastEvents: events.slice(0, 6).map((e) => ({ ...e, sessionId: "s-2" })) };
+  return { state, tasks, seriesRows, tasksSource, tasksLocked, signInPlan: PLUS, events, sessions, eventsBySession, later, traces, shortcut, voiceShortcut, pastEvents: events.slice(0, 6).map((e) => ({ ...e, sessionId: "s-2" })) };
 }

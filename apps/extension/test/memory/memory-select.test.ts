@@ -12,6 +12,7 @@ import {
   type MemoryEntry,
 } from "@noa/shared";
 import { hostsIn, MEMORY_HEADER, recallMemory, recordFor, recordsNamedIn, RECORDS_LABEL, selectMemory, tokensOf } from "../../src/memory/select.js";
+import { threadCpuMs } from "./cpu-time.js";
 
 let n = 0;
 function entry(e: Partial<MemoryEntry> & Pick<MemoryEntry, "kind" | "subject" | "text">): MemoryEntry {
@@ -141,9 +142,10 @@ describe("selectMemory", () => {
     const store = Array.from({ length: 500 }, (_, i) =>
       entry({ kind: (["account", "person", "playbook", "preference"] as const)[i % 4]!, subject: `Subject ${i}`, text: `Fact number ${i} about site${i % 50}.example.com and person ${i}`, ...(i % 4 === 2 ? { domain: `site${i % 50}.example.com` } : {}) }),
     );
-    const t0 = performance.now();
+    // CPU time: the work itself, whatever else the machine runs meanwhile (cpu-time.ts).
+    const t0 = threadCpuMs();
     for (let i = 0; i < 20; i++) selectMemory(store, { hosts: ["site7.example.com"], text: "Tell person 42 about Subject 99 on site7.example.com" });
-    const perCall = (performance.now() - t0) / 20;
+    const perCall = (threadCpuMs() - t0) / 20;
     expect(perCall).toBeLessThan(25);
   });
 });

@@ -33,13 +33,13 @@ import {
   type ToolName,
   traceStart,
 } from "@noa/shared";
-import { buildSystemPrompt, buildTaskPrompt, FOLLOW_UP_PREFIX, reasoningOf, SecretRedactor, withAttachmentLines, type BrowserCaller, type JevLike } from "@noa/core";
+import { attachmentBlocks, buildSystemPrompt, buildTaskPrompt, FOLLOW_UP_PREFIX, reasoningOf, SecretRedactor, withAttachmentLines, type ApiAttachment, type BrowserCaller, type JevLike } from "@noa/core";
 import { RunLog, type LiveLog } from "./logger.js";
 import type { Brain } from "./brains/brain.js";
 import type { WarmClaude } from "./brains/claude-code.js";
 import { INTERACTIVE_TASK_ID } from "./mcp-tools.js";
 import type { ToolSession } from "./tool-router.js";
-import { ATTACHMENTS_DIR, type AttachmentInbox } from "./session/attachments.js";
+import { withBytes, type AttachmentInbox } from "./session/attachments.js";
 import { buildMcpConfig, runDirFor } from "./session/session-setup.js";
 import { TaskSession } from "./session/task-session.js";
 import type { Turn } from "./session/turn.js";
@@ -261,8 +261,8 @@ export class TaskRunner {
   }
 
   /**
-   * Writes the session's MCP config into its run folder and makes its attachments folder (Claude Code runs there,
-   * with Read on the files the user attached); returns them with the session's tools and system prompt.
+   * Writes the session's MCP config into its run folder (Claude Code runs there); returns its path with the session's
+   * tools and system prompt.
    */
   private sessionFiles(
     runDir: string,
@@ -270,7 +270,7 @@ export class TaskRunner {
     jev: boolean,
     followUps: boolean,
     images: boolean,
-  ): { mcpConfigPath: string; readDir: string; allowedTools: string[]; systemPrompt: string } {
+  ): { mcpConfigPath: string; allowedTools: string[]; systemPrompt: string } {
     // act replaces click and type (steps can still name an exact element index).
     const allowed = new Set<ToolName>(toolsFor({ images }));
     const toolNames = TOOL_NAMES.filter((n) => allowed.has(n));
@@ -285,9 +285,7 @@ export class TaskRunner {
       jev,
     });
     writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig, null, 2));
-    const readDir = join(runDir, ATTACHMENTS_DIR);
-    mkdirSync(readDir, { recursive: true });
-    return { mcpConfigPath, readDir, allowedTools: toolNames.map(mcpToolName), systemPrompt: buildSystemPrompt({ tools: toolNames, jev, followUps, readAttachments: true }) };
+    return { mcpConfigPath, allowedTools: toolNames.map(mcpToolName), systemPrompt: buildSystemPrompt({ tools: toolNames, jev, followUps }) };
   }
 
   async run(params: RunTaskParams): Promise<TaskRunResult> {
@@ -339,7 +337,8 @@ export class TaskRunner {
     this.sessionsChanged();
     this.active.add(s);
     const turn = s.startTurn(config);
-    const attachments = this.place(s, params.attachments);
+    // A new agent session has seen none of the conversation's images and PDFs: all of them are shown.
+    const attachments = this.place(s, params.attachments, () => true);
     // The scripted brain uploads every file the task has.
     const uploadable = [...mediaPaths, ...attachments.flatMap((a) => (a.path ? [a.path] : []))];
 
@@ -357,15 +356,16 @@ export class TaskRunner {
     });
 
     try {
-      const { mcpConfigPath, readDir, allowedTools, systemPrompt } = this.sessionFiles(runDir, toolTaskId, jev !== null, s.persistent, images);
+      const { mcpConfigPath, allowedTools, systemPrompt } = this.sessionFiles(runDir, toolTaskId, jev !== null, s.persistent, images);
+      const blocks = attachmentBlocks(attachments);
       // The run folder, the MCP config and the prompts, before the agent starts.
       s.emit({ type: "trace", trace: { t: setup.t, ms: setup.elapsed(), cat: "brain", name: "helper.setup", src: "helper", data: { jev: jev !== null, ...(jevSource ? { jevSource: jevSource.kind } : {}), media: mediaPaths.length, prewarmed: spare !== null } } });
       s.brainDone = brain
         .run({
           taskId: toolTaskId,
-          prompt: buildTaskPrompt(task, mediaPaths, { isRetry: config.isRetry, attachments, view: "read" }),
+          prompt: buildTaskPrompt(task, mediaPaths, { isRetry: config.isRetry, attachments }),
+          ...(blocks.length ? { blocks } : {}),
           systemPrompt,
-          readDir,
           ...(config.model?.trim() ? { model: config.model.trim() } : {}),
           mcpConfigPath,
           allowedTools,
@@ -411,19 +411,23 @@ export class TaskRunner {
     const turn = s.startTurn(params.config);
     s.log.event({ type: "turn_start", chars: params.text.length, maxToolCalls: params.config.maxToolCalls, maxTaskMinutes: params.config.maxTaskMinutes });
     s.emit({ type: "user_message", text: params.text });
-    const attachments = this.place(s, params.attachments);
-    s.input.push(withAttachmentLines(`${FOLLOW_UP_PREFIX}${params.text}`, attachments, "read"));
+    // The session saw the earlier ones: this message's images and PDFs are shown.
+    const attachments = this.place(s, params.attachments, (a) => a.fresh);
+    s.input.push(withAttachmentLines(`${FOLLOW_UP_PREFIX}${params.text}`, attachments), attachmentBlocks(attachments));
     return this.finishTurn(s, turn);
   }
 
-  /** Moves the turn's attachments into the session's attachments folder; upload may attach them from now on. */
-  private place(s: TaskSession, attachments: readonly AgentAttachment[] = []): AgentAttachment[] {
-    if (!attachments.length) return [];
+  /**
+   * Moves the turn's attachments into the session's attachments folder (upload may attach them from now on), with
+   * the bytes of the images and PDFs `show` picks, for the model to see with this message.
+   */
+  private place(s: TaskSession, attachments: readonly AgentAttachment[] | undefined, show: (a: AgentAttachment) => boolean): ApiAttachment[] {
+    if (!attachments?.length) return [];
     const placed = this.deps.inbox.place(s.sessionId, s.runDir, attachments, s.attachments);
     s.tools.executor.allowMedia(placed.flatMap((a) => (a.path ? [a.path] : [])));
     const missing = placed.filter((a) => !a.path).map((a) => a.ref.id);
     if (missing.length) s.log.event({ type: "attachments_missing", ids: missing });
-    return placed;
+    return withBytes(placed, show);
   }
 
   /** Waits for the turn to end, then reports it. The session stays open when its agent is still alive. */

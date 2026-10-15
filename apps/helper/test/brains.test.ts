@@ -21,6 +21,21 @@ describe("UserInput", () => {
     expect(got).toEqual(["a", "b"]);
     expect(closed).toBe(1);
   });
+
+  it("a message keeps its blocks, queued or not", () => {
+    const input = new UserInput();
+    const block = { type: "text", text: "Attachment: a.png" };
+    input.push("early", [block]);
+    const got: unknown[] = [];
+    input.onMessage((t, b) => got.push([t, b]));
+    input.push("late", [block]);
+    input.push("plain");
+    expect(got).toEqual([
+      ["early", [block]],
+      ["late", [block]],
+      ["plain", undefined],
+    ]);
+  });
 });
 
 describe("ScriptedBrain helpers", () => {
@@ -78,16 +93,14 @@ describe("ClaudeCodeBrain helpers", () => {
       "--model",
       "sonnet",
     ]);
-    // A task session: its own Read, allowed in its working directory (the attachments folder) and refused elsewhere.
-    const read = buildClaudeArgs({ systemPrompt: "rules", mcpConfigPath: "C:\\run\\mcp-config.json", allowedTools: ["mcp__noa__act"], read: true, model: "sonnet" });
-    expect(read.slice(read.indexOf("--allowedTools"), read.indexOf("--allowedTools") + 4)).toEqual([
-      "--allowedTools",
-      "mcp__noa__act,Read(./**)",
-      "--permission-mode",
-      "dontAsk",
-    ]);
-    expect(read.slice(read.indexOf("--tools"), read.indexOf("--tools") + 2)).toEqual(["--tools", "Read"]);
     expect(userMessageLine('say "hi"\nnow')).toBe('{"type":"user","message":{"role":"user","content":"say \\"hi\\"\\nnow"}}\n');
+    // Attached images and PDFs: blocks before the text, in the same message (no Read tool to open them with).
+    const image = { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBO" } };
+    expect(JSON.parse(userMessageLine("look", [{ type: "text", text: "Attachment: a.png" }, image]))).toEqual({
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: "Attachment: a.png" }, image, { type: "text", text: "look" }] },
+    });
+    expect(userMessageLine("plain", [])).toBe(userMessageLine("plain"));
   });
 
   it("maps stream-json events to AgentEvents (no tool events)", () => {

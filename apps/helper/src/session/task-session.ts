@@ -132,6 +132,11 @@ export class TaskSession {
 
   /** To the run log and the extension (helper.event), without any password the agent was given. */
   emit(raw: AgentEvent): void {
+    // The answer as the user reads it: task_complete checks it against what the pages confirmed, and the executor may
+    // hold it back until then (it emits it again through here, or drops a refused one). Anything else shows it first.
+    if (raw.type === "assistant_text" || raw.type === "assistant_text_delta") {
+      if (this.tools?.executor.noteText?.(raw)) return;
+    } else if (raw.type !== "trace") this.tools?.executor.flushText?.(); // timings are not shown in the chat
     this.governor.observe(raw);
     const e = this.opts.secrets.redact(raw);
     if (e.type === "error" && this.turn) this.turn.lastError = e.text;

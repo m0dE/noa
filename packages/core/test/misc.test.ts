@@ -127,6 +127,27 @@ describe("jev", () => {
     expect(q.target.instructions).toMatch(/prefer the elements in the open dialog/);
   });
 
+  it("state: elements a modal dialog covers come last and are marked, so a goal naming one is not matched to a look-alike", () => {
+    const snap: PageSnapshot = {
+      url: "https://app.test/billing",
+      title: "Billing",
+      text: "",
+      truncated: false,
+      elements: [
+        { index: 0, tag: "input", role: "textbox", name: "Email for invoices", inViewport: true, covered: true },
+        { index: 1, tag: "button", role: "button", name: "Save", inViewport: true, covered: true },
+        { index: 2, tag: "a", role: "link", name: "Help", inViewport: false, covered: true },
+        { index: 3, tag: "input", role: "textbox", name: "Email", inViewport: true, inDialog: true },
+        { index: 4, tag: "button", role: "button", name: "Add", inViewport: true, inDialog: true },
+      ],
+    };
+    const s = buildJevState("type into the Email for invoices field", snap);
+    expect(s.elements.map((e) => e.index)).toEqual([3, 4, 0, 1, 2]);
+    const q = buildJevQuestions(s);
+    expect(q.target.criteria["1"]).toBe('button "Save", behind the open dialog (covered by it), in view');
+    expect(q.target.criteria["3"]).not.toMatch(/covered/);
+  });
+
   it("a dropdown is described with its options, and choosing one counts as the type operation", () => {
     const snap: PageSnapshot = {
       url: "https://acme.test/signup",
@@ -138,6 +159,69 @@ describe("jev", () => {
     const q = buildJevQuestions(buildJevState("select United Kingdom in the Country dropdown", snap, 250, { typesText: true }));
     expect(q.target.criteria["8"]).toBe('combobox "Country", options: Australia, United Kingdom, in view');
     expect(q.operation.criteria.type).toMatch(/choose it as the option of a dropdown/);
+  });
+
+  it("choosing an option counts as type for a custom dropdown too (a button that opens a list of options)", () => {
+    const snap: PageSnapshot = {
+      url: "https://acme.test/settings",
+      title: "Settings",
+      text: "",
+      truncated: false,
+      elements: [{ index: 3, tag: "button", role: "button", name: "Email notifications Weekly digest", popup: "listbox", expanded: false, inViewport: true }],
+    };
+    const q = buildJevQuestions(buildJevState("set Email notifications to Every message", snap, 250, { typesText: true }));
+    expect(q.operation.criteria.type).toMatch(/a button that opens a list of options/);
+  });
+
+  it("a step with empty text is told to Jev as one that empties a field (the type operation)", () => {
+    const snap: PageSnapshot = {
+      url: "https://shop.test/orders",
+      title: "Orders",
+      text: "",
+      truncated: false,
+      elements: [{ index: 0, tag: "input", role: "searchbox", name: "Search orders", value: "refund 4471", inViewport: true }],
+    };
+    const s = buildJevState("the Search orders box", snap, 250, { typesText: true, emptiesField: true });
+    expect(s.emptiesField).toBe(true);
+    const q = buildJevQuestions(s);
+    expect(q.operation.instructions).toMatch(/this step empties a field/);
+    expect(q.operation.criteria.type).toMatch(/an empty text empties it/);
+    // Typing text, or no text: no such mark.
+    expect(buildJevState("the Search orders box", snap, 250, { typesText: true }).emptiesField).toBeUndefined();
+    expect(buildJevQuestions(buildJevState("the Search orders box", snap, 250, { typesText: true })).operation.instructions).toMatch(/this step types text/);
+  });
+
+  it("offers Jev only the operation act does for the step: type for a step with text, click for one without", () => {
+    // act types (or chooses the option) when the step has text and clicks otherwise: with both offered, Jev split its
+    // confidence between them on "select the State dropdown" (type 0.6, click 0.35) and act stopped as not confident.
+    const snap: PageSnapshot = {
+      url: "https://acme.test/claim",
+      title: "Claim",
+      text: "",
+      truncated: false,
+      elements: [{ index: 5, tag: "select", role: "combobox", name: "State", options: ["CA", "OR"], inViewport: true }],
+    };
+    const withText = buildJevQuestions(buildJevState("select the State dropdown", snap, 250, { typesText: true })).operation.criteria;
+    expect(Object.keys(withText)).toEqual(["type", "scroll", "press_key", "wait", "blocked"]);
+    const noText = buildJevQuestions(buildJevState("open the State dropdown", snap, 250, { typesText: false })).operation.criteria;
+    expect(Object.keys(noText)).toEqual(["click", "scroll", "press_key", "wait", "done", "blocked"]);
+  });
+
+  it("does not offer done for a step with text (Jev is not shown the text); a step without text may be done", () => {
+    // A field holding another value looked done to Jev when it could not see the step's text (type 0.42 to 0.82), and a
+    // done criterion that said "never" still drew weight on dropdown steps (the most when the option was "Never").
+    const snap: PageSnapshot = {
+      url: "https://shop.test/orders",
+      title: "Orders",
+      text: "",
+      truncated: false,
+      elements: [{ index: 1, tag: "input", role: "textbox", type: "email", name: "Customer email", value: "jane@example.com", inViewport: true }],
+    };
+    for (const step of [{ typesText: true }, { typesText: true, emptiesField: true }]) {
+      expect(buildJevQuestions(buildJevState("fill the Customer email field", snap, 250, step)).operation.criteria).not.toHaveProperty("done");
+    }
+    const click = buildJevQuestions(buildJevState("open the Customer email field", snap, 250, { typesText: false })).operation.criteria.done;
+    expect(click).toMatch(/^Nothing to do: the goal is already achieved/);
   });
 
   it("keeps a dense page's request within the token budget, the elements in view first", () => {
@@ -209,7 +293,7 @@ describe("jev", () => {
     expect(d).toEqual({ operation: "click", index: 3, confidence: 0.85, ranked: [3, 4, 0] });
     expect(requests[0].state.previousStep).toBe("step 1: waited");
     const q = requests[0].questions;
-    expect(Object.keys(q.operation.criteria)).toEqual(["click", "type", "scroll", "press_key", "wait", "done", "blocked"]);
+    expect(Object.keys(q.operation.criteria)).toEqual(["click", "scroll", "press_key", "wait", "done", "blocked"]);
     expect(Object.keys(q.target.criteria)).toEqual(["0", "1", "2", "3", "4", "none"]);
     expect(requests[0].state.goal).toBe("g");
   });
@@ -302,12 +386,10 @@ describe("prompts", () => {
   });
 
   it("system prompt: the user's files are in the Noa folder, which list_files lists and upload attaches", () => {
-    for (const readAttachments of [false, true]) {
-      const p = buildSystemPrompt({ tools: TOOL_NAMES, jev: false, readAttachments });
-      expect(p).toMatch(/The user's own files are in their Noa folder \(Downloads\/Noa[^\n]*look there with list_files before saying you cannot get it/);
-      expect(p).toContain("or a path list_files gave for a file in the user's Noa folder");
-      expect(p).toContain("; list_files shows the files in the user's Noa folder, which upload can attach.");
-    }
+    const p = buildSystemPrompt({ tools: TOOL_NAMES, jev: false });
+    expect(p).toMatch(/The user's own files are in their Noa folder \(Downloads\/Noa[^\n]*look there with list_files before saying you cannot get it/);
+    expect(p).toContain("or a path list_files gave for a file in the user's Noa folder");
+    expect(p).toContain("You have no shell, file or web access other than these tools; list_files shows the files in the user's Noa folder, which upload can attach.");
     const without = buildSystemPrompt({ tools: TOOL_NAMES.filter((n) => n !== "list_files" && n !== "generate_image" && n !== "save_file"), jev: false });
     expect(without).not.toMatch(/Noa folder/);
     expect(without).toContain("Attach media with upload, using the exact absolute file paths listed in the task, on an input");
@@ -454,6 +536,34 @@ describe("the user's tab", () => {
     const p = buildTaskPrompt({ ...ask, userTab: { ...inbox, access: "elsewhere" } }, [], { isRetry: false });
     expect(p).toMatch(/working in a new tab next to it/);
     expect(p).toMatch(/open its address in your tab/);
+  });
+
+  it("the user's other tabs in that window are listed by the ids the tools take, to use where they are and never close", () => {
+    const others = [
+      { id: "t2", url: "https://crm.example/accounts/9", title: "Account 9" },
+      { id: "t3", url: "https://docs.example/d/1", title: " " },
+    ];
+    for (const p of [buildTaskPrompt({ ...ask, userTab: { ...inbox, others } }, [], { isRetry: false }), buildFollowUpMessage({ text: "go on", userTab: { ...inbox, others } })]) {
+      expect(p).toContain(`- t2: "Account 9" (https://crm.example/accounts/9)\n- t3: https://docs.example/d/1`);
+      expect(p).toMatch(/Read them with read_page `tabs`, or switch_tab to work in one; never close them/);
+      expect(p).toMatch(/addresses without query or #part until read/);
+      // The list may not hold the page: no "it is one of these".
+      expect(p).not.toMatch(/it is one of these/);
+      expect(p).toMatch(/look in this list first and read it there instead of opening or searching again; if it is not here, find or open it/);
+      expect(p).toContain("Other windows' tabs are not listed; you cannot use those.");
+      expect(p.indexOf("The user's other tabs")).toBeGreaterThan(p.indexOf("The user's tab:"));
+    }
+    // Some left out: how many, and that other windows are not listed either.
+    const more = buildTaskPrompt({ ...ask, userTab: { ...inbox, others, othersMore: 5 } }, [], { isRetry: false });
+    expect(more).toContain("5 more tabs here are not listed (only the 2 used last), nor are other windows' tabs; you cannot use those.");
+    // None open: nothing is said about them.
+    expect(buildTaskPrompt({ ...ask, userTab: { ...inbox, others: [] } }, [], { isRetry: false })).not.toMatch(/The user's other tabs/);
+  });
+
+  it("moving information between pages: each page in its own tab, the source read once, no navigating back and forth", () => {
+    const p = buildSystemPrompt({ tools: TOOL_NAMES, jev: true });
+    expect(p).toMatch(/keep each page in its own tab, never navigating one tab back and forth; read the source once/);
+    expect(p).toMatch(/open a missing one with open_tabs, never navigating away from a page the task still needs/);
   });
 
   it("runs without a tab (scheduled and TODO tasks) say nothing about one", () => {

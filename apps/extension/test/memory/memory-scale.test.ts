@@ -12,6 +12,7 @@ import { recordFor, selectMemory } from "../../src/memory/select.js";
 import { MemoryService } from "../../src/memory/service.js";
 import { MEMORY_STORAGE_KEY, MemoryStore } from "../../src/memory/store.js";
 import { MemoryKvDb } from "../memory-kv.js";
+import { threadCpuMs } from "./cpu-time.js";
 import { memoryStorage } from "./fakes.js";
 
 const TASKS = [
@@ -94,14 +95,17 @@ describe("memory at scale", () => {
     expect(after.some((e) => e.id === "r0x0")).toBe(false);
     expect(after.filter((e) => e.taskKey === TASKS[1]!.taskKey)).toHaveLength(MAX_TASK_RECORDS);
 
-    // Picking a turn's memory: the record the turn names comes first.
+    // Picking a turn's memory: the record the turn names comes first. Each pick's CPU time is checked (the work itself:
+    // its wall-clock time also counts any wait for a CPU on a busy machine, cpu-time.ts); both are logged.
     const select: number[] = [];
+    const selectWall: number[] = [];
     for (let n = 0; n < 60; n++) {
       const t = n % TASKS.length;
       const i = (n * 37) % MAX_TASK_RECORDS || 1;
-      const t0 = performance.now();
+      const [t0, w0] = [threadCpuMs(), performance.now()];
       const s = selectMemory(after, { taskKey: TASKS[t]!.taskKey, hosts: [], text: TASKS[t]!.instructions, pageText: `https://app.example/items\nWorking on ${TASKS[t]!.key(i)} now` });
-      select.push(performance.now() - t0);
+      select.push(threadCpuMs() - t0);
+      selectWall.push(performance.now() - w0);
       expect(s.entries[0]?.subject).toBe(TASKS[t]!.key(i));
     }
 
@@ -129,7 +133,7 @@ describe("memory at scale", () => {
       [
         `[memory scale] ${after.length} entries (${MAX_MEMORY_ENTRIES} personal, ${TASKS.length} x ${MAX_TASK_RECORDS} records)`,
         `  stored: ${(bytes / 1024 / 1024).toFixed(2)} MB (${Math.round(bytes / after.length)} bytes per entry)`,
-        `  selectMemory: ${stat(select)}`,
+        `  selectMemory: CPU ${stat(select)}; wall-clock ${stat(selectWall)}`,
         `  begin (read store + select + mark used): ${stat(begin)}`,
         `  putRecord (read, write, cap): ${stat(writes)}`,
       ].join("\n"),

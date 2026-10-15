@@ -236,3 +236,13 @@ describe("trace report: reasoning", () => {
     expect(calls[1]).toContain("reasoning raised");
   });
 });
+
+describe("trace report: find_text", () => {
+  it("a find_text call shows how often its text was found", () => {
+    const book = newBook("s1");
+    beginTurn(book, 1, T0, { brain: "claude-code", model: "claude-sonnet-5", jev: true, chars: 10 });
+    addEvent(book, { src: "helper", t: T0 + 100, ms: 400, cat: "tool", name: "tool", data: { tool: "find_text", id: "t1", args: '{"text":"Order 4417"}', chars: 120, matches: 2 } });
+    const rows = buildReport({ session, events: [], trace: book, now: T0 + 5000 }).turns[0]!.rows;
+    expect(rows.find((r) => r.name === "tool")!.detail).toBe('{"text":"Order 4417"} · 120 chars · 2 matches');
+  });
+});

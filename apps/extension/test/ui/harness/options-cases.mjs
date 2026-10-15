@@ -52,13 +52,14 @@ const choosingPassphrase = async (p) =>
   (await p.getAttribute("#vault-pass", "placeholder")) === "Choose a passphrase" && (await p.textContent("#vault-unlock")) === "Set passphrase" && (await shown(p, "#vault-create-note"));
 
 /**
- * The header: the product icon, "Noa extension settings" and a one-line subtitle, the account avatar at the
+ * The header: the product icon, "Noa extension settings" with the extension's version beside it and a one-line subtitle, the account avatar at the
  * right. Below it the sidebar: every section with its icon tile, the open one filled with the accent; wide, a column
  * left of the content; narrow (720 px or less), a sideways-scrolling row that stays at the top.
  */
 const headerChecks = (p, signedIn) => [
   ["title and subtitle", async () =>
     (await p.textContent(".head h1")) === "Noa extension settings" && /Changes save as you make them/.test(await p.textContent(".head-sub"))],
+  ["extension version beside the title", async () => (await p.textContent("#head-version")) === "v9.8.7"],
   ["product icon shown", () => p.evaluate(() => { const i = document.querySelector(".head .brand"); return i.complete && i.naturalWidth > 0; })],
   ["avatar at the right of the header", () =>
     p.evaluate(() => {
@@ -104,12 +105,12 @@ const headerChecks = (p, signedIn) => [
 export const OPTION_CASES = [
   ["options-header-signedin", "opt-paid", "#ai", () => {}, (p) => headerChecks(p, true)],
   ["options-header-signedout", "opt-signedout", "#ai", () => {}, (p) => headerChecks(p, false)],
+  // No source picked yet (the saved "auto"): no Auto radio; the source that runs now is checked, here Local Claude Code.
   ["options-ai-auto", "ok", "#ai", onFree, (p) => [
-    ["Auto checked", () => p.isChecked(radio("auto"))],
-    ["Auto says what it picks", async () => /picks Local Claude Code/.test(await p.textContent("#auto-pick"))],
-    ["API key hidden under Auto", async () => !(await shown(p, "[data-secret=anthropicApiKey]"))],
-    // Auto runs on Local Claude Code here: its helper's status (and update steps when it is out of date) show under Auto.
-    ["helper shown under Auto", async () => (await shown(p, "#helper-headline")) && (await p.evaluate(() => document.getElementById("helper-box").closest(".opt")?.dataset.brain)) === "auto"],
+    ["sources: Local Claude Code first, no Auto, no (Recommended)", async () => (await p.locator(".opt[data-brain] .opt-head b").allTextContents()).join("|") === "Local Claude Code|Noa AI|Claude API"],
+    ["Local Claude Code checked", () => p.isChecked(radio("claude-code"))],
+    ["API key hidden", async () => !(await shown(p, "[data-secret=anthropicApiKey]"))],
+    ["helper shown under Local Claude Code", async () => (await shown(p, "#helper-headline")) && (await p.evaluate(() => document.getElementById("helper-box").closest(".opt")?.dataset.brain)) === "claude-code"],
     ["hosted: plan inline with Get a plan", async () => /Free plan/.test(await p.textContent("#hosted-plan")) && (await shown(p, "#hosted-action"))],
     ["model select", async () => (await p.inputValue("#model-select")) === "claude-sonnet-5"],
     ["Reasoning: Fast, with its hint", async () => (await p.inputValue("#f-reasoning")) === "fast" && /little thinking/.test(await p.textContent("#reasoning-hint"))],
@@ -119,11 +120,9 @@ export const OPTION_CASES = [
     ["Reasoning: Thorough, with its hint", async () => (await p.inputValue("#f-reasoning")) === "thorough" && /Thinks before steps/.test(await p.textContent("#reasoning-hint"))],
     ["Think harder when stuck hidden (Thorough already thinks)", async () => !(await shown(p, "#f-reasoningAutoRaise"))],
   ]],
-  // Auto takes the user's own Claude first: with the helper working it picks Local Claude Code even on a plan with credit.
+  // Not picked yet, the user's own Claude runs first: with the helper working, Local Claude Code even on a plan with credit.
   ["options-ai-auto-plus", "ok", "#ai", onPlus, (p) => [
-    ["Auto checked", () => p.isChecked(radio("auto"))],
-    ["Auto describes its order", async () => /Uses your own Claude first, then Noa AI/.test(await p.textContent("#panel-ai"))],
-    ["Auto picks Local Claude Code over Noa AI", async () => /picks Local Claude Code/.test(await p.textContent("#auto-pick"))],
+    ["Local Claude Code checked over Noa AI", async () => (await p.isChecked(radio("claude-code"))) && !(await p.isChecked(radio("noa")))],
   ]],
   ["options-ai-hosted", "ok", "#ai", (d) => {
     onPlus(d);
@@ -138,15 +137,14 @@ export const OPTION_CASES = [
     ["no Jev key field (hosted brings its own Jev)", async () => !(await shown(p, "[data-secret=jevApiKey]"))],
     ["Use Jev does not ask for a key", async () => !/key/i.test(await p.textContent("label[for=f-jevEnabled]"))],
   ]],
-  // Auto that resolves to Noa AI (no helper, no Claude API key): same rule, no Jev key asked for.
+  // Not picked yet and running on Noa AI (no helper, no Claude API key): Noa AI checked, no Jev key asked for.
   ["options-ai-auto-hosted", "ok", "#ai", (d) => {
     onPlus(d);
     d.state.settings.brain = "auto";
     d.state.settings.anthropicApiKey = "";
     d.state.brain = { effective: "noa", helper: null, helperError: "Helper not installed", hasApiKey: false, jevActive: true };
   }, (p) => [
-    ["Auto checked", () => p.isChecked(radio("auto"))],
-    ["Auto picks Noa AI", async () => /picks Noa AI/.test(await p.textContent("#auto-pick"))],
+    ["Noa AI checked", () => p.isChecked(radio("noa"))],
     ["no Jev key field (hosted brings its own Jev)", async () => !(await shown(p, "[data-secret=jevApiKey]"))],
     ["Use Jev does not ask for a key", async () => !/key/i.test(await p.textContent("label[for=f-jevEnabled]"))],
   ]],
@@ -173,7 +171,9 @@ export const OPTION_CASES = [
     d.state.settings.brain = "auto";
     d.state.account = { signedIn: false, signInConfigured: true, apiBase: d.state.account.apiBase, dashboardUrl: d.state.account.dashboardUrl };
   }, (p) => [
-    ["Auto points signed-in Claude Code users at the helper", async () => /install the helper/.test(await p.textContent("#auto-pick"))],
+    // Nothing works yet: Local Claude Code is checked, with the helper's install steps.
+    ["Local Claude Code checked", () => p.isChecked(radio("claude-code"))],
+    ["install steps", () => shown(p, "#helper-install")],
   ]],
   ["options-ai-nohelper", "nobrain", "#ai", (d) => (d.state.settings.brain = "claude-code"), (p) => [
     ["helper not installed", async () => /not installed/.test(await p.textContent("#helper-headline"))],
@@ -185,9 +185,16 @@ export const OPTION_CASES = [
     ["Connect button", async () => (await p.textContent("#helper-connect")) === "Connect"],
   ]],
   // The installer is not on the site (not deployed): no command that would 404 in Terminal.
-  ["options-ai-noinstaller", "nobrain", "#ai", (d) => ((d.state.settings.brain = "claude-code"), (d.helperInstallerDown = true)), (p) => [
+  ["options-ai-noinstaller", "nobrain", "#ai", (d) => ((d.state.settings.brain = "claude-code"), (d.helperInstallerDown = "missing")), (p) => [
     ["no Terminal command", async () => !(await shown(p, "#helper-command")) && !(await shown(p, "#helper-step-terminal"))],
-    ["says the installer is not online, and the repo steps", async () => (await shown(p, "#helper-step-repo")) && /not online yet/.test(await p.textContent("#helper-step-repo"))],
+    ["says there is nothing to run yet, and to click Connect later", async () => (await shown(p, "#helper-step-repo")) && /nothing to run right now\. Click Connect again/.test(await p.textContent("#helper-step-repo"))],
+    ["the repo steps are only for building from source", async () => /Only if you build Noa from its source/.test(await p.textContent("#helper-step-repo"))],
+    ["no \"come back\" step", async () => !(await shown(p, "#helper-step-back"))],
+  ]],
+  // No network: says so, instead of blaming the site.
+  ["options-ai-offline", "nobrain", "#ai", (d) => ((d.state.settings.brain = "claude-code"), (d.helperInstallerDown = "unreachable")), (p) => [
+    ["no Terminal command", async () => !(await shown(p, "#helper-command"))],
+    ["says noa.bot could not be reached", async () => /Could not reach noa\.bot/.test(await p.textContent("#helper-step-repo")) && !/not on noa\.bot yet/.test(await p.textContent("#helper-step-repo"))],
   ]],
   ["options-ai-claudeapi", "ok", "#ai", (d) => (d.state.settings.brain = "claude-api"), (p) => [
     ["API key shown", () => shown(p, "[data-secret=anthropicApiKey]")],
@@ -440,7 +447,7 @@ export const OPTION_CASES = [
 
 export const OPTION_FLOWS = [
   // Regression (Settings showed "$11.14 usage credit left" while runs were refused and the dashboard said $0.67):
-  // Settings is open on Auto -> Noa AI with $11.14; runs in the side panel spend credit, and the background's
+  // Settings is open on Noa AI (not picked yet, running on it) with $11.14; runs in the side panel spend credit, and the background's
   // account now says $0.67 (its state push, as hub.pushState sends it). Coming back to the Settings tab must show
   // the current balance, not the one from when the page was opened. Only a settings save (clicking another Brain
   // option) used to bring the new balance in.
@@ -562,6 +569,27 @@ export const OPTION_FLOWS = [
     },
   },
   // Image generation: on with GPT Image 2 by default; the model and the switch save; off hides the model.
+  // No source picked yet (the saved "auto"): the radio shown checked is not saved on the user's behalf by another
+  // field's save; clicking it (already checked, so no change event) picks it.
+  {
+    name: "options-source-unpicked",
+    size: { w: 1280 },
+    scheme: "light",
+    async run({ openOptions, optChecks }) {
+      const p = await openOptions({ w: 1280, h: 1000 }, "light", "ok", "#ai", onFree);
+      const saved = () => p.evaluate(() => window.__requests.filter((r) => r.type === "settings.save").map((r) => r.settings));
+      const checks = [];
+      const check = (what, ok) => checks.push([what, async () => ok]);
+      check("Local Claude Code shown checked", await p.isChecked(radio("claude-code")));
+      await p.selectOption("#f-reasoning", "thorough");
+      check("another field saves alone", await eventually(async () => (await saved()).some((s) => s.reasoning === "thorough")));
+      check("no source saved with it", (await saved()).every((s) => !("brain" in s)));
+      await p.click(`.opt[data-brain="claude-code"] .opt-head`);
+      check("clicking the shown source picks it", await eventually(async () => (await saved()).some((s) => s.brain === "claude-code")));
+      await optChecks(p, "source-unpicked", checks);
+      await p.ctx.close();
+    },
+  },
   {
     name: "options-images",
     size: { w: 1280 },

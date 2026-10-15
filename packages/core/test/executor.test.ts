@@ -45,11 +45,21 @@ describe("createToolExecutor: plain tools", () => {
       ["browser.click", { index: 0 }],
       ["browser.type", { index: 2, text: "hi" }],
       ["browser.paste", { text: "yo" }],
-      ["browser.pressKey", { key: "Control+Enter" }],
+      // press_key reads the page before and after the key, to say what it caused.
+      ["browser.readPage", {}],
+      ["browser.pressKey", { key: "Control+Enter", settleMs: 500 }],
+      ["browser.readPage", {}],
       ["browser.scroll", { direction: "down", amount: 2 }],
       ["browser.upload", { index: 3, paths: ["C:\\media\\a.png"] }],
     ]);
     expect(events.filter((e) => e.type === "tool_call")).toHaveLength(8);
+  });
+
+  it("press_key says what the key did to the page", async () => {
+    const x = new FakeX();
+    const { exec } = setup(x);
+    const r = await exec.call("press_key", { key: "Escape" });
+    expect(r.text).toBe("Pressed Escape; nothing on the page changed.");
   });
 
   // Every navigate used to be followed by a read_page: one more model turn per page.
@@ -535,7 +545,9 @@ describe("act: failures after Jev picked", () => {
     expect(r.isError).toBeUndefined();
     expect(r.text).toMatch(/step 1: clicked \[1\] link "Home"/);
     expect(r.text).toContain('step 2: "go home again": could not use element [1]: node detached');
-    expect(r.text).toContain("not confident at step 2. Steps 3-3 were not run.");
+    // Jev was sure (0.95): the result says the element failed, not that Jev was unsure.
+    expect(r.text).toContain("Stopped at step 2. Steps 3-3 were not run. Its element could not be used");
+    expect(r.text).not.toMatch(/not confident|not sure/);
     expect(events.filter((e) => e.type === "jev").map((e) => (e as { executed: boolean }).executed)).toEqual([true, false]);
   });
 
@@ -750,6 +762,12 @@ describe("scroll reports what moved", () => {
     );
     expect((await scrollWith({ moved: 800, target: "container", containerIndex: 3, position: 800, size: 3000, view: 1000 }, { direction: "right", index: 3 })).text).toBe(
       "Scrolled right 800 px inside [3] (now 800 of 3,000; 40% across).",
+    );
+  });
+
+  it("a scroll further than the area shows at once says what was skipped", async () => {
+    expect((await scrollWith({ moved: 288, target: "container", containerIndex: 12, position: 288, size: 600, view: 180 }, { direction: "down", amount: 2, index: 12 })).text).toBe(
+      "Scrolled down 288 px inside [12] (now 288 of 600; 69% down). It moved more than the 180 px it shows at once, so 108 px of content in between were never in view (scroll back up with amount 1 to see them).",
     );
   });
 

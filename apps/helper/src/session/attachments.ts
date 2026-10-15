@@ -2,15 +2,40 @@
  * Files the user attached to a conversation, on the helper's side. The
  * extension sends each one ahead in pieces (helper.putAttachment) into the
  * inbox; the session's next turn moves it into its run folder's attachments/
- * folder, the only place Claude Code's Read may look (READ_ATTACHMENTS_ARGS),
- * and the upload tool may attach it from there.
+ * folder, where the upload tool may attach it from, and shows its images and
+ * PDFs to the model as blocks in that turn's message (withBytes).
  */
-import { appendFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ATTACHMENT_CHUNK_BYTES, ATTACHMENT_LIMITS, RpcError, safeFileName, uniqueNames, type AgentAttachment } from "@noa/shared";
+import type { ApiAttachment } from "@noa/core";
 
-/** The run folder's subfolder the attachments go in: Claude Code's working directory, the only one its Read may use. */
+/** The run folder's subfolder the attachments go in. */
 export const ATTACHMENTS_DIR = "attachments";
+
+/**
+ * The attachments, with the bytes (base64) of each placed image or PDF that `show` picks, for the model to see
+ * (attachmentBlocks): this message's first, then the earlier ones newest first, up to `maxBytes` together (a new
+ * session for a long conversation would otherwise send every earlier file in one request, as the API brain's
+ * history keeps at most that much). One left out, or that cannot be read, goes without and is marked `withheld`:
+ * the model is told it could not be shown.
+ */
+export function withBytes(attachments: readonly AgentAttachment[], show: (a: AgentAttachment) => boolean, maxBytes = ATTACHMENT_LIMITS.maxMessageBytes): ApiAttachment[] {
+  const out: ApiAttachment[] = [...attachments];
+  const order = attachments.map((a, i) => ({ a, i })).sort((x, y) => Number(y.a.fresh) - Number(x.a.fresh) || y.i - x.i);
+  let used = 0;
+  for (const { a, i } of order) {
+    if (!a.path || !show(a) || (a.ref.kind !== "image" && a.ref.kind !== "pdf")) continue;
+    try {
+      const bytes = readFileSync(a.path);
+      used += bytes.length;
+      out[i] = used > maxBytes ? { ...a, withheld: true } : { ...a, base64: bytes.toString("base64") };
+    } catch {
+      out[i] = { ...a, withheld: true };
+    }
+  }
+  return out;
+}
 
 /** A name that is only letters, digits, _ and - (ids from the extension end up in paths). */
 function safeId(id: string, what: string): string {

@@ -24,6 +24,8 @@ export function toolArgsSummary(name: string, args: unknown, max = 70): string {
     case "read_page":
     case "screenshot":
       return "";
+    case "find_text":
+      return clip(`${q(a.text)}${a.place !== undefined ? ` (place ${String(a.place)})` : ""}`, max);
     case "act": {
       const steps = Array.isArray(a.steps) ? a.steps.map(obj) : [];
       if (!steps.length) return "";

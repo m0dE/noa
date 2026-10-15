@@ -1,10 +1,10 @@
-import { delay, dialogOpenText, PAGE_SETTLE_MS, urlMatches, type AgentTabInfo, type JsDialog, type PageSnapshot, type Screenshot, type Sleep } from "@noa/shared";
-import type { AgentTab } from "./agent-tab.js";
+import { delay, dialogOpenText, errorMessage, PAGE_SETTLE_MS, urlMatches, type AgentTabInfo, type JsDialog, type PageSnapshot, type Screenshot, type Sleep } from "@noa/shared";
+import { addressOnly, type AgentTab } from "./agent-tab.js";
 import { DialogOpenError, type Cdp } from "./cdp.js";
 import { CdpActions } from "./cdp-actions.js";
 import { closeTabsAsking, noDialogText, type DialogWatch } from "./dialogs.js";
-import { isTabLoaded, tabExists, tabUrl } from "./chrome-tabs.js";
-import { assertOpenable, BACKGROUND_SHOT_SKIPPED, NAV_TIMEOUT_MS, pollUntil, type Params as P, type Result as R } from "./driver-common.js";
+import { tabExists, tabUrl } from "./chrome-tabs.js";
+import { assertOpenable, BACKGROUND_SHOT_SKIPPED, NAV_TIMEOUT_MS, type CaptureView, type Params as P, type Result as R } from "./driver-common.js";
 import { fallbackNote, FallbackDriver } from "./fallback-driver.js";
 import { keyEvents } from "./keys.js";
 import { pageIndicators, type HiddenPart, type PageIndicators } from "./page-indicator.js";
@@ -18,13 +18,27 @@ import { shrinkScreenshot } from "./screenshot-size.js";
 export type WithNote<T> = T & { note?: string };
 
 /**
- * How long a screenshot of a background tab may take. In Chromium 153 (headed,
- * also without Playwright's anti-backgrounding flags) Page.captureScreenshot
- * of a background tab, a tab never shown, or a tab of a minimized or unfocused
- * window returns the real, current page in ~100 ms; this only guards against a
- * browser that never paints hidden tabs.
+ * How long a screenshot of a background tab may take. Measured in Chromium 153 (headed, a window manager, no
+ * Playwright attached to the pages: Playwright's own sessions keep hidden pages painting): Page.captureScreenshot of
+ * a background tab of the window got no answer in 10 s in 9 of 17 tries, and took 0.1-5 s in the others. The active
+ * tab of an unfocused or minimized window answered every time (in under 1 s). See TabFront for what follows.
  */
 const BACKGROUND_SHOT_TIMEOUT_MS = 10_000;
+
+/**
+ * Brings a hidden tab of the run to the front so a screenshot can see it (agent-slots.ts): Auto tab switching does at
+ * once, or, when it is off, after the user's OK on a card.
+ */
+export interface TabFront {
+  /** Auto tab switching is on: a background tab is brought forward before its screenshot, without trying it hidden first. */
+  auto(): Promise<boolean>;
+  /**
+   * Brings the tab forward (restore: its minimized window too) and resolves once it is the active tab, or resolves
+   * with why it stays where it is (the screenshot's answer to the agent: SHOT_NOT_SWITCHED). auto: what auto() said
+   * just before, when it was asked (not asked again).
+   */
+  show(tabId: number, opts: { restore: boolean; auto?: boolean }): Promise<string | null>;
+}
 
 /**
  * How much longer than its slice a wait_for slice may take to answer: the page's own timer may be throttled in a
@@ -65,21 +79,38 @@ export class Driver {
   private readonly noted = new Set<number>();
   /** Tabs whose next result carries the fallback note. */
   private readonly pendingNotes = new Set<number>();
+  /** The other extension whose frame blocks the debugger in a tab (null: the page does not show it), as its note named it. */
+  private readonly foreign = new Map<number, string | null>();
+  /** A call in the tab ran in fallback mode (see the constructor's onFallback). */
+  private readonly onFallback: ((tabId: number) => void) | undefined;
   /** The current tab as of the last ready(). */
   private lastTab: number | null = null;
   /** The control overlay on the pages (page-indicator.ts): never in the agent's screenshots, never under its clicks. */
   private readonly indicator: Pick<PageIndicators, "hiddenDuring">;
   /** The run's dialogs (who answered them, the automatic answers); absent: no automatic answers. */
   private readonly dialogs: DialogWatch | undefined;
+  /** What brings a hidden tab forward for a screenshot; absent: never (the screenshot is skipped). */
+  private readonly front: TabFront | undefined;
 
   constructor(
     private readonly cdp: Cdp,
     private readonly agent: AgentTab,
-    opts: { sleep?: Sleep; fallback?: FallbackDriver; knownTabs?: () => Promise<number[]>; indicator?: Pick<PageIndicators, "hiddenDuring">; dialogs?: DialogWatch } = {},
+    opts: {
+      sleep?: Sleep;
+      fallback?: FallbackDriver;
+      knownTabs?: () => Promise<number[]>;
+      indicator?: Pick<PageIndicators, "hiddenDuring">;
+      dialogs?: DialogWatch;
+      /** Each call that ran in fallback mode, after its note (fallbackOf names the other extension then): the user is told. */
+      onFallback?: (tabId: number) => void;
+      front?: TabFront;
+    } = {},
   ) {
     this.sleep = opts.sleep ?? delay;
+    this.onFallback = opts.onFallback;
     this.indicator = opts.indicator ?? pageIndicators;
     this.dialogs = opts.dialogs;
+    this.front = opts.front;
     this.viaCdp = new CdpActions(cdp, this.sleep);
     this.fallback = opts.fallback ?? new FallbackDriver({ sleep: this.sleep });
     this.knownTabs = opts.knownTabs ?? (() => this.agent.tabIds());
@@ -88,6 +119,15 @@ export class Driver {
   /** True when the current agent tab is driven without the debugger. */
   get inFallback(): boolean {
     return this.lastTab !== null && this.fallbackTabs.has(this.lastTab);
+  }
+
+  /**
+   * Whether the tab is driven without the debugger now, and the other extension whose frame blocks it (null: the
+   * page does not show it, or the first call there has not run yet). Null: the tab has the debugger (or is not the
+   * run's).
+   */
+  fallbackOf(tabId: number): { extensionId: string | null } | null {
+    return this.fallbackTabs.has(tabId) ? { extensionId: this.foreign.get(tabId) ?? null } : null;
   }
 
   /**
@@ -162,15 +202,40 @@ export class Driver {
   }
 
   /**
-   * Screenshot of the current tab. The tab is never brought to the front (the
-   * user may be using another tab): a background tab is captured through the
-   * debugger as it is; when that is not possible the call fails with
-   * BACKGROUND_SHOT_SKIPPED. At most SCREENSHOT_MAX_WIDTH pixels wide.
+   * Screenshot of the current tab, at most SCREENSHOT_MAX_WIDTH pixels wide. Where Chrome cannot capture a tab as
+   * it is (measured: BACKGROUND_SHOT_TIMEOUT_MS), the tab is brought to the front first (front: Auto tab switching,
+   * or the user's OK): through the debugger, a background tab of its window (with Auto tab switching off it is tried
+   * as it is first, and only a timed-out try asks); without it (captureVisibleTab only sees what is on screen), also
+   * the tab of a minimized window. With nothing to bring it forward the call fails with BACKGROUND_SHOT_SKIPPED, or
+   * with why it stays (SHOT_NOT_SWITCHED).
    */
   async screenshot(): Promise<WithNote<Screenshot>> {
     const shot = await this.use(
-      (tabId) => this.withoutIndicator(tabId, "all", () => this.cdpScreenshot(tabId)),
-      (tabId) => this.withoutIndicator(tabId, "all", () => this.fallback.screenshot(tabId)),
+      async (tabId) => {
+        // Whether it is its window's active tab, read once: a background one may not paint (cdpScreenshot).
+        let active = await this.isActive(tabId);
+        if (this.front && !active && (await this.front.auto())) {
+          await this.toFront(tabId, false, true);
+          active = true;
+        }
+        const visible = active;
+        try {
+          return await this.withoutIndicator(tabId, "all", () => this.cdpScreenshot(tabId, visible));
+        } catch (err) {
+          if (!this.front || errorMessage(err) !== BACKGROUND_SHOT_SKIPPED) throw err;
+          await this.toFront(tabId, false);
+          return this.withoutIndicator(tabId, "all", () => this.viaCdp.screenshot(tabId));
+        }
+      },
+      async (tabId) => {
+        const seen = await this.captureView(tabId);
+        // Brought forward: read again (its window restored too).
+        if (this.front && seen?.hidden) {
+          await this.toFront(tabId, true);
+          return this.withoutIndicator(tabId, "all", () => this.fallback.screenshot(tabId));
+        }
+        return this.withoutIndicator(tabId, "all", () => this.fallback.screenshot(tabId, seen ?? undefined));
+      },
       undefined,
       { droppedGoesFallback: true },
     );
@@ -207,7 +272,7 @@ export class Driver {
       return Promise.reject(err);
     }
     return this.use(
-      (tabId) => this.viaCdp.pressKey(tabId, events),
+      (tabId) => this.viaCdp.pressKey(tabId, events, p),
       (tabId) => this.fallback.pressKey(tabId, p),
     );
   }
@@ -216,6 +281,16 @@ export class Driver {
     return this.use(
       (tabId) => this.withoutIndicator(tabId, "pill", () => this.viaCdp.scroll(tabId, p)),
       (tabId) => this.withoutIndicator(tabId, "pill", () => this.fallback.scroll(tabId, p)),
+    );
+  }
+
+  /** find_text on the current tab (page-find.ts): where the text is, and the place asked for scrolled into view. */
+  findText(p: P<"browser.findText">): Promise<WithNote<R<"browser.findText">>> {
+    return this.use(
+      (tabId) => this.viaCdp.findText(tabId, p),
+      (tabId) => this.fallback.findText(tabId, p),
+      undefined,
+      { droppedGoesFallback: true },
     );
   }
 
@@ -328,7 +403,9 @@ export class Driver {
     const infos = await Promise.all(
       tabs.map(async (t): Promise<AgentTabInfo | null> => {
         const tab = await chrome.tabs.get(t.tabId).catch(() => null);
-        return tab ? { id: t.id, url: tabUrl(tab), title: tab.title ?? "", current: t.current } : null;
+        if (!tab) return null;
+        // A user's tab the run has not used yet: its address without the query and #part (agent-tab.ts addressOnly).
+        return { id: t.id, url: t.untouched ? addressOnly(tabUrl(tab)) : tabUrl(tab), title: tab.title ?? "", current: t.current, ...(t.user ? { user: true as const } : {}) };
       }),
     );
     return { tabs: infos.filter((t): t is AgentTabInfo => t !== null) };
@@ -417,9 +494,15 @@ export class Driver {
         }
       }
       const result: WithNote<T> = await viaFallback(tabId);
-      if (!this.pendingNotes.delete(tabId)) return await this.withNewTabs(result);
+      if (!this.pendingNotes.delete(tabId)) {
+        this.onFallback?.(tabId);
+        return await this.withNewTabs(result);
+      }
+      const extensionId = await this.fallback.foreignExtension(tabId);
+      this.foreign.set(tabId, extensionId);
+      this.onFallback?.(tabId);
       // Before a note the result already carries (e.g. the page is still loading); on a copy, never the page's own object.
-      const note = [fallbackNote(await this.fallback.foreignExtension(tabId)), result.note].filter(Boolean).join("\n");
+      const note = [fallbackNote(extensionId), result.note].filter(Boolean).join("\n");
       return await this.withNewTabs({ ...result, note });
     } catch (err) {
       // A page Chrome keeps extensions out of (Web Store, chrome://): one plain sentence, not Chrome's raw error.
@@ -487,9 +570,30 @@ export class Driver {
     return this.indicator.hiddenDuring(tabId, part, call);
   }
 
-  /** A debugger screenshot; of a background tab with a time limit, since Chrome may not paint it. */
-  private async cdpScreenshot(tabId: number): Promise<Screenshot> {
-    const visible = await chrome.tabs.get(tabId).then((t) => t.active, () => true);
+  /** Brings the tab forward through front (restore: its minimized window too); throws why not when it stays. auto: front.auto() just said so. */
+  private async toFront(tabId: number, restore: boolean, auto?: boolean): Promise<void> {
+    const why = await this.front!.show(tabId, auto === undefined ? { restore } : { restore, auto });
+    if (why) throw new Error(why);
+  }
+
+  private isActive(tabId: number): Promise<boolean> {
+    return chrome.tabs.get(tabId).then((t) => t.active, () => true);
+  }
+
+  /**
+   * The tab's window, and whether captureVisibleTab cannot see the tab: it is not its window's active tab, or the
+   * window is minimized (FallbackDriver.screenshot); null when the tab is gone.
+   */
+  private async captureView(tabId: number): Promise<CaptureView | null> {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) return null;
+    if (!tab.active) return { windowId: tab.windowId, hidden: true };
+    const minimized = await chrome.windows.get(tab.windowId).then((w) => w.state === "minimized", () => false);
+    return { windowId: tab.windowId, hidden: minimized };
+  }
+
+  /** A debugger screenshot; of a background tab (not `visible`) with a time limit, since Chrome may not paint it. */
+  private async cdpScreenshot(tabId: number, visible: boolean): Promise<Screenshot> {
     const shot = this.viaCdp.screenshot(tabId);
     if (visible) return shot;
     let timer: ReturnType<typeof setTimeout> | undefined;

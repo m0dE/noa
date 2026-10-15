@@ -493,8 +493,11 @@ export function initChat(opts: ChatOptions = {}): ChatView {
 
   return {
     setRunning(sessions) {
+      const wasRunning = isRunning();
       runningList = sessions;
       const watching = current ? sessions.find((s) => s.sessionId === current!.sessionId) : undefined;
+      // Its task_end came while it was still listed as running: a card its run paused at can be decided only now.
+      if (wasRunning !== !!watching) refreshApprovals();
       // Continue buttons wait until the shown conversation's turn ends.
       log.classList.toggle("busy", !!watching);
       if (watching) {

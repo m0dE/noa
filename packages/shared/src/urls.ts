@@ -17,6 +17,17 @@ export const HELPER_INSTALL_URL = "https://noa.bot/helper/install.sh";
 /** The same for Windows (apps/web/public/helper/install.ps1): a PowerShell script, run with `irm ... | iex`. */
 export const HELPER_INSTALL_PS1_URL = "https://noa.bot/helper/install.ps1";
 
+/**
+ * The installer of exactly one helper build: its code id's folder (helper/<code>/, built by apps/web/build.mjs and
+ * kept in R2 by the site's Worker after later deploys) holds the installer and the helper it downloads. An extension
+ * asks for the code it expects, so it never installs a newer or older helper than its own. Without a code id (a dev
+ * build): the site's current helper.
+ */
+export function helperInstallUrl(kind: "sh" | "ps1", code?: string): string {
+  const latest = kind === "sh" ? HELPER_INSTALL_URL : HELPER_INSTALL_PS1_URL;
+  return code && /^[0-9a-f]{12}$/.test(code) ? latest.replace("/helper/", `/helper/${code}/`) : latest;
+}
+
 /** "@name" from "name", "@name" or " @@name ". */
 export function normalizeHandle(handle: string): string {
   return `@${handle.trim().replace(/^@+/, "").trim()}`;

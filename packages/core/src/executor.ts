@@ -38,20 +38,28 @@ import {
   type TraceValue,
 } from "@noa/shared";
 import type { BrowserCaller, ToolExecutor, ToolExecutorOptions } from "./types.js";
-import { createActGate, RefusedActionError, runAct } from "./act.js";
+import { createActGate, holdResend, keyEffect, listView, RefusedActionError, runAct, SETTLE_AFTER_CLICK_MS, suggestionsShown } from "./act.js";
 import { unreadInterjection, untilUserSpeaks } from "./interjections.js";
-import { formatScroll, formatSnapshot, formatTabs, formatTabSnapshots } from "./page-format.js";
+import { formatFound, formatScroll, formatSnapshot, formatTabs, formatTabSnapshots, formatTypedValues, clipName, unacknowledgedValues } from "./page-format.js";
 import { mapStrings, SecretRedactor } from "./redact.js";
 import { mayPublishKey, switchXAccount, wrongXAccountRefusal } from "./x-account.js";
 import { runWaitFor } from "./wait.js";
 
 /** Answer of task_* tools when the executor has no task to end (mcp-server --attach). */
 export const NO_TASK_TO_END = "no task to end in an attached session";
+/**
+ * How many task_complete calls are refused for naming values the page did not confirm without saying so: a corrected
+ * answer is checked again (one that still claims them is refused again), but the run is not held without end.
+ */
+export const MAX_UNCONFIRMED_REFUSALS = 2;
 
 const err = (text: string): ToolResult => ({ text, isError: true });
 
 /** Tools that do not change the page: the steps Jev left to the model stay open across them. */
-const KEEPS_PENDING = new Set<string>(["act", "read_page", "screenshot", "list_tabs", "list_files"]);
+const KEEPS_PENDING = new Set<string>(["act", "read_page", "find_text", "screenshot", "list_tabs", "list_files"]);
+
+/** Tools that change a page: the model's text before one of them is not its final answer. */
+const ACTIONS = new Set<string>(["act", "navigate", "click", "type", "paste", "press_key", "upload", "open_tabs", "switch_tab", "handle_dialog"]);
 
 /**
  * Tools that may wait for a page to load (up to the driver's navigation timeout, 30 s), and which message from the
@@ -170,9 +178,96 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
   /** Allowed upload paths by pathKey, to the exact path the task listed. */
   const allowedMedia = new Map(opts.mediaPaths.map((p) => [pathKey(p), p]));
   let nextId = 1;
-  /** Jev on: read_page lists elements in words and act steps name indices only after Jev was unsure. */
-  const jevOn = opts.jev !== null;
   const gate = createActGate();
+  /** The model's text since the last browser action, by block id (deltas joined, then replaced by the final text). */
+  const shownText = new Map<string, string>();
+  let textBlocks = 0;
+  /** task_complete checked the forms this task sent several times (once per task). */
+  let createdChecked = false;
+  /** task_complete calls refused for naming unconfirmed values (MAX_UNCONFIRMED_REFUSALS). */
+  let unconfirmedRefusals = 0;
+  /** task_complete was refused for its answer, which was dropped: the next one needs an answer written again. */
+  let answerDropped = false;
+  /** This task_complete's refusal, decided in call() before the call is shown. */
+  let refusing: string | null = null;
+  /** This refusal is for the summary or spoken line only: the answer text it held back is shown, not dropped. */
+  let keepAnswer = false;
+  /** The model's text held back from the chat (noteText) until the next tool call shows or drops it. */
+  const held: AgentEvent[] = [];
+  let releasing = false;
+  /** Text is held while a refusal is possible: a send left values unconfirmed, or a form made several things. */
+  const holdsText = () => (gate.unconfirmed?.size ?? 0) > 0 || (!createdChecked && (gate.created?.length ?? 0) > 1);
+  const releaseText = (drop: boolean) => {
+    const out = held.splice(0);
+    if (drop || !out.length) return;
+    releasing = true;
+    try {
+      for (const e of out) emit(e);
+    } finally {
+      releasing = false;
+    }
+  };
+  /**
+   * task_complete's check of what the user would read: its summary, spoken line and the answer text since the last
+   * browser action. Refused when one of them names a value the page did not confirm (or its field: "with both
+   * labels") and no sentence of it naming that value says it is not confirmed (unacknowledgedValues), up to
+   * MAX_UNCONFIRMED_REFUSALS times; refused once when it leaves out something a repeated form made; then once more if
+   * no answer was written again. An answer text that passes is shown even when the call is refused for its summary or
+   * spoken line (keepAnswer): only those are written again.
+   */
+  const answerRefusal = (args: unknown): string | null => {
+    keepAnswer = false;
+    const a = (args ?? {}) as { summary?: unknown; spoken?: unknown };
+    const answer = [...shownText.values()].join("\n");
+    const said = [a.summary, a.spoken, answer].filter((s): s is string => typeof s === "string").join("\n");
+    // Each is read or heard on its own: each that names an unconfirmed value says it is not confirmed.
+    const unconfirmed = [...(gate.unconfirmed?.values() ?? [])];
+    const answerBare = unacknowledgedValues(answer, unconfirmed);
+    const bare = [a.summary, a.spoken].flatMap((t) => (typeof t === "string" ? unacknowledgedValues(t, unconfirmed) : [])).concat(answerBare);
+    const stated = [...new Set(bare.map((b) => b.value))];
+    // Checked again after a refusal (the corrected answer may still claim them), but not without end.
+    if (!bare.length || ++unconfirmedRefusals > MAX_UNCONFIRMED_REFUSALS) {
+      delete gate.unconfirmed;
+      stated.length = 0;
+    }
+    // Several sends that each made something (duplicates, often): each must be named, by the number the page gave it.
+    const created = gate.created ?? [];
+    const unnamed = !createdChecked && created.length > 1 ? created.filter((c) => (c.shown.match(/\d{2,}/g) ?? []).some((d) => !said.includes(d))) : [];
+    createdChecked ||= created.length > 1;
+    if (stated.length || unnamed.length) {
+      const parts = ["Not recorded yet."];
+      if (stated.length) {
+        const why = [...new Set(stated.map((v) => v.why))].join("; ");
+        const sentences = [...new Set(bare.flatMap((b) => b.sentences))].map((t) => JSON.stringify(clipName(t.trim(), 160)));
+        parts.push(`The page did not confirm these values you typed (${why}): ${formatTypedValues(stated)}, yet your answer, summary or spoken line names them or their fields and does not say they are not confirmed, in: ${sentences.join(", ")}.`);
+      }
+      if (unnamed.length) parts.push(`This task sent a form ${created.length} times and each made something: ${created.map((c) => JSON.stringify(c.shown)).join(", ")}. Your answer does not name ${unnamed.map((c) => JSON.stringify(c.shown)).join(", ")}.`);
+      const correct = "what each one made holds as far as the page showed it, values you typed that the page did not show back as entered but not confirmed, said with them (or left out)";
+      keepAnswer = shownText.size > 0 && !unnamed.length && !(stated.length && answerBare.length);
+      if (keepAnswer) {
+        answerDropped = false;
+        parts.push(`Do not redo or check the work again for this. The answer you wrote was shown to the user and stands: do not write it again. Call task_complete again with a summary and spoken line correcting it: ${correct}.`);
+        return parts.join(" ");
+      }
+      answerDropped = shownText.size > 0;
+      parts.push(
+        `Do not redo or check the work again for this. ${answerDropped ? "The answer you wrote was not shown to the user: write it again in full" : "Write your answer"} as message text, correcting it: ${correct}. Then call task_complete again with a summary and spoken line that say the same.`,
+      );
+      return parts.join(" ");
+    }
+    // Refused and its answer dropped, then called again without writing one: the user would have no answer. Once.
+    if (answerDropped && !shownText.size) {
+      answerDropped = false;
+      return "Not recorded yet: the user has no answer from you (the one you wrote before was not shown). Write it as message text now, in full, then call task_complete again.";
+    }
+    answerDropped = false;
+    return null;
+  };
+  /**
+   * How read_page lists the elements. Jev on: in words, and act steps name indices only after Jev was unsure. Jev off
+   * or paused (too slow for now): with index numbers, which act steps name (listMode).
+   */
+  const pageView = (snap: PageSnapshot) => listView(opts.jev, gate, ({ words }) => formatSnapshot(snap, { words }));
 
   const emit = (e: AgentEvent) => {
     try {
@@ -237,16 +332,18 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
       case "navigate": {
         const r = await browser("browser.navigate", { url: (a as ToolArgsOf<"navigate">).url });
         gate.picks.byAddress = (gate.picks.byAddress ?? 0) + 1;
+        // What act typed on the page it leaves is gone with it.
+        delete gate.typedSince;
         // The page it opened, as read_page shows it: the agent goes on from it without one more model turn to read it.
         const page = await browser("browser.readPage", {}).then(
-          (snap) => formatSnapshot(snap, { words: jevOn }),
+          (snap) => pageView(snap),
           () => null,
         );
         return { text: page ? `Navigated to ${r.url}\n\n${page}` : `Navigated to ${r.url}\nTitle: ${r.title}` };
       }
       case "read_page": {
         const { tabs } = a as ToolArgsOf<"read_page">;
-        if (!tabs) return { text: formatSnapshot(await browser("browser.readPage", {}), { words: jevOn }) };
+        if (!tabs) return { text: pageView(await browser("browser.readPage", {})) };
         // Every tab is read at the same time; one failing tab does not hide the others.
         const ids = [...new Set(tabs)];
         const reads = await Promise.all(
@@ -257,8 +354,8 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
             ),
           ),
         );
-        const text = formatTabSnapshots(reads, { words: jevOn });
-        return reads.every((r) => "error" in r) ? err(text) : { text };
+        if (reads.every((r) => "error" in r)) return err(formatTabSnapshots(reads));
+        return { text: listView(opts.jev, gate, ({ words }) => formatTabSnapshots(reads, { words })) };
       }
       case "open_tabs": {
         const { urls, background } = a as ToolArgsOf<"open_tabs">;
@@ -287,6 +384,21 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
         if (tab !== undefined) params.tab = tab;
         return { text: dialogAnswered(await browser("browser.handleDialog", params), text) };
       }
+      case "find_text": {
+        const { text, place } = a as ToolArgsOf<"find_text">;
+        const params: BrowserMethods["browser.findText"]["params"] = { text, scroll: true };
+        if (place !== undefined) params.place = place;
+        const found = await browser("browser.findText", params);
+        extra.trace = { matches: found.total };
+        if (found.scrolledTo !== null) {
+          // The page read again with the place in view (its controls are listed first, and numbered), then the
+          // places once more for the numbers that read gave their controls (the page searched again only if it changed).
+          await browser("browser.readPage", {});
+          const again = await browser("browser.findText", { ...params, scroll: false, again: true });
+          return { text: listView(opts.jev, gate, ({ words }) => formatFound(text, { ...again, scrolledTo: found.scrolledTo }, { words, place })) };
+        }
+        return { text: listView(opts.jev, gate, ({ words }) => formatFound(text, found, { words, place })) };
+      }
       case "screenshot": {
         const shot = await browser("browser.screenshot", {});
         return { image: { base64: shot.base64, mimeType: shot.mimeType } };
@@ -298,18 +410,27 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
       }
       case "type": {
         const { index, text } = a as ToolArgsOf<"type">;
-        await browser("browser.type", { index, text });
-        return { text: `Typed ${text.length} characters into [${index}].` };
+        const r = await browser("browser.type", { index, text });
+        if (r?.selected !== undefined) return { text: `Chose ${JSON.stringify(r.selected)} in [${index}].` };
+        return { text: text === "" ? `Cleared [${index}].` : `Typed ${text.length} characters into [${index}]${r?.suggestions?.length ? suggestionsShown(r.suggestions) : ""}.` };
       }
       case "paste": {
         const { text } = a as ToolArgsOf<"paste">;
         await browser("browser.paste", { text });
+        // Sent with the next click like act's typing (the field is the focused one, unnamed).
+        gate.typedSince = [...(gate.typedSince ?? []), { field: "", text }];
         return { text: `Inserted ${text.length} characters at the focus.` };
       }
       case "press_key": {
         const { key } = a as ToolArgsOf<"press_key">;
-        await browser("browser.pressKey", { key });
-        return { text: `Pressed ${key}.` };
+        // What the key caused (a form submitted, an error, another page), as act's key steps say it.
+        const read = () => browser("browser.readPage", {});
+        const prior = await read().catch(() => null);
+        const held = key === "Enter" && prior ? holdResend(gate, prior.url) : null;
+        if (held) return err(held);
+        const r = await browser("browser.pressKey", { key, ...(prior ? { settleMs: SETTLE_AFTER_CLICK_MS } : {}) });
+        if (prior && !r?.settled) await sleep(SETTLE_AFTER_CLICK_MS);
+        return { text: `Pressed ${key}${await keyEffect(prior, read, key, gate)}.` };
       }
       case "scroll": {
         const { direction, amount, index } = a as ToolArgsOf<"scroll">;
@@ -448,6 +569,12 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
         return { text: "The user has your answer. Go on with the task." };
       case "task_complete": {
         const { summary, url, ...extras } = a as ToolArgsOf<"task_complete">;
+        // Decided before its call was shown (see call): the answer it would record and show is held back and refused.
+        if (refusing) {
+          const text = refusing;
+          refusing = null;
+          return err(text);
+        }
         const r: TaskRunResult = { outcome: "done", summary };
         if (url) r.url = url;
         // A run note or output holding a password the agent was given is dropped (memory never keeps passwords).
@@ -470,6 +597,18 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
     allowMedia(paths) {
       for (const p of paths) allowedMedia.set(pathKey(p), p);
     },
+    noteText(e) {
+      if (releasing) return false;
+      if (e.type === "assistant_text_delta") shownText.set(e.id, (shownText.get(e.id) ?? "") + e.text);
+      else if (e.type === "assistant_text") shownText.set(e.id ?? `text${textBlocks++}`, e.text);
+      else return false;
+      if (!held.length && !holdsText()) return false;
+      held.push(e);
+      return true;
+    },
+    flushText() {
+      if (!releasing) releaseText(false);
+    },
     takePicks() {
       const p = { ...gate.picks };
       gate.picks = { jev: 0, claude: 0 };
@@ -484,6 +623,13 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
       const span = traceStart();
       // Candidates Jev left to the model stay valid only while the page is left alone.
       if (!KEEPS_PENDING.has(name)) gate.pending.clear();
+      // A task_complete whose answer would be refused: the answer held back is dropped, never shown (one refused only
+      // for its summary or spoken line keeps it: keepAnswer). Any other call shows what was held, before itself.
+      refusing = name === "task_complete" && !opts.interjections?.unseen ? answerRefusal(args) : null;
+      releaseText(refusing !== null && !keepAnswer);
+      // Text before a browser action was progress, not the answer: the answer task_complete checks comes after it.
+      // A refused answer is gone too: only one written again counts.
+      if (ACTIONS.has(name) || refusing) shownText.clear();
       // Arguments can be long (a pasted text): each string is clipped like any other event text.
       const shownArgs = mapStrings(args ?? {}, (s) => clipEventText(s));
       emit({ type: "tool_call", id, name, args: shownArgs });

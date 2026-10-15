@@ -23,6 +23,7 @@ import {
   SENT_OUTPUT,
 } from "../../src/voice/realtime-client.js";
 import { RealtimeEngine } from "../../src/voice/realtime-engine.js";
+import { MicSource } from "../../src/voice/recorder.js";
 import { installMiniDom, MiniElement } from "../ui/mini-dom.js";
 
 class FakeSocket implements RealtimeSocketLike {
@@ -620,6 +621,33 @@ describe("the side panel's hands-free session on Realtime", () => {
       tip.actions![0]!.run();
       await vi.advanceTimersByTimeAsync(0);
       expect(t.engines.at(-1)).toMatchObject({ id: "realtime", takeover: true });
+      expect(t.hf.phase).toBe("listening");
+      t.hf.toggle("button");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Chrome's own words ("Requested device not found") reached the panel as they were: nothing said it was the
+  // microphone, nor what to do.
+  it("no microphone: says so in plain words, with Try again on the same engine", async () => {
+    vi.useFakeTimers();
+    try {
+      const gum = () => Promise.reject(new DOMException("Requested device not found", "NotFoundError"));
+      const failure = await new MicSource({ getUserMedia: gum, createContext: () => { throw new Error("unused"); }, workletUrl: null }).start(() => {}).catch((e: unknown) => e);
+      const t = panel({ failStarts: [failure], traced: true });
+      t.hf.toggle("button");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.hf.active).toBe(false);
+      const tip = t.tips.at(-1)!;
+      expect(tip.text).toMatch(/^No microphone found\. Plug one in/);
+      expect(tip.text).not.toContain("Requested device");
+      expect(tip.actions?.map((a) => a.label)).toEqual(["Try again"]);
+      // The trace keeps Chrome's words.
+      expect(t.trace.find((e) => e.name === "voice.failed")?.data?.error).toBe("NotFoundError: Requested device not found");
+      tip.actions![0]!.run();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.engines.at(-1)?.id).toBe("realtime");
       expect(t.hf.phase).toBe("listening");
       t.hf.toggle("button");
     } finally {

@@ -47,6 +47,23 @@ export interface ElementInfo {
   inViewport: boolean;
   /** Inside an open dialog (role=dialog/alertdialog, aria-modal, or <dialog open>), e.g. X's compose or reply box. */
   inDialog?: boolean;
+  /**
+   * Covered by an open modal dialog (a <dialog> opened with showModal, or aria-modal="true"): a click at its center
+   * lands on the dialog or its backdrop. Clicking or typing into it fails until the dialog is closed.
+   */
+  covered?: boolean;
+  /**
+   * What a click on it opens, as the page declares it (aria-haspopup; "true" means a menu): it shows choices or a
+   * dialog, and does nothing else by itself. Absent when it declares none.
+   */
+  popup?: "menu" | "listbox" | "tree" | "grid" | "dialog";
+  /** aria-expanded: the menu, list or section it opens is open now (true) or closed (false). Absent when not said. */
+  expanded?: boolean;
+  /**
+   * The post, section or dialog it is in (the nearest article, dialog, or labelled region or form), as an index into
+   * PageSnapshot.contexts. Absent when it is in none.
+   */
+  context?: number;
 }
 
 export interface PageSnapshot {
@@ -54,20 +71,100 @@ export interface PageSnapshot {
   title: string;
   /** Visible text of the page, truncated to MAX_SNAPSHOT_TEXT characters. */
   text: string;
+  /** The page has more text than `text` (it was cut at MAX_SNAPSHOT_TEXT). */
+  textCut?: true;
   elements: ElementInfo[];
   /** True when elements were cut at MAX_SNAPSHOT_ELEMENTS. */
   truncated: boolean;
+  /**
+   * The start of each post, section or dialog an element is in (ElementInfo.context): its label and visible text,
+   * at most MAX_CONTEXT_TEXT characters, e.g. "Carla @carla · 2h Our tide tables now cover…". Absent when none.
+   */
+  contexts?: string[];
   /**
    * Visible frames from other sites (e.g. an account switcher or a sign-in popup): their content is
    * not in text or elements, and they cannot be clicked. Absent when there are none.
    */
   frames?: { url: string; title: string }[];
+  /**
+   * Scrollable areas in view (not the page itself) whose content goes on past what they show, e.g. a list of
+   * accounts in a picker. What is scrolled out of an area may be missing from elements and text: a long list often
+   * draws only the rows in view. Absent when there are none.
+   */
+  areas?: ScrollArea[];
 }
+
+/** A scrollable area of a PageSnapshot (PageSnapshot.areas). */
+export interface ScrollArea {
+  /** Its number: browser.scroll with this index scrolls inside it (an element's own number when it is listed too). */
+  index: number;
+  /** Its label (aria-label, or the heading just before it), when it has one. */
+  label?: string;
+  /** The first and last listed elements (else lines of text) it shows. */
+  first?: string;
+  last?: string;
+  /** Its height, and how much of its content is out of view above and below it (CSS pixels). */
+  height: number;
+  above: number;
+  below: number;
+  inDialog?: true;
+}
+
+/** Scrollable areas a snapshot reports (PageSnapshot.areas). */
+export const MAX_SNAPSHOT_AREAS = 8;
 
 export const MAX_SNAPSHOT_TEXT = 8000;
 export const MAX_SNAPSHOT_ELEMENTS = 300;
+/** Characters of a container's text kept in PageSnapshot.contexts. */
+export const MAX_CONTEXT_TEXT = 160;
+/** Containers kept in PageSnapshot.contexts (elements in later ones have no context). */
+export const MAX_SNAPSHOT_CONTEXTS = 60;
 /** Option labels listed per <select> in a snapshot. */
 export const MAX_SNAPSHOT_OPTIONS = 30;
+
+/** Places listed by one find_text (the count says how many there are in all). */
+export const MAX_FOUND_PLACES = 10;
+/** Characters of a found place's text (its row, list item or paragraph) shown around the match. */
+export const MAX_FOUND_CONTEXT = 300;
+/** Controls listed next to each found place. */
+export const MAX_FOUND_CONTROLS = 6;
+
+/** A control next to found text: its role and accessible name, and its read_page number when the last read listed it. */
+export interface FoundControl {
+  role: string;
+  name: string;
+  /** A field's value (a <select>: the chosen option's label); never a password's. */
+  value?: string;
+  /** Checkboxes and radio buttons: whether it is checked. */
+  checked?: boolean;
+  index?: number;
+}
+
+/** One place on the page where find_text's text occurs: its row, list item, paragraph or other smallest block around it. */
+export interface FoundPlace {
+  /** Its number among all the places, in page order (1-based): find_text's `place` scrolls to it. */
+  number: number;
+  /** The place's text (whitespace collapsed), cut to MAX_FOUND_CONTEXT characters around the match. */
+  context: string;
+  /** Matches in this place (a row that names it twice counts 2). */
+  matches: number;
+  /** At least part of it is inside the viewport. */
+  inViewport: boolean;
+  /** The controls inside it (at most MAX_FOUND_CONTROLS): a row's checkbox, its Edit link, a field's value. */
+  controls: FoundControl[];
+}
+
+/** browser.findText's answer. */
+export interface FoundText {
+  /** Matches on the whole page. */
+  total: number;
+  /** Places with a match on the whole page. */
+  placeCount: number;
+  /** The places, in page order: the first MAX_FOUND_PLACES, and the one asked for when it is further down. */
+  places: FoundPlace[];
+  /** The number of the place scrolled into view, or null when none was. */
+  scrolledTo: number | null;
+}
 
 export interface Screenshot {
   /** Base64 without the data: prefix. */
@@ -117,6 +214,8 @@ export interface AgentTabInfo {
   title: string;
   /** The tab the single-tab tools (read_page, act, navigate, ...) act on. */
   current: boolean;
+  /** One of the user's own tabs (open before the run, in its window): usable like the others, never closed. */
+  user?: true;
   /** Set when the tab did not finish loading (e.g. the 30 s cap was hit). */
   error?: string;
 }
@@ -139,24 +238,50 @@ export interface BrowserCallContext {
 export type XAccountEntryClick = { clicked: true } | { clicked: false; reason: string };
 
 /** Params and results of every browser RPC method. */
+/**
+ * After a click, typing or a key: the time the page gets to react (settleMs), which the driver extends while
+ * requests (fetch, XHR) that the page started after the input are still loading, up to SETTLE_REQUESTS_MAX_MS: a
+ * search box's results come from the server, often a second or more after the typing. A driver that did this answers
+ * settled; one that did not (no way to see the page's requests) leaves the wait to the caller.
+ */
+export interface Settle {
+  settleMs?: number;
+}
+export interface Settled {
+  settled?: true;
+}
+/** The longest a click, typing or key waits for the requests it started (Settle). */
+export const SETTLE_REQUESTS_MAX_MS = 4000;
+
 export type BrowserMethods = {
   "browser.navigate": { params: { url: string }; result: { url: string; title: string } };
   /** tab: short tab id ("t2"); default the current tab. Reading never activates the tab. */
   "browser.readPage": { params: { tab?: string }; result: PageSnapshot };
   "browser.screenshot": { params: Record<string, never>; result: Screenshot };
   /**
+   * find_text in the current tab: where `text` occurs in the page's shown text and form fields (case and spacing do
+   * not matter), anywhere on the page. scroll: scrolls place number `place` (1-based, default 1) into view. again:
+   * the same search as the last call (which scrolled), after a page read: its places listed anew without searching
+   * the page again, unless the page changed since. Reads only (scrolling aside): never approval-gated.
+   */
+  "browser.findText": { params: { text: string; place?: number; scroll?: boolean; again?: boolean }; result: FoundText };
+  /**
    * checked: for a checkbox, radio button or switch, the state to set (clicked only when it is not
    * so already); an error for other elements. The result's checked: the state afterwards, for those.
+   * settleMs (on click, type and pressKey): see Settle.
    */
-  "browser.click": { params: { index: number; checked?: boolean }; result: { ok: true; checked?: boolean } };
+  "browser.click": { params: { index: number; checked?: boolean } & Settle; result: { ok: true; checked?: boolean } & Settled };
   /**
    * Replaces a field's value with text (appended in a rich editor). For a <select>, chooses the
-   * option whose label or value is text instead: `selected` is its label.
+   * option whose label or value is text instead, and for a custom dropdown (an ARIA combobox or a
+   * button with a listbox popup) opens it and clicks the option labelled text: `selected` is its label.
+   * A text field that suggests values as you type (an ARIA combobox, not a search box) gets the
+   * suggestion labelled text clicked (`selected`); when none is, `suggestions` lists those shown.
    */
-  "browser.type": { params: { index: number; text: string }; result: { ok: true; selected?: string } };
+  "browser.type": { params: { index: number; text: string } & Settle; result: { ok: true; selected?: string; suggestions?: string[] } & Settled };
   "browser.paste": { params: { text: string }; result: { ok: true } };
   /** key is a KeyboardEvent.key value, optionally with modifiers: "Control+Enter". */
-  "browser.pressKey": { params: { key: string }; result: { ok: true } };
+  "browser.pressKey": { params: { key: string } & Settle; result: { ok: true } & Settled };
   "browser.scroll": {
     params: { direction: ScrollDirection; amount?: number; index?: number };
     /** The report fields are missing when the driver could not measure (older drivers, fakes). */

@@ -89,7 +89,8 @@ export const APPROVAL_TIMEOUT_MS = 10 * 60_000;
 /**
  * The browser methods that change something: each may wait for an approval
  * (so a caller's timeout for them must allow APPROVAL_TIMEOUT_MS more).
- * Reads, screenshots, scrolling and switching tabs never wait; of the dialog
+ * Reads (finding text too), scrolling and switching tabs never wait (a screenshot may wait for the
+ * shorter card asking to switch tabs: SWITCH_APPROVAL_TIMEOUT_MS); of the dialog
  * answers, only OK on a confirm or prompt and Leave on "Leave site?" may.
  */
 export const APPROVAL_GATED_METHODS = [
@@ -122,9 +123,28 @@ export interface ApprovalRequest {
   kind?: ConsequenceKind;
   /** The exact text it posts or sends (the text typed before it), when there is one. */
   text?: string;
+  /**
+   * What it acts on: the start of the post, section or dialog the element is in, as the page shows it (e.g. the
+   * author and first words of the post a Repost reposts). Absent when the element is in none.
+   */
+  target?: string;
   /** When it stops waiting (ISO); no answer by then counts as denied. */
   expiresAt: string;
+  /**
+   * Not an action on the page: the agent needs this tab of the run in front to see it (a screenshot) and Auto tab
+   * switching is off. The card offers Switch to it (allow_once) and Not now (deny); Switch to it brings the tab
+   * forward and opens the side panel by it.
+   */
+  switchTo?: { tabId: number };
 }
+
+/**
+ * How long the card asking to switch to a tab for a screenshot waits (ApprovalRequest.switchTo). Shorter than other
+ * cards: the screenshot call waits for it (after a background screenshot tried first, which may take 10 s), and the
+ * helper gives the screenshot call this much on top of a browser call's 60 s (approvalWaitMs in
+ * apps/helper/src/tool-router.ts).
+ */
+export const SWITCH_APPROVAL_TIMEOUT_MS = 45_000;
 
 /**
  * The user's answer on an approval card. allow_once ("Allow"): just this action; the next one asks again.

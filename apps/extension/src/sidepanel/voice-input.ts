@@ -25,6 +25,7 @@
  */
 import { errorMessage, plansWithText } from "@noa/shared";
 import type { MicPermission } from "../voice/mic-access.js";
+import { MicError } from "../voice/mic-errors.js";
 import { VoiceError } from "../voice/transcribe.js";
 import type { ComposerView, DictationLook } from "./composer.js";
 import { FIXES } from "./error-help.js";
@@ -63,6 +64,7 @@ export function errorTip(err: unknown, openBilling: () => void): VoiceTip {
     if (err.kind === "credit") return { text: err.message, level: "error", actions: [{ label: "Top up", run: openBilling }] };
     return { text: err.message, level: "error" };
   }
+  if (err instanceof MicError) return { text: err.message, level: "error" };
   return { text: `Voice stopped: ${errorMessage(err)}`, level: "error" };
 }
 

@@ -318,7 +318,9 @@ function eventRow(e: StampedAgentEvent, t: number, span: TraceEvent | undefined,
           ? `Jev: ${e.operation}${target} · ${e.confidence.toFixed(2)}`
           : e.notRun
             ? `Jev: ${e.operation}${target} · ${e.confidence.toFixed(2)} · ${e.notRun === "not_approved" ? "not approved" : e.notRun}`
-            : `Jev unsure (${e.confidence.toFixed(2)})`,
+            : e.operation === "slow" || e.operation === "skipped"
+              ? `Jev too slow (${e.operation})`
+              : `Jev unsure (${e.confidence.toFixed(2)})`,
         detail: clip(e.goal, 160),
         ms: e.ms,
         slow: e.ms >= SLOW_MS.jev,
@@ -367,6 +369,10 @@ function eventRow(e: StampedAgentEvent, t: number, span: TraceEvent | undefined,
       return { ...base, label: `Approval: ${APPROVAL_OUTCOME_TEXT[e.outcome] ?? e.outcome}${e.by ? ` (${APPROVAL_BY_TEXT[e.by]})` : ""}`, detail: `id ${e.id}` };
     case "dialog":
       return { ...base, label: dialogLine(e), detail: join(`${e.dialog.type} by ${e.by}`, e.tab && `tab ${e.tab}`, e.dialog.url) };
+    case "limited_mode":
+      return { ...base, label: "Limited mode", detail: join(e.tab && `tab ${e.tab}`, e.extensionId && `extension ${e.extensionId}`, e.url) };
+    case "auto_tab_switching":
+      return { ...base, label: "Auto tab switching on", detail: join(e.tab && `tab ${e.tab}`, e.url) };
     case "task_end": {
       const text = e.summary ?? e.reason ?? "";
       const row: Omit<TraceRow, "rel"> = { ...base, label: `Result: ${e.outcome}`, text: clip(text, TEXT_LIMITS.answer) };
@@ -398,6 +404,9 @@ function resultSize(d: Record<string, TraceValue>): string {
   const kb = num(d.imageKB);
   if (kb) parts.push(`image ${kb} KB`);
   if (d.error === true) parts.push("error");
+  // find_text: how often the text was found on the page.
+  const matches = num(d.matches);
+  if (matches !== undefined) parts.push(`${matches} ${matches === 1 ? "match" : "matches"}`);
   // wait_for: why it stopped waiting, after how long, and how many slices the browser watched (no model calls).
   const waited = num(d.waitedMs);
   if (typeof d.end === "string") parts.push(`wait ${d.end}${waited !== undefined ? ` after ${durationText(waited)}` : ""}${num(d.checks) !== undefined ? `, ${d.checks} checks` : ""}${d.met ? `: ${String(d.met)}` : ""}`);

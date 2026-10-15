@@ -29,7 +29,7 @@ export { NOT_CONFIDENT } from "./act.js";
 /** Checks independently that an X post exists and shows the expected text. */
 export { verifySnippet, verifyXPost } from "./verify.js";
 /** One Messages request (Anthropic or the hosted AI), for one-shot calls outside the agent loop (the memory writer). */
-export { postMessages, type MessagesRequest, type MessagesTransport, type PostResult } from "./anthropic.js";
+export { postMessages, type ContentBlock, type MessagesRequest, type MessagesTransport, type PostResult } from "./anthropic.js";
 /** How much the model thinks: the stuck detector that raises a Fast run's reasoning, and each model's request settings. */
 export {
   MAX_RAISES_PER_TURN,
@@ -52,4 +52,4 @@ export { startApiAgent } from "./api-agent.js";
 /** Token counts of a Messages API usage object, as the trace records them (Claude Code reports the same shape). */
 export { usageOf } from "./api-agent.js";
 /** Files the user attached, as the model gets them: listed in the message, images and PDFs as blocks or for Claude Code's Read. */
-export { attachmentBlocks, attachmentLines, withAttachmentLines, type ApiAttachment, type AttachmentView } from "./attachments.js";
+export { attachmentBlocks, attachmentLines, withAttachmentLines, type ApiAttachment } from "./attachments.js";

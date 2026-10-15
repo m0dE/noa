@@ -5,8 +5,9 @@
  * What shows when comes from settingsView() (settings-view.ts).
  */
 import { OPEN_CHAT_COMMAND, openShortcutSettings, readShortcut, VOICE_COMMAND, type ShortcutCommand } from "../shortcut.js";
-import { errorMessage, HELPER_INSTALL_PS1_URL, HELPER_INSTALL_URL, LONGEST_RUN_HINT, type BrainMode, type ExtensionSettings } from "@noa/shared";
+import { errorMessage, helperInstallUrl, LONGEST_RUN_HINT, type BrainMode, type ExtensionSettings } from "@noa/shared";
 import { isStale, OPTIONS_PORT_NAME, uiRequest, type UiState } from "../ui-protocol.js";
+import { HELPER_CODE } from "../build-config.js";
 import { connectBackground } from "../sidepanel/port.js";
 import { createAccountMenu } from "../ui/account-menu.js";
 import { $, busy, closeMenusOnOutsideClick, find, flash, h } from "../ui/dom.js";
@@ -63,6 +64,7 @@ const reasoningSelect = $<HTMLSelectElement>("f-reasoning");
 const input = (key: string) => $<HTMLInputElement>(`f-${key}`);
 initAiTabs();
 initSidebar();
+$("head-version").textContent = `v${chrome.runtime.getManifest().version}`;
 
 let state: UiState | null = null;
 let saved: ExtensionSettings | null = null;
@@ -82,8 +84,12 @@ modelSelect.replaceChildren(
 
 // ------------------------------------------------------------ form <-> settings
 
+/** The saved source is "auto" (never picked) and no radio was clicked yet: the checked radio only shows what runs now. */
+const brainUnpicked = () => saved?.brain === "auto" && !form.querySelector<HTMLInputElement>("input[name=brain][data-touched]");
+
 function readValues(): FormValues {
-  const brain = (form.querySelector<HTMLInputElement>("input[name=brain]:checked")?.value ?? saved?.brain ?? "auto") as BrainMode;
+  const checked = brainUnpicked() ? null : form.querySelector<HTMLInputElement>("input[name=brain]:checked")?.value;
+  const brain = (checked ?? saved?.brain ?? "auto") as BrainMode;
   const out: Record<string, unknown> = { brain, reasoning: reasoningSelect.value || saved?.reasoning };
   for (const k of NUMBER_FIELDS) out[k] = input(k).value;
   for (const k of TEXT_FIELDS) out[k] = input(k).value;
@@ -179,6 +185,14 @@ form.addEventListener("change", (e) => {
     saves.schedule();
   }
 });
+// Not picked yet: clicking the source already shown checked fires no change, but picks it.
+form.addEventListener("click", (e) => {
+  const t = e.target as HTMLInputElement;
+  if (t.name !== "brain" || !brainUnpicked()) return;
+  t.dataset.touched = "1";
+  render();
+  saves.schedule();
+});
 modelSelect.addEventListener("change", () => {
   const custom = input("anthropicModel");
   if (modelSelect.value === CUSTOM_MODEL) {
@@ -223,21 +237,16 @@ function render(): void {
   const d = draft();
   const v = settingsView({ settings: saved, draft: d, brain: state.brain, account: state.account });
 
+  const unpicked = brainUnpicked();
   for (const o of v.options) {
     const row = find(document, `.opt[data-brain="${o.value}"]`);
-    find<HTMLInputElement>(row, "input[type=radio]").disabled = !o.enabled;
+    const radio = find<HTMLInputElement>(row, "input[type=radio]");
+    radio.disabled = !o.enabled;
+    if (unpicked) radio.checked = o.value === v.shownBrain;
     find(row, ".opt-detail").textContent = o.detail;
     const more = row.querySelector(".reveal");
-    if (more) reveal(more, d.brain === o.value);
+    if (more) reveal(more, v.shownBrain === o.value);
   }
-  const pick = $("auto-pick");
-  find(pick, ".t").textContent = v.autoPick.text;
-  setTone(pick, v.autoPick.tone);
-  setTone(find(pick, ".dot"), v.autoPick.tone);
-  // One helper block: under Local Claude Code, or under Auto while nothing runs without the helper.
-  const helperBox = find(document, ".helper");
-  const helperHome = find(document, `.opt[data-brain="${v.helperUnder ?? "claude-code"}"] .reveal-inner`);
-  if (helperBox.parentElement !== helperHome) helperHome.append(helperBox);
   // A link to the helper (options.html#helper, the side panel's "How to update"): scrolled to once it is in place.
   if (revealHelperPending) {
     revealHelperPending = false;
@@ -293,6 +302,7 @@ function renderState(s: UiState): void {
   // Updating a connected helper: Claude Code is there already, and the button says Re-check.
   $("helper-step-claude").hidden = !!b.helper;
   $("helper-connect-name").textContent = $("helper-connect").textContent;
+  for (const el of document.querySelectorAll(".helper-recheck-name")) el.textContent = $("helper-connect").textContent;
   render();
 }
 
@@ -375,7 +385,7 @@ function connectHelper(): void {
     helperMsg,
   );
 }
-connectBtn.addEventListener("click", connectHelper);
+connectBtn.addEventListener("click", () => (checkInstaller(), connectHelper()));
 
 // Installing the helper: one command that downloads it, in Terminal on macOS and Linux (install.sh) and in
 // PowerShell on Windows (install.ps1); the repo's installer only while the site does not serve the installer
@@ -392,17 +402,27 @@ $("helper-app-name").textContent = SHELL.name;
 $("helper-paste-key").textContent = SHELL.paste;
 $("helper-enter-key").textContent = SHELL.enter;
 $("helper-command").textContent = (onWindows ? helperInstallCommandWindows : helperInstallCommand)(chrome.runtime.id);
-function showInstallSteps(installerOnline: boolean): void {
-  $("helper-step-terminal").hidden = !installerOnline;
-  $("helper-step-command").hidden = !installerOnline;
-  $("helper-step-repo").hidden = installerOnline;
-  $("helper-repo-why").textContent = "The one-step installer is not online yet.";
+/** The install command once the site serves this version's installer; else why there is none (not served, or no site). */
+function showInstallSteps(installer: "online" | "missing" | "unreachable"): void {
+  const online = installer === "online";
+  $("helper-step-terminal").hidden = !online;
+  $("helper-step-command").hidden = !online;
+  $("helper-step-back").hidden = !online;
+  $("helper-step-repo").hidden = online;
+  $("helper-repo-why").textContent =
+    installer === "unreachable"
+      ? "Could not reach noa.bot for the installer. Check your internet connection."
+      : "The installer for this version of Noa is not on noa.bot yet, so there is nothing to run right now.";
 }
-showInstallSteps(false);
-void fetch(onWindows ? HELPER_INSTALL_PS1_URL : HELPER_INSTALL_URL, { method: "HEAD", cache: "no-store" }).then(
-  (res) => showInstallSteps(res.ok),
-  () => showInstallSteps(false),
-);
+/** Checked on load and on each Connect / Re-check. */
+function checkInstaller(): void {
+  void fetch(helperInstallUrl(onWindows ? "ps1" : "sh", HELPER_CODE), { method: "HEAD", cache: "no-store" }).then(
+    (res) => showInstallSteps(res.ok ? "online" : "missing"),
+    () => showInstallSteps("unreachable"),
+  );
+}
+showInstallSteps("missing");
+checkInstaller();
 $("helper-copy").addEventListener("click", () =>
   void navigator.clipboard.writeText($("helper-command").textContent ?? "").then(
     () => {

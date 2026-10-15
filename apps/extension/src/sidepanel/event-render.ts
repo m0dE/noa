@@ -7,6 +7,7 @@ import { undoneText, type MemoryNoteView } from "./memory-note.js";
 import { renderApproval, type ApprovalCardActions } from "./approval-card.js";
 import { sessionHeadline } from "./format.js";
 import { MarkdownView } from "./markdown.js";
+import { openSettings } from "./open-settings.js";
 import { renderSentFiles } from "./attachments/view.js";
 
 /** What a scheduled card's buttons do (the chat binds them; without them the card shows no buttons). */
@@ -40,6 +41,10 @@ export function renderEvent(v: EventView, onContinue?: () => void, scheduled?: S
     case "dialog":
       // A step of the run like a status line, and worded like one.
       return h("div.ev-status.ev-dialog", { title: v.title }, v.text);
+    case "limited":
+      return renderLimited(v);
+    case "tabswitch":
+      return renderTabSwitch(v);
     case "text":
       return renderText(v.text, v.id);
     case "tool":
@@ -125,8 +130,46 @@ export function renderEvent(v: EventView, onContinue?: () => void, scheduled?: S
   }
 }
 
+/** A tab in limited mode: a warning notice in the thread, with the other extension's page in Chrome when known. */
+export function renderLimited(v: Extract<EventView, { kind: "limited" }>): HTMLElement {
+  const url = v.settings;
+  return h(
+    "div.ev-limited",
+    { role: "note" },
+    h("div.lim-msg", null, v.text),
+    h("div.lim-hint", null, v.hint),
+    url
+      ? h(
+          "div.lim-actions",
+          null,
+          h("button.small", { type: "button", title: url, onclick: () => void chrome.tabs?.create({ url }).catch(() => undefined) }, "Open that extension"),
+        )
+      : null,
+  );
+}
+
+/** Notices with an (i) in this panel: each one's explanation gets its own id (aria-controls). */
+let infoIds = 0;
+
 /**
- * A change to the agent's memory: "Remembered: <subject> · <text>" on one quiet line, with Undo ("replaced “<old>”"
+ * Auto tab switching brought a tab forward: one line in the thread, and an (i) button (aria-expanded) that shows why,
+ * what not to do meanwhile, and a Settings button that opens the options page at the toggle.
+ */
+export function renderTabSwitch(v: Extract<EventView, { kind: "tabswitch" }>): HTMLElement {
+  const id = `ev-info-${++infoIds}`;
+  const settings = h("button.small", { type: "button", onclick: () => void openSettings(v.settings) }, "Open Settings");
+  const more = h("div.ts-hint", { id, hidden: true }, h("p", null, v.hint), h("div.ts-actions", null, settings));
+  const info = h("button.ts-info", { type: "button", "aria-expanded": "false", "aria-controls": id, "aria-label": "What this means", title: "What this means" }, "i");
+  info.addEventListener("click", () => {
+    const open = more.hidden;
+    more.hidden = !open;
+    info.setAttribute("aria-expanded", String(open));
+  });
+  return h("div.ev-tabswitch", { role: "note" }, h("div.ts-line", null, h("span.ts-msg", null, v.text), info), more);
+}
+
+/**
+ * A change to the agent's memory:"Remembered: <subject> · <text>" on one quiet line, with Undo ("replaced “<old>”"
  * after the subject when it replaced another entry). Undone, it says so, with Redo; a failed undo or redo says why
  * under the line and keeps its button.
  */

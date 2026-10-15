@@ -48,9 +48,23 @@ export interface JevLike {
     snapshot: PageSnapshot;
     /** The step types text (the text itself stays with Claude). */
     typesText?: boolean;
+    /** The step's text is empty: it empties the field. */
+    emptiesField?: boolean;
     /** What the previous step of the same act call did. */
     previousStep?: string;
   }): Promise<JevDecision>;
+  /**
+   * Whether this run has stopped relying on Jev for now (it was too slow, or it is off for lack of credit); null when
+   * it is used. While paused, act takes element indices as with Jev off (see act.ts listMode).
+   */
+  paused?(): JevPause | null;
+}
+
+export interface JevPause {
+  /** Why, in words for the model: "it was slower than 3 s on 2 steps in a row". */
+  why: string;
+  /** The next decide asks Jev again (the skip is over): an answer in time ends the pause. False: it would not be asked. */
+  retry: boolean;
 }
 
 export interface ToolExecutorOptions {
@@ -124,6 +138,15 @@ export interface ToolExecutor {
   takePicks(): ElementPicks;
   /** Lets upload attach these files too (a later turn's attachments). */
   allowMedia(paths: readonly string[]): void;
+  /**
+   * The model's text (assistant_text and its deltas), so task_complete can check the turn's answer, not only its
+   * summary. The brain passes each such event before showing it. True: the executor holds it back (a send left
+   * values the page did not confirm, so the answer may be refused): it shows it itself at the next tool call, or
+   * drops it when task_complete is refused for it. Released events come back through the brain's emit (false then).
+   */
+  noteText?(e: AgentEvent): boolean;
+  /** Shows any text held back (noteText): the brain calls it before any other event it emits itself. */
+  flushText?(): void;
 }
 
 /** A running agent. */

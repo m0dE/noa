@@ -81,6 +81,7 @@ describe("ApprovalGate per level", () => {
     await postFlow(t.call);
     await t.call("browser.scroll", { direction: "down" });
     await t.call("browser.screenshot", {});
+    await t.call("browser.findText", { text: "Hello", scroll: true });
     await t.call("browser.listTabs", {});
     await t.call("browser.pressKey", { key: "Escape" });
     await t.call("browser.navigate", { url: "https://x.com/explore" });

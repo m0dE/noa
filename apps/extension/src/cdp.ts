@@ -26,6 +26,15 @@ export class DialogOpenError extends Error {
   }
 }
 
+/** One watchRequests: the requests still loading, and how many started. */
+interface RequestWatch {
+  open: Set<string>;
+  started: number;
+}
+
+/** The requests watchRequests counts (Network.ResourceType): the ones a page's script sends for data. */
+const WATCHED_REQUESTS = new Set(["Fetch", "XHR"]);
+
 /** The commands that still answer while a dialog is open. */
 const ANSWERED_DURING_DIALOG = new Set(["Page.handleJavaScriptDialog", "Page.enable"]);
 
@@ -80,6 +89,8 @@ export class Cdp {
   /** Work in flight per tab (see failOnDialog), each failed by a dialog that opens. */
   private readonly inFlight = new Map<number, Set<(dialog: JsDialog) => void>>();
   private readonly dialogListeners = new Set<(change: DialogChange) => void>();
+  /** Per tab, the watches of its page's requests (watchRequests): each holds the requests still loading. */
+  private readonly requestWatches = new Map<number, Set<RequestWatch>>();
   /** Called when the user cancels debugging from Chrome's infobar. */
   onUserCancel: (() => void) | null = null;
 
@@ -212,7 +223,42 @@ export class Cdp {
     } else if (method === "Page.javascriptDialogClosed") {
       const p = (params ?? {}) as { result?: boolean; userInput?: string };
       this.closeDialog(tabId, { accepted: p.result === true, text: p.userInput ?? "" });
+    } else if (method.startsWith("Network.")) {
+      const watches = this.requestWatches.get(tabId);
+      if (!watches) return;
+      const p = (params ?? {}) as { requestId?: string; type?: string };
+      if (!p.requestId) return;
+      if (method === "Network.requestWillBeSent" && WATCHED_REQUESTS.has(p.type ?? "")) {
+        for (const w of watches) {
+          if (!w.open.has(p.requestId)) w.started++;
+          w.open.add(p.requestId);
+        }
+      } else if (method === "Network.loadingFinished" || method === "Network.loadingFailed") for (const w of watches) w.open.delete(p.requestId);
     }
+  }
+
+  /**
+   * Watches the fetch and XHR requests the tab's page starts from now on (the Network domain is on while any watch
+   * is): open() counts those still loading, started() all it saw start. A tab whose Network domain cannot be turned
+   * on gives a watch that sees none. stop() ends the watch.
+   */
+  async watchRequests(tabId: number): Promise<{ open(): number; started(): number; stop(): Promise<void> }> {
+    const watch: RequestWatch = { open: new Set(), started: 0 };
+    let watches = this.requestWatches.get(tabId);
+    const first = !watches;
+    if (!watches) this.requestWatches.set(tabId, (watches = new Set()));
+    watches.add(watch);
+    if (first) await this.sendTo(tabId, "Network.enable").catch(() => {});
+    return {
+      open: () => watch.open.size,
+      started: () => watch.started,
+      stop: async () => {
+        const now = this.requestWatches.get(tabId);
+        if (!now?.delete(watch) || now.size) return;
+        this.requestWatches.delete(tabId);
+        if (this.attached.has(tabId)) await this.sendTo(tabId, "Network.disable").catch(() => {});
+      },
+    };
   }
 
   /** Detaches from one tab (default: the current tab). */

@@ -1,9 +1,9 @@
 /**
- * Live check (real Claude Code, one session, uses your subscription): a picture the user attached reaches Claude
- * Code through dist/host.js. The extension's side sends it in pieces (helper.putAttachment), helper.runTask names it,
- * the helper puts it in the session's attachments folder, and Claude Code looks at it with its Read tool. Claude is
- * also asked to Read the run folder's MCP config, one level up: that must be refused (Read is allowed only in the
- * attachments folder, its working directory; dontAsk refuses the rest).
+ * Live check (real Claude Code, one session, uses your subscription): pictures the user attached reach Claude Code
+ * through dist/host.js, one with the first message and one with a follow-up. The extension's side sends each in
+ * pieces (helper.putAttachment), helper.runTask / helper.continueSession name it, the helper puts it in the session's
+ * attachments folder and sends it to Claude Code as an image block in that message. Claude Code has no Read (nor any
+ * built-in tool): it must see both without one, and call none.
  * Runs only with NOA_LIVE_CLAUDE_ATTACH=1 (after `pnpm build`):
  *   NOA_LIVE_CLAUDE_ATTACH=1 pnpm --filter @noa/helper test live-attachments
  */
@@ -21,8 +21,14 @@ const home = mkdtempSync(join(tmpdir(), "noa-live-attach-"));
 // Claude Code may still be exiting (its working directory is in there): retry for a while.
 afterAll(() => rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 }));
 
-/** A PNG, left half red and right half blue. */
-function redBluePng(width = 96, height = 64): Buffer {
+type Rgb = [number, number, number];
+const RED: Rgb = [220, 20, 20];
+const BLUE: Rgb = [20, 40, 220];
+const GREEN: Rgb = [20, 170, 40];
+const YELLOW: Rgb = [240, 220, 20];
+
+/** A PNG, left half one color and right half another. */
+function halvesPng(left: Rgb, right: Rgb, width = 96, height = 64): Buffer {
   const chunk = (type: string, data: Buffer) => {
     const len = Buffer.alloc(4);
     len.writeUInt32BE(data.length);
@@ -40,24 +46,26 @@ function redBluePng(width = 96, height = 64): Buffer {
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const at = y * (width * 3 + 1) + 1 + x * 3;
-      rows.set(x < width / 2 ? [220, 20, 20] : [20, 40, 220], at);
+      rows.set(x < width / 2 ? left : right, at);
     }
   }
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", header), chunk("IDAT", deflateSync(rows)), chunk("IEND", Buffer.alloc(0))]);
 }
 
-describe.runIf(process.env.NOA_LIVE_CLAUDE_ATTACH === "1")("live Claude Code: an attached picture", () => {
-  it("Claude Code sees the picture with Read, and cannot read outside the attachments folder", async () => {
+describe.runIf(process.env.NOA_LIVE_CLAUDE_ATTACH === "1")("live Claude Code: attached pictures", () => {
+  it("Claude Code, which has no Read, sees a picture sent with the first message and one sent with a follow-up", async () => {
     const env: NodeJS.ProcessEnv = { ...process.env, [ENV.home]: home };
     delete env[ENV.brain];
     const x = new FakeX({ account: "alice", url: "https://example.com/" });
     const { child, ext } = startHost({ env, browser: (m: BrowserMethod, p) => x.handle(m, p as never) });
+    const config = { maxToolCalls: 10, maxTaskMinutes: 4, jevEnabled: false, jevThreshold: 0.8, isRetry: false, model: process.env.NOA_LIVE_MODEL ?? "claude-sonnet-5" };
     try {
       const info = await ext.call("helper.hello", {}, { timeoutMs: 90_000 });
       expect(info.selfTest?.ok).toBe(true);
-      const png = redBluePng();
-      await ext.call("helper.putAttachment", { sessionId: "LIVE-ATT", id: "a1", offset: 0, dataBase64: png.toString("base64") }, { timeoutMs: 10_000 });
-      const started = Date.now();
+      const first = halvesPng(RED, BLUE);
+      const firstRef = { id: "a1", name: "halves.png", type: "image/png", size: first.length, kind: "image" as const, width: 96, height: 64 };
+      await ext.call("helper.putAttachment", { sessionId: "LIVE-ATT", id: "a1", offset: 0, dataBase64: first.toString("base64") }, { timeoutMs: 10_000 });
+      let started = Date.now();
       const result = await ext.call(
         "helper.runTask",
         {
@@ -66,33 +74,51 @@ describe.runIf(process.env.NOA_LIVE_CLAUDE_ATTACH === "1")("live Claude Code: an
             id: "T-ATT",
             account: null,
             instructions:
-              "No browsing is needed. 1) Look at the attached picture and say which color fills its left half and which its right half. " +
-              "2) Then try once to Read the file ../mcp-config.json and say whether you could read it. " +
-              'Call task_complete with the summary exactly "left=<color> right=<color> config=<read|refused>".',
+              "No browsing is needed. Look at the attached picture: which color fills its left half and which its right half? " +
+              'Call task_complete with the summary exactly "left=<color> right=<color>".',
           },
           mediaPaths: [],
-          config: { maxToolCalls: 10, maxTaskMinutes: 4, jevEnabled: false, jevThreshold: 0.8, isRetry: false, model: "claude-sonnet-5" },
-          attachments: [{ ref: { id: "a1", name: "halves.png", type: "image/png", size: png.length, kind: "image", width: 96, height: 64 }, fresh: true }],
+          config,
+          attachments: [{ ref: firstRef, fresh: true }],
         },
         { timeoutMs: 5 * 60_000 },
       );
-      console.log("result", JSON.stringify(result), `${Math.round((Date.now() - started) / 1000)} s`);
-      const logged = readFileSync(result.logPath!, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
-      // Claude Code's own tool calls and their results, from its stream-json lines.
-      const blocks = logged.filter((e) => e.type === "claude").flatMap((e) => (Array.isArray(e.event?.message?.content) ? e.event.message.content : []));
-      const reads = blocks.filter((b: { type: string; name?: string }) => b.type === "tool_use" && b.name === "Read");
-      const results = new Map(blocks.filter((b: { type: string }) => b.type === "tool_result").map((b: { tool_use_id: string; is_error?: boolean; content: unknown }) => [b.tool_use_id, b]));
-      for (const r of reads) console.log("Read", JSON.stringify(r.input), "->", JSON.stringify(results.get(r.id)).slice(0, 300));
+      console.log("first", JSON.stringify(result), `${Math.round((Date.now() - started) / 1000)} s`);
       expect(result.outcome).toBe("done");
       expect(result.summary?.toLowerCase()).toMatch(/left=red right=blue/);
-      const image = reads.find((r: { input: { file_path?: string } }) => /halves\.png$/.test(r.input.file_path ?? ""));
-      expect(image, "Claude Code read the picture").toBeDefined();
-      expect((results.get(image.id) as { is_error?: boolean }).is_error).not.toBe(true);
-      const config = reads.find((r: { input: { file_path?: string } }) => /mcp-config\.json$/.test(r.input.file_path ?? ""));
-      if (config) expect((results.get(config.id) as { is_error?: boolean }).is_error, "Reading outside the attachments folder is refused").toBe(true);
-      expect(result.summary?.toLowerCase()).toMatch(/config=refused/);
+
+      const second = halvesPng(GREEN, YELLOW);
+      await ext.call("helper.putAttachment", { sessionId: "LIVE-ATT", id: "a2", offset: 0, dataBase64: second.toString("base64") }, { timeoutMs: 10_000 });
+      started = Date.now();
+      const next = await ext.call(
+        "helper.continueSession",
+        {
+          sessionId: "LIVE-ATT",
+          text: 'Same question for the picture I attached now. Call task_complete with the summary exactly "left=<color> right=<color>".',
+          config,
+          attachments: [
+            { ref: firstRef, fresh: false },
+            { ref: { ...firstRef, id: "a2", name: "second.png", size: second.length }, fresh: true },
+          ],
+        },
+        { timeoutMs: 5 * 60_000 },
+      );
+      console.log("follow-up", JSON.stringify(next), `${Math.round((Date.now() - started) / 1000)} s`);
+      expect(next.outcome).toBe("done");
+      expect(next.summary?.toLowerCase()).toMatch(/left=green right=yellow/);
+
+      const logged = readFileSync(next.logPath!, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+      const lines = logged.filter((e) => e.type === "claude").map((e) => e.event);
+      // Claude Code was offered none of its own tools, and called none.
+      const init = lines.find((e) => e.type === "system" && e.subtype === "init");
+      expect(init.tools.filter((t: string) => !t.startsWith("mcp__"))).toEqual([]);
+      const own = lines.flatMap((e) => (e.type === "assistant" && Array.isArray(e.message?.content) ? e.message.content : [])).filter((b: { type: string; name?: string }) => b.type === "tool_use" && !b.name!.startsWith("mcp__"));
+      expect(own).toEqual([]);
+      // Each picture went with its own message, as an image block.
+      const replays = lines.filter((e) => e.type === "user" && e.isReplay && Array.isArray(e.message?.content));
+      expect(replays.map((e) => e.message.content.filter((b: { type: string }) => b.type === "image").length)).toEqual([1, 1]);
     } finally {
       child.kill();
     }
-  }, 6 * 60_000);
+  }, 10 * 60_000);
 });

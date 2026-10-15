@@ -17,6 +17,8 @@ export interface ApprovalView {
   why: string;
   /** The exact text it posts or sends. */
   text?: string;
+  /** The post, section or dialog it acts on, as the page shows it. */
+  target?: string;
   expiresAt: string;
   /** Still waiting, or how it ended. */
   state: "pending" | ApprovalOutcome;
@@ -26,13 +28,17 @@ export interface ApprovalView {
   byVoice?: true;
   /** Its run paused here (nobody was there to answer) and it can still be decided: Allow & continue, Don't. */
   decidable?: true;
+  /** A request to bring this tab to the front for a screenshot (ApprovalRequest.switchTo): Switch to it, Not now. */
+  switchTo?: { tabId: number };
 }
 
 export function approvalView(ev: Extract<AgentEvent, { type: "approval_request" }>, ended?: { outcome: ApprovalOutcome; by?: ApprovalAnsweredBy }, decidable = false): ApprovalView {
   const r = ev.request;
   const v: ApprovalView = { kind: "approval", id: r.id, action: r.action, site: r.site, why: r.why, expiresAt: r.expiresAt, state: ended?.outcome ?? "pending" };
   if (r.text) v.text = r.text;
-  if (ended) v.outcome = APPROVAL_OUTCOME_TEXT[ended.outcome];
+  if (r.target) v.target = r.target;
+  if (r.switchTo) v.switchTo = { tabId: r.switchTo.tabId };
+  if (ended) v.outcome = (r.switchTo ? SWITCH_OUTCOME_TEXT[ended.outcome] : undefined) ?? APPROVAL_OUTCOME_TEXT[ended.outcome];
   if (ended?.by === "voice") v.byVoice = true;
   if (decidable && ended?.outcome === "paused") v.decidable = true;
   return v;
@@ -75,6 +81,21 @@ export const APPROVAL_BUTTONS: readonly { answer: ApprovalAnswer; label: string;
 
 /** The line under the buttons that says what "Allow all until done" means. */
 export const APPROVAL_ALLOW_ALL_NOTE = "Allow all until done: it won't ask again until it finishes what it's doing now.";
+
+/** On a card asking to switch to a tab for a screenshot (ApprovalRequest.switchTo): bring it forward now, or not. */
+export const SWITCH_BUTTONS: readonly { answer: ApprovalAnswer; label: string; hint?: string }[] = [
+  { answer: "allow_once", label: "Switch to it", hint: "Bring the tab to the front now, so Noa can take its screenshot." },
+  { answer: "deny", label: "Not now", hint: "Stay where you are. Noa reads the page instead and doesn't ask again until it finishes what it's doing now." },
+];
+
+/** How a switch card ended, where it differs from an action's card. */
+const SWITCH_OUTCOME_TEXT: Partial<Record<ApprovalOutcome, string>> = {
+  allow_once: "Switched to the tab",
+  deny: "Not now: Noa didn't switch",
+  timeout: "No answer in time: Noa didn't switch",
+  ended: "The task ended before an answer: Noa didn't switch",
+  interrupted: "You wrote to the agent first: Noa didn't switch",
+};
 
 /** On a card its run paused at: go on with this action allowed once, or end the run as not done. */
 export const PAUSED_BUTTONS: readonly { answer: ApprovalAnswer; label: string; hint?: string }[] = [

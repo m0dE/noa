@@ -187,6 +187,12 @@ export class TurnRunner {
     return this.timed(active, "engine.tab", () => active.slot.prepare(opts), { mode: opts.mode ?? "own-tab" });
   }
 
+  /** The user's tab as the agent is told about it, with the user's other tabs the run may use (after prepareTab). */
+  async userTab(active: ActiveSession, page: TabPage, picked: number): Promise<UserTab> {
+    const others = (await active.slot.userTabs?.().catch(() => null)) ?? { tabs: [], more: 0 };
+    return userTabOf(page, picked, others.tabs, others.more);
+  }
+
   /**
    * The first turn of a new session: picks its tab, writes its files, starts
    * the brain and waits for the result. One-off runs act on the tab they were
@@ -229,15 +235,15 @@ export class TurnRunner {
     brain.prewarm?.(config);
     let picked: number;
     if (origin === undefined) {
-      picked = await this.prepareTab(active, { mode: adhoc ? "current-tab" : "own-tab" });
+      picked = await this.prepareTab(active, { mode: adhoc ? "current-tab" : "own-tab", userTabs: settings.shareOtherTabs });
       if (sayRestricted) this.emit(active, { type: "status", text: RESTRICTED_STATUS });
     } else {
       // Not brought to the front: the user may have moved on to another tab already.
-      picked = await this.prepareTab(active, { mode: "current-tab", tabId: origin });
+      picked = await this.prepareTab(active, { mode: "current-tab", tabId: origin, userTabs: settings.shareOtherTabs });
       await this.follow(active, origin, picked, restricted, sayRestricted);
     }
     // The agent is told which page the user is looking at (buildTaskPrompt); scheduled and TODO tasks have none.
-    const shown: AgentTask = page ? { ...opened.task, userTab: userTabOf(page, picked) } : opened.task;
+    const shown: AgentTask = page ? { ...opened.task, userTab: await this.userTab(active, page, picked) } : opened.task;
     // A chat about a job: the request comes with the job and how to go over it (the chat shows the user's words alone).
     const review = reviewReady ? await reviewReady : null;
     const task: AgentTask = review ? { ...shown, instructions: `${shown.instructions}\n\n${review.text}` } : shown;
@@ -464,9 +470,9 @@ export class TurnRunner {
 }
 
 /** The user's tab as the agent is told about it, once the run's tab was picked (`picked`: where the run works). */
-export function userTabOf(page: TabPage, picked: number): UserTab {
+export function userTabOf(page: TabPage, picked: number, others: UserTab["others"] = [], more = 0): UserTab {
   const access = isRestrictedUrl(page.url) ? "restricted" : picked === page.tabId ? "here" : "elsewhere";
-  return { url: page.url, title: page.title, access };
+  return { url: page.url, title: page.title, access, ...(others?.length ? { others } : {}), ...(others?.length && more > 0 ? { othersMore: more } : {}) };
 }
 
 /**

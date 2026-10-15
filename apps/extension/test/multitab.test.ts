@@ -8,6 +8,7 @@ import { createBrowserCaller } from "../src/engine/browser-caller.js";
 import { BACKGROUND_SHOT_SKIPPED } from "../src/driver-common.js";
 import { FALLBACK_NOTE } from "../src/fallback-driver.js";
 import { snapshotPage } from "../src/page-snapshot.js";
+import { coverInPage } from "../src/page-cover.js";
 
 let chrome: ChromeFake;
 let cdp: Cdp;
@@ -35,7 +36,8 @@ beforeEach(async () => {
     if (method === "Page.captureScreenshot") return { data: "Q0RQ" };
     return {};
   };
-  chrome.scripting.respond = (func, _args) => (func === snapshotPage ? { ...snapOf(chrome.scripting.calls.at(-1)!.tabId), text: "via scripting" } : { ok: true, value: true });
+  chrome.scripting.respond = (func, _args) =>
+    func === snapshotPage ? { ...snapOf(chrome.scripting.calls.at(-1)!.tabId), text: "via scripting" } : func === coverInPage ? { ok: true, value: { state: { checkable: false, checked: false, radio: false }, cover: { x: 5, y: 6 } } } : { ok: true, value: true };
 });
 
 const urls = (n: number) => Array.from({ length: n }, (_, i) => `https://mail.test/m/${i + 1}`);

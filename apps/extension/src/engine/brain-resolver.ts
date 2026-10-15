@@ -37,8 +37,8 @@ export const JEV_SOURCE_LABELS: Record<JevSource, string> = {
 };
 /** No brain can run tasks (the status note says why, when there is one). */
 export const NO_AI = "No AI set up";
-/** Auto would move a conversation from the user's own Claude Code to the paid hosted AI: it refuses instead. */
-export const CLAUDE_CODE_GONE = `Local Claude Code is not available, and Auto does not move this chat to ${HOSTED_LABEL} on its own`;
+/** No source picked yet ("auto") would move a conversation from the user's own Claude Code to the paid hosted AI: it refuses instead. */
+export const CLAUDE_CODE_GONE = `Local Claude Code is not available, and Noa does not move this chat to ${HOSTED_LABEL} on its own`;
 
 
 /** Why the hosted AI cannot be used, or null when it can. */

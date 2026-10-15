@@ -28,6 +28,8 @@ body { font-size: var(--text-lg); background: var(--surface); }
 .brand { flex: none; width: 40px; height: 40px; border-radius: var(--radius-lg); }
 .head-text { flex: 1; min-width: 0; }
 .head h1 { font-size: 22px; line-height: 1.25; letter-spacing: -0.01em; }
+.head-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 8px; }
+.head-version { color: var(--muted); font-size: var(--text-md); font-weight: 400; letter-spacing: 0; }
 .head-sub { margin: 3px 0 0; color: var(--muted); font-size: var(--text-lg); }
 .head .acct { flex: none; align-self: flex-start; }
 

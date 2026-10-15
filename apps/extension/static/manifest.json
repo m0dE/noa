@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Noa",
-  "version": "0.2.9",
+  "version": "0.3.3",
   "description": "Works through your todo list in this Chrome with an AI agent: Claude (API or local Claude Code), optionally sped up by Jev.",
   "minimum_chrome_version": "120",
   "permissions": [

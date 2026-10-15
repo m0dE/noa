@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { APPROVAL_TIMEOUT_MS, WAIT_CALL_LIMIT_MS, WAIT_SLICE_MS } from "@noa/shared";
+import { APPROVAL_TIMEOUT_MS, SWITCH_APPROVAL_TIMEOUT_MS, WAIT_CALL_LIMIT_MS, WAIT_SLICE_MS } from "@noa/shared";
 import { BROWSER_RPC_TIMEOUT_MS, rpcBrowser, type RpcBrowser } from "../src/tool-router.js";
 import { TOOL_CALL_TIMEOUT_MS } from "../src/mcp-tools.js";
 
@@ -18,6 +18,14 @@ describe("browser calls to the extension", () => {
       ["browser.navigate", BROWSER_RPC_TIMEOUT_MS + APPROVAL_TIMEOUT_MS],
       ["browser.scroll", BROWSER_RPC_TIMEOUT_MS],
     ]);
+  });
+
+  it("a screenshot gets the switch card's wait on top (else a 10 s background try and the 45 s card left 5 s of 60 s)", async () => {
+    const seen: [string, number | undefined][] = [];
+    const peer: RpcBrowser = { call: async (method, _params, opts) => (seen.push([method, opts?.timeoutMs]), {} as never) };
+    await rpcBrowser(peer).call("browser.screenshot", {});
+    expect(seen).toEqual([["browser.screenshot", BROWSER_RPC_TIMEOUT_MS + SWITCH_APPROVAL_TIMEOUT_MS]]);
+    expect(TOOL_CALL_TIMEOUT_MS).toBeGreaterThanOrEqual(seen[0]![1]!);
   });
 
   it("a tool call's own limit allows one full approval wait on top of its browser calls", () => {

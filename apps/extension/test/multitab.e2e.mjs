@@ -1,6 +1,6 @@
 // Multi-tab check of the built extension in Playwright's Chromium: opens 5 local
 // pages in parallel tabs, reads them all at once without activating them,
-// switches, screenshots a background tab (left in the background), closes, and compares the wall time
+// switches, screenshots a background tab (brought forward by Auto tab switching; off: left behind), closes, and compares the wall time
 // with the one-tab way (navigate + read_page, page after page).
 // Usage: pnpm --filter @noa/extension build && node apps/extension/test/multitab.e2e.mjs [--headed]
 import assert from "node:assert/strict";
@@ -137,16 +137,40 @@ try {
     return "clicked Reply in t4";
   });
 
-  await step("screenshot of a background current tab leaves it in the background", async () => {
-    await userPage.bringToFront(); // the user looks at the main tab again
-    await call("switchTab", { tab: "t5" });
-    const before = await evalSw(async () => (await chrome.tabs.get(await globalThis.__noa.agentTab.tabId())).active);
-    const shot = await call("screenshot");
-    const after = await evalSw(async () => (await chrome.tabs.get(await globalThis.__noa.agentTab.tabId())).active);
-    assert.equal(before, false);
-    assert.equal(after, false, "the agent never brings its tab to the front");
-    assert.ok(shot.base64.length > 1000, "non-empty image");
-    return `${shot.base64.length} base64 chars`;
+  await step("screenshot of a background current tab: Auto tab switching brings it forward while the user is idle; not while they are active in that window, nor when off", async () => {
+    const agentActive = () => evalSw(async () => (await chrome.tabs.get(await globalThis.__noa.agentTab.tabId())).active);
+    // What Chrome says of the user (a test browser is never idle on its own): the switch asks chrome.idle.
+    const userIs = (state) =>
+      evalSw((st) => {
+        globalThis.__realIdle ??= chrome.idle.queryState.bind(chrome.idle);
+        chrome.idle.queryState = async () => st;
+      }, state);
+    const restoreIdle = () => evalSw(() => globalThis.__realIdle && (chrome.idle.queryState = globalThis.__realIdle));
+    try {
+      // Idle: brought forward.
+      await userIs("idle");
+      await userPage.bringToFront(); // the user looks at the main tab again
+      await call("switchTab", { tab: "t5" });
+      assert.equal(await agentActive(), false);
+      const shot = await call("screenshot");
+      assert.equal(await agentActive(), true, "idle user: Auto tab switching brought the agent's tab to the front");
+      assert.ok(shot.base64.length > 1000, "non-empty image");
+      // Active in that (focused) window: never switched under their typing (no chat to ask in here).
+      await userIs("active");
+      await userPage.bringToFront();
+      const active = await call("screenshot").then((s) => `${s.base64.length} base64 chars`, (e) => e.message);
+      assert.equal(await agentActive(), false, "active user: the agent's tab stays in the background");
+      // Off: never brought forward, idle or not.
+      await userIs("idle");
+      await evalSw(() => globalThis.__noa.settings.save({ autoTabSwitching: false }));
+      await userPage.bringToFront();
+      const off = await call("screenshot").then((s) => `${s.base64.length} base64 chars`, (e) => e.message);
+      assert.equal(await agentActive(), false, "off: the agent's tab stays in the background");
+      await evalSw(() => globalThis.__noa.settings.save({ autoTabSwitching: true }));
+      return `idle: brought forward, ${shot.base64.length} base64 chars; active: ${active.slice(0, 70)}; off: ${off.slice(0, 50)}`;
+    } finally {
+      await restoreIdle();
+    }
   });
 
   await step("close_tabs and list_tabs", async () => {

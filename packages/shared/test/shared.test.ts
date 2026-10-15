@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  helperInstallUrl,
   MAX_SPOKEN_CHARS,
   isOnHold,
   taskChip,
@@ -394,5 +395,14 @@ describe("pausing a job (task-view, schedule)", () => {
     expect(resumedNotBefore("2026-09-30T09:00:00.000Z", rule, now)).toBe("2026-09-30T09:00:00.000Z");
     expect(resumedNotBefore("2026-09-25T09:00:00.000Z", null, now)).toBe("2026-09-25T09:00:00.000Z");
     expect(resumedNotBefore(null, null, now)).toBeNull();
+  });
+});
+
+describe("helperInstallUrl", () => {
+  it("is the installer in the helper code id's folder, or the current one without an id (dev builds)", () => {
+    expect(helperInstallUrl("sh", "baab02a9cf9d")).toBe("https://noa.bot/helper/baab02a9cf9d/install.sh");
+    expect(helperInstallUrl("ps1", "baab02a9cf9d")).toBe("https://noa.bot/helper/baab02a9cf9d/install.ps1");
+    expect(helperInstallUrl("sh", "dev")).toBe("https://noa.bot/helper/install.sh");
+    expect(helperInstallUrl("ps1")).toBe("https://noa.bot/helper/install.ps1");
   });
 });

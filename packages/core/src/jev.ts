@@ -6,7 +6,7 @@
 import { TypeSafeClient, type EntryType, type Logger } from "@typesafe-ai/sdk";
 import type { PageSnapshot } from "@noa/shared";
 import { errorDetail, outOfCreditError, OutOfCreditError, parseJsonBody } from "./api-errors.js";
-import type { JevDecision, JevLike, JevOperation } from "./types.js";
+import type { JevDecision, JevLike, JevOperation, JevPause } from "./types.js";
 
 export const JEV_OPERATIONS: readonly JevOperation[] = ["click", "type", "scroll", "press_key", "wait", "done", "blocked"];
 export const JEV_MAX_ELEMENTS = 250;
@@ -22,7 +22,38 @@ const JEV_TOKENS_PER_ELEMENT = 121;
 const JEV_TOKENS_PER_BYTE = 0.165;
 /** Bytes of a request besides its elements: the questions' instructions and criteria, and JSON framing. */
 const JEV_FIXED_BYTES = 2_500;
+/** Longest a Jev request may take (the TypeSafe SDK's and the proxy's timeout); an act step gives up sooner (JEV_DEADLINE_MS). */
 export const JEV_TIMEOUT_MS = 15_000;
+/**
+ * How long an act step waits for Jev's answer (to each request: a smaller try after max_tokens_exceeded has its own,
+ * see jevFromClient); past it the step is left to the model, as when Jev is unsure (its
+ * candidates). Cloud Jev in production (/v1/ai/jev wall time, Workers Observability, 2026-10-06 to 10-13,
+ * test/e2e/jev-latency-prod.mjs): the 52 answers outside the 10-13 00:40 slow spell took at most 1.95 s (p50 0.47 s,
+ * p99 1.33 s), and all 11 in that spell 5.1 to 13.3 s. 3 s is 1.5 times the slowest normal answer and well short of
+ * the slow ones. A step past it costs 3 s and a model turn instead of the 5 to 13 s wait (test/e2e/jev-latency-live.mjs).
+ */
+export const JEV_DEADLINE_MS = 3_000;
+/** Answers past the deadline in a row after which a run stops asking Jev (one late answer can be chance; the slow spell was 11 in a row). */
+export const JEV_SLOW_LIMIT = 2;
+/**
+ * How long a run then leaves every step to the model without asking Jev. After it, the next step asks Jev again:
+ * an answer in time ends the skipping, a late one starts another JEV_SKIP_MS. The slow spell lasted 2.7 minutes
+ * (00:40:13 to 00:42:56; the next answer, at 00:43:02, took 0.46 s), so a run caught in all of it pays 2 deadlines,
+ * then about 2 more (one a minute), instead of the spell's 103 s of waits.
+ */
+export const JEV_SKIP_MS = 60_000;
+
+/** Jev did not answer an act step in time (JEV_DEADLINE_MS), or was not asked because it was slow just before. */
+export class JevSlowError extends Error {
+  constructor(
+    message: string,
+    /** True: not asked at all (it was slow on the steps before); false: asked, and the deadline passed. */
+    readonly skipped: boolean,
+  ) {
+    super(message);
+    this.name = "JevSlowError";
+  }
+}
 
 /** One systemOne request: the step's state and the two questions Jev answers. */
 export interface JevRequest {
@@ -52,6 +83,8 @@ export interface JevElement {
   inViewport: boolean;
   /** Inside an open dialog (compose box, reply box, menu). */
   inDialog?: true;
+  /** Behind an open modal dialog, which covers it (ElementInfo.covered). */
+  covered?: true;
   /** When several elements share role and name: "2 of 5" in page order (so "the second Reply button" can be matched). */
   occurrence?: string;
 }
@@ -60,6 +93,8 @@ export interface JevState {
   goal: string;
   /** The step types text (Claude gives it); Jev only picks where. */
   typesText: boolean;
+  /** The step's text is empty: it empties the field Jev picks. */
+  emptiesField?: true;
   /** What happened in the step before this one, in the same act call. */
   previousStep?: string;
   url: string;
@@ -86,12 +121,13 @@ function shortHref(href: string, pageUrl: string): string {
 
 export interface JevStepInfo {
   typesText?: boolean;
+  emptiesField?: boolean;
   previousStep?: string;
 }
 
 /**
  * Trimmed state for Jev: at most `max` elements, and no more than fit in `budget` tokens; those in an open dialog
- * first, then in-viewport ones, then the rest (each part in page order).
+ * first, then in-viewport ones, then the rest, then those a modal dialog covers (each part in page order).
  */
 export function buildJevState(goal: string, snapshot: PageSnapshot, max = JEV_MAX_ELEMENTS, step: JevStepInfo = {}, budget = JEV_TOKEN_BUDGET): JevState {
   // Occurrence among elements with the same role and name, in page order.
@@ -107,11 +143,15 @@ export function buildJevState(goal: string, snapshot: PageSnapshot, max = JEV_MA
     const total = totals.get(k)!;
     if (total > 1) occurrence.set(e.index, `${n} of ${total}`);
   }
-  // An open dialog covers the page: its elements first, then the rest in view, then offscreen ones.
-  const dialog = snapshot.elements.filter((e) => e.inDialog);
-  const visible = snapshot.elements.filter((e) => e.inViewport && !e.inDialog);
-  const hidden = snapshot.elements.filter((e) => !e.inViewport && !e.inDialog);
-  const chosen = [...dialog, ...visible, ...hidden].slice(0, max);
+  // An open dialog covers the page: its elements first, then the rest in view, then offscreen ones, then those a modal
+  // dialog covers. These stay, marked, so a goal that names one is matched to it (and its click says the dialog is in
+  // the way) rather than to a look-alike in the dialog.
+  const usable = snapshot.elements.filter((e) => !e.covered);
+  const dialog = usable.filter((e) => e.inDialog);
+  const visible = usable.filter((e) => e.inViewport && !e.inDialog);
+  const hidden = usable.filter((e) => !e.inViewport && !e.inDialog);
+  const covered = snapshot.elements.filter((e) => e.covered);
+  const chosen = [...dialog, ...visible, ...hidden, ...covered].slice(0, max);
   const state: JevState = {
     goal,
     typesText: step.typesText === true,
@@ -120,6 +160,7 @@ export function buildJevState(goal: string, snapshot: PageSnapshot, max = JEV_MA
     pageText: snapshot.text.slice(0, JEV_PAGE_TEXT),
     elements: [],
   };
+  if (step.typesText && step.emptiesField) state.emptiesField = true;
   if (step.previousStep) state.previousStep = step.previousStep;
   // Each element is sent twice: in the state and as its target option.
   let tokens = (JSON.stringify(state).length + JEV_FIXED_BYTES) * JEV_TOKENS_PER_BYTE;
@@ -142,6 +183,7 @@ function jevElement(e: PageSnapshot["elements"][number], pageUrl: string, occ: s
   if (e.options?.length) out.options = e.options.join(", ").slice(0, 200);
   if (e.disabled) out.disabled = true;
   if (e.inDialog) out.inDialog = true;
+  if (e.covered) out.covered = true;
   if (occ) out.occurrence = occ;
   return out;
 }
@@ -158,13 +200,18 @@ export function describeJevElement(e: JevElement): string {
   if (e.options) parts.push(`options: ${e.options}`);
   if (e.disabled) parts.push("disabled");
   if (e.inDialog) parts.push("in the open dialog");
+  if (e.covered) parts.push("behind the open dialog (covered by it)");
   parts.push(e.inViewport ? "in view" : "offscreen");
   return parts.join(", ");
 }
 
 const OPERATION_CRITERIA: Record<JevOperation, string> = {
   click: "Click one element (button, link, tab, menu item, checkbox, radio button) to do the goal.",
-  type: "Type the step's text into one input, text box or editable element, or choose it as the option of a dropdown (select, combobox). Only when the step has text.",
+  // A custom dropdown is often a button (browser.type opens its list and clicks the option). With dropdowns named as
+  // "(select, combobox)" only, choosing an option of one drew 0.07 to 0.32 to blocked, and 18 of 25 picks fell below
+  // the 0.8 threshold (5 goals on 2 custom dropdowns, the element 0.87 to 1.00); with the button named, blocked drew
+  // 0.01 to 0.11 and 5 of 25 fell below. Native selects, text fields, buttons, links and absent elements were unchanged.
+  type: "Type the step's text into one input, text box or editable element (an empty text empties it), or choose it as the option of a dropdown: a select, a combobox, or a button that opens a list of options.",
   scroll: "Scroll down: the element the goal needs is not in the list yet.",
   press_key: "Press a key such as Enter or Escape instead of clicking.",
   wait: "Wait: the page is still loading or changing.",
@@ -179,13 +226,29 @@ export function buildJevQuestions(state: JevState) {
   const targets: Record<string, string> = {};
   for (const e of state.elements) targets[String(e.index)] = describeJevElement(e);
   targets.none = "No element is needed for this operation.";
+  // act types (or chooses a dropdown's option) for a step with text and clicks for any other, whatever Jev answers, so
+  // only that one of the two is offered: a choice between them would split Jev's confidence over a difference act
+  // ignores (measured on "select the State dropdown": type 0.6 to click 0.35, below the threshold, the element 1.00).
+  const operations: Partial<Record<JevOperation, string>> = { ...OPERATION_CRITERIA };
+  delete operations[state.typesText ? "click" : "type"];
+  // Jev is not given a typing step's text, so it cannot see whether that text is already there: a typing step is not
+  // offered "done". Offered as is, done drew 0.15 to 0.48 for a field that held another value (57 of 60 such steps
+  // below the 0.8 threshold). Offered as "Never for this step: ...", it still drew 0.05 to 0.15 on dropdown steps, and
+  // 0.12 to 0.18 when the option was the criterion's own first word: "set Email notifications to Never" on a closed
+  // custom dropdown, 0/5 at the threshold (0.69 to 0.76); worded without "Never", done kept 0.04 to 0.11 (0.76 to 0.83).
+  // Not offered: 0.85 to 0.89, and 192 of 210 probes of custom dropdowns whose option is a criterion word reached the
+  // threshold instead of 160 (3 pages, "set/change/make X to Y"); text fields, native selects, buttons, links and
+  // absent elements unchanged.
+  if (state.typesText) delete operations.done;
   return {
     operation: {
       type: "choice" as const,
-      instructions: state.typesText
-        ? "The goal is one step of a browser task, and this step types text (given separately). Which single operation does it need on this page?"
-        : "The goal is one step of a browser task. Which single operation best does it on this page?",
-      criteria: OPERATION_CRITERIA,
+      instructions: state.emptiesField
+        ? "The goal is one step of a browser task, and this step empties a field: its text is empty, so the field it is typed into ends up with no text. Which single operation does it need on this page?"
+        : state.typesText
+          ? "The goal is one step of a browser task, and this step types text (given separately). Which single operation does it need on this page?"
+          : "The goal is one step of a browser task. Which single operation best does it on this page?",
+      criteria: operations,
     },
     target: {
       type: "choice" as const,
@@ -217,24 +280,75 @@ export function parseJevAnswers(answers: Record<string, unknown>): JevDecision {
   return d;
 }
 
-/** A JevLike over any systemOne-capable client. */
-export function jevFromClient(client: JevClientLike, opts: { model?: string } = {}): JevLike {
+export interface JevFromClientOptions {
+  model?: string;
+  /** Default JEV_DEADLINE_MS. */
+  deadlineMs?: number;
+  /** Default JEV_SLOW_LIMIT. */
+  slowLimit?: number;
+  /** Default JEV_SKIP_MS. */
+  skipMs?: number;
+}
+
+const seconds = (ms: number) => `${Math.round(ms / 100) / 10} s`;
+
+/**
+ * A JevLike over any systemOne-capable client. Each request to Jev has JEV_DEADLINE_MS: past it the request is
+ * dropped and decide throws JevSlowError. A request refused as too long (max_tokens_exceeded) is sent again with
+ * half the elements, and that try has its own JEV_DEADLINE_MS: the refusal is an answer in time, so a page that
+ * needs smaller tries (Japanese or Korean text) is not taken for a slow Jev. After JEV_SLOW_LIMIT late answers in a row, this
+ * JevLike (one per run) throws JevSlowError at once for JEV_SKIP_MS, then asks Jev again. It is paused (paused())
+ * from the start of that skip until Jev answers in time again.
+ */
+export function jevFromClient(client: JevClientLike, opts: JevFromClientOptions = {}): JevLike {
+  const deadlineMs = opts.deadlineMs ?? JEV_DEADLINE_MS;
+  const slowLimit = opts.slowLimit ?? JEV_SLOW_LIMIT;
+  const skipMs = opts.skipMs ?? JEV_SKIP_MS;
+  let lateInARow = 0;
+  let skipUntil = 0;
+  /** Skipped since JEV_SLOW_LIMIT late answers in a row, and not answered in time since. */
+  let pausedNow = false;
   return {
-    async decide({ goal, snapshot, typesText, previousStep }) {
+    paused() {
+      return pausedNow ? { why: `it was slower than ${seconds(deadlineMs)} on ${slowLimit} steps in a row`, retry: performance.now() >= skipUntil } : null;
+    },
+    async decide({ goal, snapshot, typesText, emptiesField, previousStep }) {
+      if (performance.now() < skipUntil) {
+        throw new JevSlowError(`Jev was slower than ${seconds(deadlineMs)} on ${lateInARow} steps in a row, so it is not asked for ${seconds(skipUntil - performance.now())}`, true);
+      }
       const step: JevStepInfo = {};
       if (typesText !== undefined) step.typesText = typesText;
+      if (emptiesField !== undefined) step.emptiesField = emptiesField;
       if (previousStep !== undefined) step.previousStep = previousStep;
-      for (let budget = JEV_TOKEN_BUDGET; ; budget /= 2) {
-        const state = buildJevState(goal, snapshot, JEV_MAX_ELEMENTS, step, budget);
-        const request: JevRequest = { state, questions: buildJevQuestions(state) };
-        if (opts.model) request.model = opts.model;
-        try {
-          const res = await client.systemOne(request, { timeout: JEV_TIMEOUT_MS });
-          return parseJevAnswers(res.answers);
-        } catch (err) {
-          // Still too long for TypeSafe: again with half the budget (at most three tries).
-          if (!(err instanceof Error && err.message.includes("max_tokens_exceeded")) || budget <= JEV_TOKEN_BUDGET / 4) throw err;
+      try {
+        for (let budget = JEV_TOKEN_BUDGET; ; budget /= 2) {
+          const state = buildJevState(goal, snapshot, JEV_MAX_ELEMENTS, step, budget);
+          const request: JevRequest = { state, questions: buildJevQuestions(state) };
+          if (opts.model) request.model = opts.model;
+          // At the try's deadline its request is aborted, and the decision fails even when the client does not stop at the abort.
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(new JevSlowError(`Jev did not answer within ${seconds(deadlineMs)}`, false)), deadlineMs);
+          const lateAnswer = new Promise<never>((_, reject) => controller.signal.addEventListener("abort", () => reject(controller.signal.reason)));
+          lateAnswer.catch(() => {});
+          try {
+            const res = await Promise.race([client.systemOne(request, { signal: controller.signal, timeout: JEV_TIMEOUT_MS }), lateAnswer]);
+            lateInARow = 0;
+            pausedNow = false;
+            return parseJevAnswers(res.answers);
+          } catch (err) {
+            if (controller.signal.aborted) throw controller.signal.reason;
+            // Still too long for TypeSafe: again with half the budget (at most three tries).
+            if (!(err instanceof Error && err.message.includes("max_tokens_exceeded")) || budget <= JEV_TOKEN_BUDGET / 4) throw err;
+          } finally {
+            clearTimeout(timer);
+          }
         }
+      } catch (err) {
+        if (err instanceof JevSlowError && ++lateInARow >= slowLimit) {
+          skipUntil = performance.now() + skipMs;
+          pausedNow = true;
+        }
+        throw err;
       }
     },
   };
@@ -318,11 +432,14 @@ export function createJev(apiKey: string, opts: CreateJevOptions = {}): JevLike 
 /**
  * Noa's cloud Jev for a run whose AI is not Noa AI (local Claude Code, the Claude API): an empty
  * usage credit must not pause that run, as it does Noa AI's (the AI itself is not billed). The first
- * refusal turns it off for the run instead; act then leaves each step to the model.
+ * refusal turns it off for the run instead (paused, for good): act then takes element indices, as with Jev off.
  */
 export function withoutCreditPause(jev: JevLike): JevLike {
   let noCredit: string | null = null;
   return {
+    paused(): JevPause | null {
+      return noCredit ? { why: noCredit, retry: false } : (jev.paused?.() ?? null);
+    },
     async decide(input) {
       if (noCredit) throw new Error(noCredit);
       try {

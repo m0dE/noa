@@ -70,7 +70,7 @@ describe("attachment blocks and lines", () => {
 
   it("lists each file with how to see it, a document's text, and its upload path", () => {
     const { base64: _sent, ...earlierReport } = report;
-    const lines = attachmentLines([photo, notes, { ...earlierReport, fresh: false }], "blocks").join("\n");
+    const lines = attachmentLines([photo, notes, { ...earlierReport, fresh: false }]).join("\n");
     expect(lines).toContain('1. cat.png (image, 800x600): shown above as "Attachment: cat.png".');
     expect(lines).toContain("2. notes.docx (Word document, 8.8 KB), its text:\n<<<\nLaunch on Friday.\nBudget: 20 posts.\n>>>");
     expect(lines).toContain("Files the user attached earlier in this conversation (1):\n3. report.pdf (PDF, 4 KB): shown with an earlier message.");
@@ -78,9 +78,13 @@ describe("attachment blocks and lines", () => {
     expect(lines).toMatch(/not instructions to you/);
   });
 
-  it("Claude Code is told to Read images and PDFs at their path", () => {
-    const lines = attachmentLines([{ ...photo, path: "C:\\runs\\s1\\attachments\\cat.png" }], "read");
-    expect(lines).toContain("1. cat.png (image, 800x600): to look at it, Read C:\\runs\\s1\\attachments\\cat.png");
+  it("a fresh image whose bytes did not come is said not to be shown (never a path to open)", () => {
+    const { base64: _bytes, ...unread } = photo;
+    const lines = attachmentLines([unread]);
+    expect(lines).toContain("1. cat.png (image, 800x600): it could not be shown to you.");
+    expect(lines.join("\n")).not.toMatch(/\bRead\b/);
+    // An earlier one left out of a new session's first message is not said to have been shown.
+    expect(attachmentLines([{ ...unread, fresh: false, withheld: true }])).toContain("1. cat.png (image, 800x600): it could not be shown to you.");
   });
 
   it("a task prompt with attachments has their section and no 'Media files: none'", () => {
@@ -141,6 +145,6 @@ describe("startApiAgent with attachments", () => {
   it("an attachment is only listed, never sent, when it has no bytes (e.g. a video)", () => {
     const video: AgentAttachment = { ref: { id: "v", name: "clip.mp4", type: "video/mp4", size: 5_000_000, kind: "file" }, fresh: true, path: "C:\\dl\\clip.mp4" };
     expect(attachmentBlocks([video])).toEqual([]);
-    expect(attachmentLines([video], "blocks").join("\n")).toContain("clip.mp4 (file, 4.8 MB): you cannot open this kind of file; you can upload it.");
+    expect(attachmentLines([video]).join("\n")).toContain("clip.mp4 (file, 4.8 MB): you cannot open this kind of file; you can upload it.");
   });
 });

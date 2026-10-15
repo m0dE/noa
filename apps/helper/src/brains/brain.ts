@@ -1,5 +1,5 @@
 import type { AgentEvent } from "@noa/shared";
-import type { Interjections, ReasoningChange } from "@noa/core";
+import type { ContentBlock, Interjections, ReasoningChange } from "@noa/core";
 import type { EventLogger } from "../logger.js";
 import type { WarmClaude, WarmSpec } from "./claude-code.js";
 
@@ -9,11 +9,12 @@ import type { WarmClaude, WarmSpec } from "./claude-code.js";
  * session: after a task_* call for single-turn brains (Claude Code's stdin is
  * then closed so the process can exit), or when a kept-open session is ended.
  * Messages typed while a turn runs are not here: see BrainContext.interjections.
+ * A message may come with blocks shown before its text (BrainContext.blocks).
  */
 export class UserInput {
-  private listener: ((text: string) => void) | null = null;
+  private listener: ((text: string, blocks?: readonly ContentBlock[]) => void) | null = null;
   private readonly closeListeners: (() => void)[] = [];
-  private readonly queue: string[] = [];
+  private readonly queue: { text: string; blocks?: readonly ContentBlock[] }[] = [];
   private isClosed = false;
 
   get closed(): boolean {
@@ -21,17 +22,17 @@ export class UserInput {
   }
 
   /** Returns false when the input is already closed. */
-  push(text: string): boolean {
+  push(text: string, blocks?: readonly ContentBlock[]): boolean {
     if (this.isClosed) return false;
-    if (this.listener) this.listener(text);
-    else this.queue.push(text);
+    if (this.listener) this.listener(text, blocks);
+    else this.queue.push({ text, ...(blocks ? { blocks } : {}) });
     return true;
   }
 
   /** One subscriber; messages pushed before it subscribed are delivered right away. */
-  onMessage(fn: (text: string) => void): void {
+  onMessage(fn: (text: string, blocks?: readonly ContentBlock[]) => void): void {
     this.listener = fn;
-    for (const t of this.queue.splice(0)) fn(t);
+    for (const m of this.queue.splice(0)) fn(m.text, m.blocks);
   }
 
   onClose(fn: () => void): void {
@@ -66,6 +67,8 @@ export interface BrainContext {
   /** Pipe task id (the session id) used for tool calls. */
   taskId: string;
   prompt: string;
+  /** Shown to the model before `prompt` in the same message: the images and PDFs the user attached (attachmentBlocks). */
+  blocks?: ContentBlock[];
   systemPrompt: string;
   /** Model chosen in the extension for this run; the brain's own default when absent. */
   model?: string;
@@ -77,11 +80,6 @@ export interface BrainContext {
   mcpConfigPath: string;
   /** Fully qualified MCP tool names, e.g. mcp__noa__click. */
   allowedTools: string[];
-  /**
-   * The session's attachments folder: Claude Code runs in it, and its own Read tool may read files there and
-   * nowhere else. Absent: no Read (Claude Code runs in the MCP config's folder).
-   */
-  readDir?: string;
   /** Aborted when the session must stop now (abort, pause, limits, shutdown): kill the agent. */
   signal: AbortSignal;
   /** Run log (JSONL file). */

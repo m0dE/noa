@@ -30,7 +30,7 @@ import { HELPER_CODE, HELPER_VERSION, helperInstall, loadConfig } from "./config
 import { LiveLog, redirectConsole, summarize } from "./logger.js";
 import { encodeNativeMessage, FrameTooLargeError, MAX_NATIVE_OUT, NativeDecoder } from "./native-framing.js";
 import { pipePathFor, startPipeServer, type PipeServer } from "./pipe-server.js";
-import { BROWSER_RPC_TIMEOUT_MS, rpcBrowser, ToolRouter, type InteractiveTools } from "./tool-router.js";
+import { AttachedSessions, BROWSER_RPC_TIMEOUT_MS, rpcBrowser, ToolRouter, type InteractiveTools } from "./tool-router.js";
 import { INTERACTIVE_TASK_ID } from "./mcp-tools.js";
 import { AttachmentInbox } from "./session/attachments.js";
 import { TaskRunner } from "./task-runner.js";
@@ -76,7 +76,6 @@ async function main(): Promise<void> {
   // Noa's cloud Jev is billed to the account, not this run's AI: no credit turns it off instead of pausing the task.
   const makeJev = (key: string, cloud?: { endpoint: string; sessionId: string }): JevLike =>
     cloud ? withoutCreditPause(createJev(key, { endpoint: cloud.endpoint, headers: { [SESSION_HEADER]: cloud.sessionId } })) : createJev(key);
-  const envJev = config.typesafeApiKey ? makeJev(config.typesafeApiKey) : null;
   const pipePath = pipePathFor(process.pid);
   // The pipe's name is predictable: only calls carrying this token are answered (the MCP servers this helper starts get it, --attach reads helper.json).
   const pipeToken = randomBytes(32).toString("hex");
@@ -112,19 +111,23 @@ async function main(): Promise<void> {
     live,
   });
 
-  // Tools for the user's own Claude Code (`mcp-server.js --attach`): no task to end, no media.
-  const interactive: InteractiveTools = {
-    allowedTools: new Set(toolsFor({ interactive: true })),
-    jev: envJev !== null,
-    executor: createToolExecutor({
-      browser,
-      jev: envJev,
-      jevThreshold: DEFAULT_SETTINGS.jevThreshold,
-      onEvent: (e) => live.write(`${INTERACTIVE_TASK_ID} ${summarize(e)}`),
-      mediaPaths: [],
-    }),
-  };
-  const router = new ToolRouter({ getSession: (taskId) => runner.session(taskId), getInteractive: () => interactive });
+  // Tools for the user's own Claude Code (`mcp-server.js --attach`): no task to end, no media. One set, and one Jev
+  // (its late answers and pause), per attached session, as a task run has its own (AttachedSessions).
+  const attached = new AttachedSessions((): InteractiveTools => {
+    const jev = config.typesafeApiKey ? makeJev(config.typesafeApiKey) : null;
+    return {
+      allowedTools: new Set(toolsFor({ interactive: true })),
+      jev: jev !== null,
+      executor: createToolExecutor({
+        browser,
+        jev,
+        jevThreshold: DEFAULT_SETTINGS.jevThreshold,
+        onEvent: (e) => live.write(`${INTERACTIVE_TASK_ID} ${summarize(e)}`),
+        mediaPaths: [],
+      }),
+    };
+  });
+  const router = new ToolRouter({ getSession: (taskId) => runner.session(taskId), getInteractive: (client) => attached.get(client) });
 
   const selfTest = new SelfTestCache({
     brain: config.brain,
@@ -138,8 +141,9 @@ async function main(): Promise<void> {
       pipePath,
       pipeToken,
       {
-        toolCall: (p) => router.call(p.taskId || INTERACTIVE_TASK_ID, p.name, p.args),
-        toolList: (p) => ({ names: router.allowedTools(p.taskId || INTERACTIVE_TASK_ID), jev: router.jev(p.taskId || INTERACTIVE_TASK_ID) }),
+        toolCall: (p, client) => router.call(p.taskId || INTERACTIVE_TASK_ID, p.name, p.args, client),
+        toolList: (p, client) => ({ names: router.allowedTools(p.taskId || INTERACTIVE_TASK_ID, client), jev: router.jev(p.taskId || INTERACTIVE_TASK_ID, client) }),
+        closed: (client) => attached.end(client),
       },
       logLine,
     );
@@ -164,7 +168,7 @@ async function main(): Promise<void> {
       version: HELPER_VERSION,
       code: HELPER_CODE,
       install: helperInstall(config.baseDir),
-      jevAvailable: envJev !== null,
+      jevAvailable: config.typesafeApiKey !== null,
       brain: config.brain,
       claudePath,
       logDir: config.logDir,

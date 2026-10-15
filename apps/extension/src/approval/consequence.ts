@@ -45,6 +45,8 @@ export interface GateAction {
   page: { url: string; title: string };
   /** The X account that page is signed in as (its account switcher), when it shows one. */
   account?: string;
+  /** The post, section or dialog the element is in, as the page shows it (PageSnapshot.contexts); absent when none. */
+  target?: string;
   /** Fields typed into on this page since it was read after a navigation, oldest first (the last one has the focus). */
   typed: TypedField[];
 }
@@ -304,6 +306,9 @@ function classifyClick(a: GateAction): Verdict {
     }
     return { verdict: "benign", reason: `${quoted} is a checkbox or choice` };
   }
+  // A button that declares it opens a menu, list or dialog (aria-haspopup) only shows choices: what is chosen there
+  // is judged by itself (a "Repost" menu item, the dialog's "Post"), whatever word the opener's label has.
+  if (el.popup) return { verdict: "benign", reason: `${quoted} opens a ${el.popup}` };
   if (hasPhrase(label, BENIGN_PHRASES)) return { verdict: "benign", reason: `${quoted} opens or starts something` };
 
   // A link opens a page: only a link whose target acts (delete, unsubscribe) is consequential.

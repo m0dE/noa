@@ -5,20 +5,24 @@
  * time, no module scope), plain ES2020; what they need comes as arguments
  * (PageMarks).
  */
-import type { CheckState, PageMarks, TypeTarget } from "./driver-common.js";
+import type { ClickPoint, PageMarks } from "./driver-common.js";
 import type { PageResult } from "./scroll-probe.js";
 
-export function clickInPage(marks: PageMarks, index: number): PageResult<true> {
+/**
+ * A click on element `index` from script, as a person's would go: at `at` (a point of it coverInPage found free,
+ * where it left the element), else scrolled into view and at its center.
+ */
+export function clickInPage(marks: PageMarks, index: number, at?: ClickPoint): PageResult<true> {
   var el = (document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') ||
     ((window as unknown as Record<string, Element[] | undefined>)[marks.shadow] || []).filter(function (m) {
       return m.isConnected && m.getAttribute(marks.attr) === String(Math.trunc(index));
     })[0] ||
     null) as HTMLElement | null;
   if (!el) return { ok: false, error: marks.notFound.replace("#", String(index)) };
-  el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" as ScrollBehavior });
+  if (!at) el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" as ScrollBehavior });
   var r = el.getBoundingClientRect();
-  var x = r.left + r.width / 2;
-  var y = r.top + r.height / 2;
+  var x = at ? at.x : r.left + r.width / 2;
+  var y = at ? at.y : r.top + r.height / 2;
   // Like a real click, hit the topmost element at that point when it is part of the target.
   var hit = document.elementFromPoint(x, y) as HTMLElement | null;
   var target: HTMLElement = hit && (hit === el || el.contains(hit)) ? hit : el;
@@ -41,59 +45,15 @@ export function clickInPage(marks: PageMarks, index: number): PageResult<true> {
 }
 
 /**
- * What typing into element `index` means, decided before anything is clicked:
- * "field" (an input or textarea: its value is replaced), "editor" (a rich
- * editor: text goes at the end), "select" (a dropdown: an option is chosen,
- * selectOptionInPage), or "other" (e.g. a wrapper whose inner editor a click
- * focuses). For "other" the current focus is dropped first, so only a field
- * the click focuses takes the text, never the field that had the focus
- * before. Checkboxes, radio buttons, buttons and links take no text: an
- * error, before anything is clicked.
- */
-export function typeTargetInPage(marks: PageMarks, index: number): PageResult<TypeTarget> {
-  var el = (document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') ||
-    ((window as unknown as Record<string, Element[] | undefined>)[marks.shadow] || []).filter(function (m) {
-      return m.isConnected && m.getAttribute(marks.attr) === String(Math.trunc(index));
-    })[0] ||
-    null) as HTMLElement | null;
-  if (!el) return { ok: false, error: marks.notFound.replace("#", String(index)) };
-  if (el instanceof HTMLSelectElement) return { ok: true, value: "select" };
-  if (el instanceof HTMLTextAreaElement) return { ok: true, value: "field" };
-  var role = (el.getAttribute("role") || "").split(" ")[0];
-  var inputType = el instanceof HTMLInputElement ? (el.type || "text").toLowerCase() : "";
-  if (inputType === "checkbox" || inputType === "radio" || role === "checkbox" || role === "radio" || role === "switch") {
-    return { ok: false, error: "element " + index + " is a checkbox or radio button, which takes no text: set it with checked (true or false) instead" };
-  }
-  if (el instanceof HTMLInputElement) {
-    if (/^(button|submit|reset|image|file|range|color)$/.test(inputType)) return { ok: false, error: "element " + index + " is an input of type " + inputType + ", which takes no text" };
-    return { ok: true, value: "field" };
-  }
-  if (el.isContentEditable) return { ok: true, value: "editor" };
-  if (el instanceof HTMLButtonElement || el instanceof HTMLAnchorElement || role === "button" || role === "link") {
-    return { ok: false, error: "element " + index + " is a " + (role || el.tagName.toLowerCase()) + ", which takes no text: leave out text to click it" };
-  }
-  /** The focused element, inside shadow roots too (document.activeElement is only their host). */
-  function focused(): HTMLElement | null {
-    var a = document.activeElement as HTMLElement | null;
-    while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement as HTMLElement;
-    return a;
-  }
-  var active = focused();
-  // Inside el also through shadow roots: a wrapper's own component may hold the field.
-  var inside = false;
-  for (var e: Node | null = active; e && !inside; e = e.parentNode || (e as ShadowRoot).host || null) inside = e === el;
-  if (active && active !== document.body && !inside) active.blur();
-  return { ok: true, value: "other" };
-}
-
-/**
  * After the click that focused element `index` (typeTargetInPage said what it
  * is): a field is selected whole, or emptied when its type has no selection
  * (email, number), so the text replaces its value; a rich editor gets the
- * caret at the end (a selection the agent made inside it is kept). For
- * "other", the focus must now be on a field or editor, else nothing is typed.
+ * caret at the end (a selection the agent made inside it is kept), or, when
+ * the text is empty (`whole`), its whole content selected, so inserting the
+ * empty text empties it. For "other", the focus must now be on a field or
+ * editor, else nothing is typed.
  */
-export function prepareTypingInPage(marks: PageMarks, index: number): PageResult<true> {
+export function prepareTypingInPage(marks: PageMarks, index: number, whole?: boolean): PageResult<true> {
   var el = (document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') ||
     ((window as unknown as Record<string, Element[] | undefined>)[marks.shadow] || []).filter(function (m) {
       return m.isConnected && m.getAttribute(marks.attr) === String(Math.trunc(index));
@@ -130,10 +90,10 @@ export function prepareTypingInPage(marks: PageMarks, index: number): PageResult
   }
   if (!target.contains(focused())) target.focus();
   var sel = getSelection();
-  if (sel && !(sel.anchorNode && target.contains(sel.anchorNode) && !sel.isCollapsed)) {
+  if (sel && (whole || !(sel.anchorNode && target.contains(sel.anchorNode) && !sel.isCollapsed))) {
     var range = document.createRange();
     range.selectNodeContents(target);
-    range.collapse(false);
+    if (!whole) range.collapse(false);
     sel.removeAllRanges();
     sel.addRange(range);
   }
@@ -205,29 +165,6 @@ export function selectOptionInPage(marks: PageMarks, index: number, text: string
 }
 
 /**
- * The check state of element `index`: a checkbox or radio input, an ARIA
- * checkbox / radio / switch (aria-checked), or a <label> of a checkbox or
- * radio input (the state of that input).
- */
-export function checkStateInPage(marks: PageMarks, index: number): PageResult<CheckState> {
-  var el = (document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') ||
-    ((window as unknown as Record<string, Element[] | undefined>)[marks.shadow] || []).filter(function (m) {
-      return m.isConnected && m.getAttribute(marks.attr) === String(Math.trunc(index));
-    })[0] ||
-    null) as HTMLElement | null;
-  if (!el) return { ok: false, error: marks.notFound.replace("#", String(index)) };
-  var target: HTMLElement = el instanceof HTMLLabelElement && el.control ? el.control : el;
-  if (target instanceof HTMLInputElement && (target.type === "checkbox" || target.type === "radio")) {
-    return { ok: true, value: { checkable: true, checked: target.checked, radio: target.type === "radio" } };
-  }
-  var role = (target.getAttribute("role") || "").split(" ")[0];
-  if (/^(checkbox|radio|switch|menuitemcheckbox|menuitemradio)$/.test(role || "")) {
-    return { ok: true, value: { checkable: true, checked: target.getAttribute("aria-checked") === "true", radio: role === "radio" || role === "menuitemradio" } };
-  }
-  return { ok: true, value: { checkable: false, checked: false, radio: false } };
-}
-
-/**
  * Sets the check state of element `index` when a click did not (e.g. it hit
  * something covering the box): an untrusted click() on the input, which
  * toggles it and fires input and change. Returns the state afterwards.
@@ -249,9 +186,11 @@ export function setCheckedInPage(marks: PageMarks, index: number, checked: boole
 
 /**
  * Inserts text into element `index` (prepareTypingInPage ran first), or at the
- * focus when index is null. execCommand("insertText") fires beforeinput/input
- * like typing and works in inputs, textareas and rich editors; else the value
- * is set directly.
+ * focus when index is null. In a rich editor, the beforeinput typing fires
+ * goes first (an editor that cancels it inserts the text itself). Then
+ * execCommand("insertText"), which fires input like typing (but no
+ * beforeinput) and works in inputs, textareas and rich editors; else the
+ * value is set directly.
  */
 export function insertTextInPage(marks: PageMarks, index: number | null, text: string): PageResult<true> {
   /** The focused element, inside shadow roots too (document.activeElement is only their host). */
@@ -275,16 +214,54 @@ export function insertTextInPage(marks: PageMarks, index: number | null, text: s
   var isField = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement;
   if (index != null && !isField && !el.isContentEditable) el.focus();
   var target = (index == null ? el : el.isContentEditable || isField ? el : focused()) || el;
+  var editor = !(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) && target.isContentEditable;
+  /**
+   * The beforeinput a person's edit fires first, over the selection (execCommand fires none). True when the page
+   * cancelled it: an editor that applies edits to its own model and renders them (Slate) has made it, and the
+   * browser's edit must not follow; one that lets it through gets the browser's edit next, as with typing.
+   */
+  function editorTook(inputType: string, data: string | null): boolean {
+    if (!editor) return false;
+    var sel = getSelection();
+    var ranges: StaticRange[] = [];
+    if (sel && sel.rangeCount) {
+      var r = sel.getRangeAt(0);
+      ranges.push(new StaticRange({ startContainer: r.startContainer, startOffset: r.startOffset, endContainer: r.endContainer, endOffset: r.endOffset }));
+    }
+    return !target.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, composed: true, inputType: inputType, data: data, targetRanges: ranges }));
+  }
+  if (text === "" && index != null && editor) {
+    // An empty text empties the editor: prepareTypingInPage selected all of it, and replacing the selection is an
+    // edit the editor's own code handles (beforeinput, or the browser's edit it observes). Setting its DOM instead
+    // would leave the editor's model (ProseMirror, Lexical, Slate) holding the old text, which it shows and saves
+    // again. typeIntoElement reads it back, and presses Backspace on it when text is left, as the debugger does.
+    try {
+      if (!editorTook("insertText", "")) document.execCommand("insertText", false, "");
+    } catch (e) {
+      // Read back by typeIntoElement.
+    }
+    return { ok: true, value: true };
+  }
+  if (editorTook("insertText", text)) return { ok: true, value: true };
   var before = isField ? (target as HTMLInputElement).value : target.textContent;
   var done = false;
+  // The input event execCommand fires: the page got the edit, even when an editor renders it a moment later (Lexical
+  // puts its own DOM back at once and renders the text from its model after).
+  var inputs = 0;
+  var counted = function () {
+    inputs++;
+  };
+  document.addEventListener("input", counted, true);
   try {
     done = document.execCommand("insertText", false, text);
   } catch (e) {
     done = false;
+  } finally {
+    document.removeEventListener("input", counted, true);
   }
   var after = isField ? (target as HTMLInputElement).value : target.textContent;
   // Retyping a field's own value changes nothing, yet it was typed: a focused field is trusted.
-  if (done && (after !== before || (isField && focused() === target))) return { ok: true, value: true };
+  if (done && (after !== before || (editor && inputs > 0) || (isField && focused() === target))) return { ok: true, value: true };
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
     // Use the prototype setter so frameworks that track the value (React) see the change.
     var proto = target instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
@@ -300,11 +277,35 @@ export function insertTextInPage(marks: PageMarks, index: number | null, text: s
     return { ok: true, value: true };
   }
   if (target.isContentEditable) {
+    // Text goes at the end (an empty text was handled above).
     target.appendChild(document.createTextNode(text));
     target.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
     return { ok: true, value: true };
   }
   return { ok: false, error: "the element does not accept text" };
+}
+
+/**
+ * The text left in what browser.type typed into: element `index` when it is
+ * a field or a rich editor, else the field its click focused. For an editor,
+ * its text without the blank lines and zero-width characters editors keep in
+ * an empty one. null when there is no such field.
+ */
+export function typedTextInPage(marks: PageMarks, index: number): PageResult<string | null> {
+  var el = (document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') ||
+    ((window as unknown as Record<string, Element[] | undefined>)[marks.shadow] || []).filter(function (m) {
+      return m.isConnected && m.getAttribute(marks.attr) === String(Math.trunc(index));
+    })[0] ||
+    null) as HTMLElement | null;
+  if (!el) return { ok: false, error: marks.notFound.replace("#", String(index)) };
+  var target: HTMLElement | null = el;
+  if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el.isContentEditable)) {
+    target = document.activeElement as HTMLElement | null;
+    while (target && target.shadowRoot && target.shadowRoot.activeElement) target = target.shadowRoot.activeElement as HTMLElement;
+  }
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return { ok: true, value: target.value };
+  if (!target || !target.isContentEditable) return { ok: true, value: null };
+  return { ok: true, value: (target.textContent || "").replace(/[\s\u200b\ufeff]+/g, " ").trim() };
 }
 
 interface PageKey {
@@ -354,13 +355,32 @@ export function pressKeyInPage(k: PageKey): PageResult<true> {
     down = target.dispatchEvent(new KeyboardEvent("keypress", Object.assign({}, init, { keyCode: charCode, which: charCode, charCode: charCode })));
   }
   if (down) {
-    var editable = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable;
+    var field = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+    var editable = field || target.isContentEditable;
     var shortcut = k.ctrl || k.meta || k.alt;
+    /**
+     * The key's edit. In a rich editor, first the beforeinput the key fires (execCommand fires none) over the
+     * selection: an editor that cancels it applies the edit to its own model (Slate), else the browser's edit follows.
+     */
+    var edit = function (inputType: string, data: string | null, command: string, value?: string) {
+      if (!field) {
+        var sel = getSelection();
+        var ranges: StaticRange[] = [];
+        if (sel && sel.rangeCount) {
+          var r = sel.getRangeAt(0);
+          ranges.push(new StaticRange({ startContainer: r.startContainer, startOffset: r.startOffset, endContainer: r.endContainer, endOffset: r.endOffset }));
+        }
+        if (!target.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, composed: true, inputType: inputType, data: data, targetRanges: ranges }))) return;
+      }
+      document.execCommand(command, false, value);
+    };
     if (k.key === "Enter" && !shortcut) {
       if (target instanceof HTMLInputElement) {
         if (target.form) target.form.requestSubmit();
-      } else if (target instanceof HTMLTextAreaElement || target.isContentEditable) {
-        document.execCommand(target.isContentEditable ? "insertParagraph" : "insertText", false, "\n");
+      } else if (target instanceof HTMLTextAreaElement) {
+        document.execCommand("insertText", false, "\n");
+      } else if (target.isContentEditable) {
+        edit("insertParagraph", null, "insertParagraph");
       } else if (target instanceof HTMLAnchorElement || target instanceof HTMLButtonElement) {
         target.click();
       }
@@ -368,9 +388,10 @@ export function pressKeyInPage(k: PageKey): PageResult<true> {
       if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) target.select();
       else document.execCommand("selectAll");
     } else if (editable && !shortcut && (k.key === "Backspace" || k.key === "Delete")) {
-      document.execCommand(k.key === "Backspace" ? "delete" : "forwardDelete");
+      if (k.key === "Backspace") edit("deleteContentBackward", null, "delete");
+      else edit("deleteContentForward", null, "forwardDelete");
     } else if (editable && !shortcut && text !== null) {
-      document.execCommand("insertText", false, text);
+      edit("insertText", text, "insertText", text);
     }
   }
   target.dispatchEvent(new KeyboardEvent("keyup", init));
@@ -379,4 +400,70 @@ export function pressKeyInPage(k: PageKey): PageResult<true> {
 
 export function viewportInPage(): PageResult<{ w: number; h: number }> {
   return { ok: true, value: { w: window.innerWidth, h: window.innerHeight } };
+}
+
+/**
+ * Whether element `index` (or the field inside it) searches as you type: a search field by its HTML (type=search,
+ * role searchbox or combobox, aria-autocomplete, in a search landmark) or by its label (aria-label, placeholder,
+ * name, title or a <label> that says search, filter or find). Such a field often searches a moment after the typing
+ * stops (a debounce), so its results are waited for longer (see CdpActions.type).
+ */
+export function searchFieldInPage(marks: PageMarks, index: number): PageResult<boolean> {
+  var shadow = (window as unknown as Record<string, Element[] | undefined>)[marks.shadow] || [];
+  var el: Element | null =
+    document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') ||
+    shadow.filter(function (m) {
+      return m.isConnected && m.getAttribute(marks.attr) === String(Math.trunc(index));
+    })[0] ||
+    null;
+  if (!el) return { ok: true, value: false };
+  var field = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ? el : el.querySelector("input, textarea") || el;
+  var role = (field.getAttribute("role") || el.getAttribute("role") || "").split(" ")[0];
+  var auto = (field.getAttribute("aria-autocomplete") || "").toLowerCase();
+  if ((field instanceof HTMLInputElement && field.type === "search") || role === "searchbox" || role === "combobox" || auto === "list" || auto === "both") return { ok: true, value: true };
+  if (field.closest('[role="search"], search')) return { ok: true, value: true };
+  var labels = (field as HTMLInputElement).labels;
+  var said = [field.getAttribute("aria-label"), field.getAttribute("placeholder"), field.getAttribute("name"), field.getAttribute("title")];
+  if (labels) for (var i = 0; i < labels.length; i++) said.push(labels[i]!.textContent);
+  return { ok: true, value: /\b(search|filter|find)/i.test(said.join(" ")) };
+}
+
+/**
+ * The window's size, and what one scroll `amount` is measured against: for a scroll inside element `index`, the
+ * box that scrolls there on each axis (the element or its nearest ancestor that scrolls that way, not the page), so
+ * that a list a few rows tall moves by about its own height, not the window's (which would skip rows). Without
+ * one, the window.
+ */
+export function scrollViewInPage(marks: PageMarks, index: number | null): PageResult<{ w: number; h: number; stepW: number; stepH: number }> {
+  var w = window.innerWidth;
+  var h = window.innerHeight;
+  var out = { w: w, h: h, stepW: w, stepH: h };
+  if (index === null) return { ok: true, value: out };
+  var shadow = (window as unknown as Record<string, Element[] | undefined>)[marks.shadow] || [];
+  var el: Element | null =
+    document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') ||
+    shadow.filter(function (m) {
+      return m.isConnected && m.getAttribute(marks.attr) === String(Math.trunc(index));
+    })[0] ||
+    null;
+  var page = document.scrollingElement;
+  var foundY = false;
+  var foundX = false;
+  var scrolls = function (o: string) {
+    return o === "auto" || o === "scroll" || o === "overlay";
+  };
+  for (var at: Element | null = el; at && at !== page && at !== document.body && !(foundX && foundY); ) {
+    var st = getComputedStyle(at);
+    if (!foundY && at.scrollHeight > at.clientHeight && scrolls(st.overflowY)) {
+      out.stepH = Math.min(h, at.clientHeight);
+      foundY = true;
+    }
+    if (!foundX && at.scrollWidth > at.clientWidth && scrolls(st.overflowX)) {
+      out.stepW = Math.min(w, at.clientWidth);
+      foundX = true;
+    }
+    var root = at.getRootNode() as Document | ShadowRoot;
+    at = at.parentElement || ((root as ShadowRoot).host ?? null);
+  }
+  return { ok: true, value: out };
 }

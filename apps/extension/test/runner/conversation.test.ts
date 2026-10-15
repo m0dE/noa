@@ -108,7 +108,7 @@ describe("Runner: conversations", () => {
       expect.objectContaining({ sessionId, text: "Now also post from @alpha: second turn", config: expect.objectContaining({ isRetry: false, maxToolCalls: 60 }) }),
     ]);
     // The conversation keeps acting in its tab, which is never brought to the front.
-    expect(h.prepared).toEqual([{ mode: "current-tab" }, { mode: "own-tab" }]);
+    expect(h.prepared).toEqual([{ mode: "current-tab", userTabs: true }, { mode: "own-tab" }]);
     const events = await h.sessions.eventsOf(sessionId);
     const types = events.map((e) => e.type);
     const second = types.indexOf("user_message");

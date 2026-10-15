@@ -14,7 +14,7 @@ import { mediaSources, withContext, type TurnJob } from "./jobs.js";
 import { asksAboutThePage, isRestrictedUrl } from "../../restricted.js";
 import type { MemoryRun } from "../../memory/service.js";
 import type { JobReview } from "../task-review.js";
-import { approvalsLine, runConfig, userTabOf, type ActiveSession, type Cleanup, type TurnRunner } from "./turn.js";
+import { approvalsLine, runConfig, type ActiveSession, type Cleanup, type TurnRunner } from "./turn.js";
 
 /** The message "Continue" sends when the user adds no note. */
 export const CONTINUE_TEXT = "Continue from where you stopped.";
@@ -78,10 +78,10 @@ export async function runNextTurn(
   let userTab: UserTab | undefined;
   if (tab === null) await turns.prepareTab(active, { mode: "own-tab" });
   else {
-    const picked = await turns.prepareTab(active, { mode: "current-tab", tabId: tab });
+    const picked = await turns.prepareTab(active, { mode: "current-tab", tabId: tab, userTabs: settings.shareOtherTabs });
     const restricted = !!page && isRestrictedUrl(page.url);
     await turns.follow(active, tab, picked, restricted, restricted && asksAboutThePage(job.text, !!job.screen));
-    if (page) userTab = userTabOf(page, picked);
+    if (page) userTab = await turns.userTab(active, page, picked);
   }
   const attachments = await turns.attachmentsFor(active, brain, cleanups);
   if (active.forced) throw new Error(active.forced.reason);

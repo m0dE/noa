@@ -4,6 +4,8 @@ import { DRAWN } from "./driver-harness.js";
 import { AgentSlots } from "../src/agent-slots.js";
 import { Cdp } from "../src/cdp.js";
 import { TAB_GROUP_TITLE } from "../src/chrome-tabs.js";
+import { foreignExtensionInPage } from "../src/page-load.js";
+import { snapshotPage } from "../src/page-snapshot.js";
 
 let chrome: ChromeFake;
 let slots: AgentSlots;
@@ -182,5 +184,36 @@ describe("AgentSlots", () => {
     expect(chrome.windows.updateCalls).toEqual([{ id: windowId, props: { focused: true } }]);
     expect(chrome.tabs.updateCalls.filter((c) => c.props.active)).toEqual([{ id: shown, props: { active: true } }]);
     expect((await chrome.tabs.get(shown)).active).toBe(true);
+  });
+
+  it("a tab in limited mode: the session's chat is told once per tab, naming the other extension; fallbackOf says so", async () => {
+    const id = "gppongmhjkpfnbhagpmjfkannfbllamg";
+    const events: [string, unknown][] = [];
+    const told = new AgentSlots(new Cdp(), vault, undefined, undefined, undefined, (sessionId, event) => events.push([sessionId, event]));
+    chrome.scripting.respond = (func) =>
+      func === foreignExtensionInPage
+        ? id
+        : func === snapshotPage
+          ? { url: "https://news.test/", title: "t", text: "", elements: DRAWN, truncated: false }
+          : { doc: 1, state: "complete", controls: 3, text: 10, foreignFrame: true };
+    await told.take(0, "A").prepare({ mode: "current-tab", tabId: userTab });
+    await told.browserFor("A").call("browser.readPage", {});
+    expect(told.fallbackOf(userTab)).toBeNull();
+    expect(events).toEqual([]);
+
+    chrome.debugger.blocked.add(userTab);
+    chrome.debugger.attached.delete(userTab);
+    await told.browserFor("A").call("browser.readPage", {});
+    await told.browserFor("A").call("browser.readPage", {});
+    await new Promise((r) => setTimeout(r, 0));
+    expect(told.fallbackOf(userTab)).toEqual({ extensionId: id });
+    expect(events).toEqual([["A", { type: "limited_mode", tab: "t1", url: "https://news.test/", extensionId: id }]]);
+
+    // Another conversation in the same tab is told too.
+    told.release(0, "A", { keepTabs: true });
+    await told.take(0, "B").prepare({ mode: "current-tab", tabId: userTab });
+    await told.browserFor("B").call("browser.readPage", {});
+    await new Promise((r) => setTimeout(r, 0));
+    expect(events.map(([s]) => s)).toEqual(["A", "B"]);
   });
 });

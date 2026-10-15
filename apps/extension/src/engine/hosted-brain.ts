@@ -41,6 +41,7 @@ export function hostedBackend(deps: HostedDeps): ApiBackend {
       if (settings.jevEnabled) {
         const inner = deps.core.createJev(s.token, { endpoint: hostedJevEndpoint(s.apiBase), headers, ...(deps.fetch ? { fetch: deps.fetch } : {}) });
         jev = {
+          paused: () => inner.paused?.() ?? null,
           async decide(input) {
             try {
               return await inner.decide(input);

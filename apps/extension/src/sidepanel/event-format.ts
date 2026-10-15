@@ -1,5 +1,5 @@
 /** Pure view models for agent events in a job's conversation. */
-import { ANSWER_TOOL, describeSchedule, dialogLine, localTimeZone, SCREEN_HELP_TEXT, type AgentEvent, type AttachmentRef, type Chip, type SessionInfo, type TaskSource, type TodoChange } from "@noa/shared";
+import { ANSWER_TOOL, describeSchedule, dialogLine, LIMITED_MODE, localTimeZone, SCREEN_HELP_TEXT, type AgentEvent, type AttachmentRef, type Chip, type SessionInfo, type TaskSource, type TodoChange } from "@noa/shared";
 import { repeatsPausedCard } from "../approval/paused.js";
 import { clip, isLongSummary, toolArgsSummary } from "../text.js";
 import { speakable } from "../voice/spoken-line.js";
@@ -53,6 +53,16 @@ export type EventView =
   | { kind: "scheduled"; taskId: string; title: string; instructions: string; when: string; change?: TodoChange; changeId?: string; undone?: true }
   /** A dialog a page of the run opened, and how it was answered: "Dialog: Leave site? … → Cancel". title: by whom, where. */
   | { kind: "dialog"; text: string; title: string }
+  /**
+   * A tab of the run in limited mode (another extension blocks Chrome's debugger there): a notice, never folded into the
+   * steps. settings: the other extension's page in Chrome (chrome://extensions/?id=...), when known.
+   */
+  | { kind: "limited"; text: string; hint: string; settings?: string }
+  /**
+   * Auto tab switching brought a tab of the run to the front (once per chat): a notice, never folded into the steps,
+   * with an (i) that tells why, what not to do meanwhile, and where to turn it off (settings: the options page's link).
+   */
+  | { kind: "tabswitch"; text: string; hint: string; settings: string }
   /** An action waiting for the user's OK, or how that ended (approval-view.ts). */
   | ApprovalView
   /** The agent's memory changed from this chat (memory-view.ts): "Remembered: ...", with Undo. */
@@ -84,15 +94,19 @@ export function jevFallback(ev: Extract<AgentEvent, { type: "jev" }>): JevFallba
   const why =
     ev.operation === "error"
       ? "Jev was unavailable, so Claude picked"
-      : ev.notRun === "not_approved"
-        ? `Jev picked it (${conf}), but you did not approve it`
-        : ev.notRun
-          ? `Jev picked it (${conf}), but the ${ev.notRun === "refused" ? "action was refused" : "action failed"}`
-          : ev.operation === "blocked"
-            ? "Jev found no element that matches, so Claude picked"
-            : ev.operation === "press_key"
-              ? "Jev answered with a key press, so Claude took the step back"
-              : `Jev was unsure (${conf}, below your threshold), so Claude picked`;
+      : ev.operation === "slow"
+        ? `Jev did not answer within ${Math.round(ev.ms / 1000)} s, so Claude picked`
+        : ev.operation === "skipped"
+          ? "Jev was too slow on the steps before, so Claude picked"
+          : ev.notRun === "not_approved"
+            ? `Jev picked it (${conf}), but you did not approve it`
+            : ev.notRun
+              ? `Jev picked it (${conf}), but the ${ev.notRun === "refused" ? "action was refused" : "action failed"}`
+              : ev.operation === "blocked"
+                ? "Jev found no element that matches, so Claude picked"
+                : ev.operation === "press_key"
+                  ? "Jev answered with a key press, so Claude took the step back"
+                  : `Jev was unsure (${conf}, below your threshold), so Claude picked`;
   return { goal: ev.goal, why };
 }
 
@@ -233,6 +247,8 @@ export function describeEvent(ev: AgentEvent, turn: TurnContext = {}): EventView
             ? `Jev: ${ev.operation}${target} · ${ev.confidence.toFixed(2)} · ${ev.notRun === "not_approved" ? "not approved" : ev.notRun}`
             : ev.operation === "error"
               ? "Jev unavailable · Claude picks"
+              : ev.operation === "slow" || ev.operation === "skipped"
+                ? "Jev too slow · Claude picks"
               : ev.operation === "blocked"
                 ? "Jev: no match · Claude picks"
                 : `Jev unsure (${ev.confidence.toFixed(2)}) · Claude picks`,
@@ -272,6 +288,10 @@ export function describeEvent(ev: AgentEvent, turn: TurnContext = {}): EventView
       return { kind: "status", text: "" };
     case "dialog":
       return dialogView(ev);
+    case "limited_mode":
+      return limitedView(ev);
+    case "auto_tab_switching":
+      return tabSwitchView(ev);
     case "memory":
       return memoryNoteView(ev, !!turn.memoryUndone);
     case "memory_undone":
@@ -296,6 +316,51 @@ export function dialogView(ev: Extract<AgentEvent, { type: "dialog" }>): EventVi
   }
   const where = [site && `on ${site}`, ev.tab && `in tab ${ev.tab}`].filter(Boolean).join(" ");
   return { kind: "dialog", text: dialogLine(ev), title: `A ${ev.dialog.type} dialog the page opened${where ? ` ${where}` : ""}, answered by ${DIALOG_ANSWERED_BY[ev.by]}` };
+}
+
+/**
+ * A tab in limited mode: where, what it means for the run (driver.ts, fallback-driver.ts: simulated input some sites
+ * ignore, no uploads) and how to fix it. The other extension is named by its id: its name would need the "management"
+ * permission, and its page in Chrome shows it.
+ */
+export function limitedView(ev: Extract<AgentEvent, { type: "limited_mode" }>): EventView {
+  let site = "";
+  try {
+    site = ev.url ? new URL(ev.url).host : "";
+  } catch {
+    /* no page address */
+  }
+  const where = [ev.tab && `in tab ${ev.tab}`, site && `on ${site}`].filter(Boolean).join(" ");
+  const which = ev.extensionId ? `Another extension (id ${ev.extensionId})` : "Another extension";
+  const fix = ev.extensionId ? "To fix it, turn that extension off for this site (Open that extension), then continue." : "To fix it, turn off the extension that adds its frame to this page, then continue.";
+  return {
+    kind: "limited",
+    text: `Limited mode${where ? ` ${where}` : ""}`,
+    hint: `${which} has a frame on this page that blocks Chrome's debugger. ${LIMITED_MODE.effect} ${fix}`,
+    ...(ev.extensionId ? { settings: `chrome://extensions/?id=${ev.extensionId}` } : {}),
+  };
+}
+
+/** The options page's link to the Auto tab switching toggle (options.html#tab-switching). */
+export const TAB_SWITCHING_SETTING = "tab-switching";
+
+/** Auto tab switching brought a tab forward (agent-slots.ts showForShot): why, and how to turn it off. */
+export function tabSwitchView(ev: Extract<AgentEvent, { type: "auto_tab_switching" }>): EventView {
+  let site = "";
+  try {
+    site = ev.url ? new URL(ev.url).host : "";
+  } catch {
+    /* no page address */
+  }
+  const which = [ev.tab && `tab ${ev.tab}`, site && `on ${site}`].filter(Boolean).join(" ");
+  return {
+    kind: "tabswitch",
+    text: "Auto tab switching on",
+    hint:
+      `Noa switched to its tab${which ? ` (${which})` : ""} because it needs the tab visible to see the page (to take a screenshot). ` +
+      "Please don't type while it works. You can turn Auto tab switching off in Settings, but then Noa can't see tabs you're not looking at, which limits what it can do.",
+    settings: TAB_SWITCHING_SETTING,
+  };
 }
 
 /** The conversation's first message: what was asked, as the first bubble of the thread. */

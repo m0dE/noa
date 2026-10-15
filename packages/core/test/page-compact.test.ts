@@ -75,3 +75,34 @@ describe("frames from other sites", () => {
     expect(formatPageChange(snap(popover), snap(popover))).toMatch(/Nothing on the page changed/);
   });
 });
+
+describe("scrollable areas", () => {
+  const row = (index: number, name: string): ElementInfo => ({ index, tag: "div", role: "generic", name, inViewport: true, inDialog: true });
+  const page = (above: number, rows: string[]): PageSnapshot => ({
+    url: "https://app.test/",
+    title: "App",
+    elements: rows.map((r, i) => row(i, r)),
+    truncated: false,
+    text: "Teams",
+    areas: [{ index: rows.length, label: "Teams", first: rows[0]!, last: rows.at(-1)!, height: 180, above, below: 420 - above, inDialog: true }],
+  });
+
+  it("read_page says a list scrolls with more above and below, and gives the number scroll takes", () => {
+    const out = formatSnapshot(page(270, ["Kite", "Lark", "Moss"]), { words: true });
+    const at = out.indexOf("--- scrollable areas");
+    expect(at).toBeGreaterThan(out.indexOf("Interactive elements"));
+    expect(at).toBeLessThan(out.indexOf("--- visible text"));
+    expect(out).toContain('area index=3 "Teams", shows "Kite" to "Moss" (180 px tall, 270 px more above, 150 px more below, in dialog)');
+    expect(out).toContain("not complete lists");
+  });
+
+  it("act's page change lists the areas, and says when one scrolled during the steps", () => {
+    const out = formatPageChange(page(270, ["Kite", "Lark", "Moss"]), page(90, ["Fern", "Glen", "Hale"]));
+    expect(out).toContain('area index=3 "Teams", shows "Fern" to "Hale" (180 px tall, 90 px more above, 330 px more below, in dialog, it scrolled during these steps');
+  });
+
+  it("a page without such areas has no such lines", () => {
+    const snap = { ...page(0, ["Kite"]), areas: undefined };
+    expect(formatSnapshot(snap, { words: true })).not.toContain("scrollable areas");
+  });
+});

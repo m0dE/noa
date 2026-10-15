@@ -50,6 +50,8 @@ export function milestoneOf(ev: AgentEvent): string | null {
     }
     case "screenshot":
       return "Looking at the page";
+    case "find_text":
+      return "Searching the page";
     case "act":
       return actMilestone(args.steps as Steps | undefined);
     case "click":
@@ -93,7 +95,7 @@ export const PROGRESS = {
  */
 function stepKey(line: string): string | null {
   if (line.startsWith("Opening ")) return line;
-  if (line.startsWith("Reading ") || line === "Looking at the page") return "read";
+  if (line.startsWith("Reading ") || line === "Looking at the page" || line === "Searching the page") return "read";
   if (line === "Typing" || line === "Filling in the form") return "write";
   if (/^Switching to |^Switching accounts|^Signing in/.test(line)) return line;
   if (line === "Attaching files") return "attach";

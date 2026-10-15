@@ -1,6 +1,7 @@
 // Which tabs Noa controls, in the built extension in Playwright's Chromium (control-indicator.ts):
-// the tab group's title and colour while a run acts, waits for an approval, ends paused for the user, and after;
-// the toolbar badge; the page overlay (glow + pill) while it acts and gone after; the overlay never in the agent's
+// the tab group's title (the job) and colour while a run acts, waits for an approval, ends paused for the user, and
+// after; the toolbar badge and its tooltip (the job, what the agent does now); the page overlay (glow + pill, its
+// popover telling the job and the step on hover) while it acts and gone after; the overlay never in the agent's
 // read_page or screenshots; the pill's Stop stops the run and its Open opens the chat's side panel; the setting
 // turns the overlay off. The brain is a scripted fake in the service worker (no helper, no API key).
 // Usage: pnpm build && node apps/extension/test/control.e2e.mjs [--headed]
@@ -36,8 +37,11 @@ try {
     gated: true,
     makeAct: () => {
       const seen = (globalThis.__seen = {});
-      return async ({ browser }, name) => {
+      return async ({ browser, onEvent }, name) => {
         if (name.startsWith("look")) {
+          // A step the chat (and the pill's popover) shows: what the agent does now.
+          onEvent({ type: "tool_call", id: "c1", name: "read_page", args: {} });
+          globalThis.__lookEvent = onEvent;
           seen.snap = await browser.call("browser.readPage", {});
           seen.shot = await browser.call("browser.screenshot", {});
           // Holds the run (still acting) until the test lets it end.
@@ -95,6 +99,19 @@ try {
       });
       return res?.result ?? null;
     }, tabId);
+  /** The pill's popover when it shows (hover or focus): its lines, as the extension's isolated world sees them. */
+  const popover = () =>
+    sw.evaluate(async (t) => {
+      const [res] = await chrome.scripting.executeScript({
+        target: { tabId: t },
+        func: () => {
+          const pop = window.__noaControl?.root.querySelector(".pop");
+          if (!pop || getComputedStyle(pop).display === "none") return null;
+          return { lines: [...pop.children].filter((c) => !c.hidden).map((c) => c.textContent), role: pop.getAttribute("role") };
+        },
+      });
+      return res?.result ?? null;
+    }, tabId);
   /** Whether an image (base64 JPEG/PNG) is dark at a point of the page (CSS px), measured in the page. */
   const darkIn = async (base64, mime, at) =>
     page.evaluate(
@@ -122,24 +139,42 @@ try {
     return JSON.stringify(v);
   });
 
-  await step("a run acting in the tab: group 'Noa · working' in purple, RUN badge with its tooltip, the overlay outside the page's body", async () => {
+  await step("a run acting in the tab: group 'Noa · <the job>' in purple, RUN badge with its tooltip, the overlay outside the page's body", async () => {
     look = await ui({ type: "run.adhoc", instructions: "look", tabId });
     await fake.started("look");
     const v = await waitFor(async () => {
       const x = await view();
-      return x.group?.title === "Noa · working" && x.overlay ? x : null;
+      return x.group?.title === "Noa · Look" && x.overlay ? x : null;
     }, "the working look");
-    assert.deepEqual(v.group, { title: "Noa · working", color: "purple" });
+    // The chat's title is its first request, cleaned (chat-title.ts); the title model renames it after the turn.
+    assert.deepEqual(v.group, { title: "Noa · Look", color: "purple" });
     assert.equal(v.badge, "RUN");
-    assert.equal(v.tooltip, "Noa is working in this tab");
+    assert.equal(v.tooltip, "Noa is working in this tab: Look");
     assert.deepEqual(v.overlay, { variant: "working", inBody: false, open: false });
     assert.equal((await pillButton())?.text, "Stop");
     await page.screenshot({ path: join(shots, "control-working.png") });
     return JSON.stringify(v);
   });
 
-  await step("the agent's read_page and screenshot never show the overlay (the page's own screenshot does)", async () => {
+  await step("hovering the pill: its popover tells the job and what the agent does now (and so does the tooltip)", async () => {
     await fake.release("look");
+    const tip = await waitFor(async () => {
+      const x = await view();
+      return x.tooltip.includes("Now:") ? x.tooltip : null;
+    }, "the step in the tooltip");
+    assert.equal(tip, "Noa is working in this tab: Look · Now: Reading the page");
+    const pill = await pillButton();
+    await page.mouse.move(pill.pillX + 20, pill.pillY);
+    const pop = await waitFor(() => popover(), "the popover");
+    assert.deepEqual(pop.lines, ["Look", "Now: Reading the page"]);
+    assert.equal(pop.role, "tooltip");
+    await page.screenshot({ path: join(shots, "control-popover.png") });
+    await page.mouse.move(5, 500);
+    await waitFor(async () => (await popover()) === null, "the popover to go");
+    return JSON.stringify(pop);
+  });
+
+  await step("the agent's read_page and screenshot never show the overlay (the page's own screenshot does)", async () => {
     const seen = await waitFor(() => sw.evaluate(() => (globalThis.__seen.shot ? globalThis.__seen : null)), "the agent's read and screenshot", {
       // A screenshot may take up to 10 s on a busy machine (driver.ts BACKGROUND_SHOT_TIMEOUT_MS).
       timeout: 30_000,
@@ -161,6 +196,24 @@ try {
     assert.equal((await pillButton())?.text, "Stop");
     assert.equal(await page.evaluate(() => document.querySelector("noa-control").hasAttribute("hidden")), false);
     return `at the pill (${Math.round(at.x)}, ${Math.round(at.y)}): agent's screenshot ${JSON.stringify(agent.rgb)}, the user's view ${JSON.stringify(user.rgb)}`;
+  });
+
+  await step("a tool call voice does not announce (list_tabs) replaces the step, and the step is kept for a restarted worker", async () => {
+    await sw.evaluate(() => globalThis.__lookEvent({ type: "tool_call", id: "c2", name: "list_tabs", args: {} }));
+    const tip = await waitFor(async () => {
+      const x = await view();
+      return x.tooltip.includes("Checking") ? x.tooltip : null;
+    }, "the new step in the tooltip");
+    assert.equal(tip, "Noa is working in this tab: Look · Now: Checking the open tabs");
+    const pill = await pillButton();
+    await page.mouse.move(pill.pillX + 20, pill.pillY);
+    const pop = await waitFor(() => popover(), "the popover");
+    assert.deepEqual(pop.lines, ["Look", "Now: Checking the open tabs"]);
+    await page.mouse.move(5, 500);
+    await waitFor(async () => (await popover()) === null, "the popover to go");
+    const kept = await sw.evaluate(async () => (await chrome.storage.session.get("controlIndicator")).controlIndicator?.steps);
+    assert.deepEqual(Object.values(kept ?? {}), ["Checking the open tabs"]);
+    return `${JSON.stringify(pop.lines)}; kept ${JSON.stringify(kept)}`;
   });
 
   await step("the run ends: group 'Noa' in grey, no badge, no overlay", async () => {
@@ -221,7 +274,7 @@ try {
     }, "the needs-you look");
     assert.deepEqual(v.group, { title: "Noa · needs you", color: "yellow" });
     assert.equal(v.badge, "!");
-    assert.equal(v.tooltip, "Noa needs you in this tab");
+    assert.equal(v.tooltip, "Noa needs you in this tab: Click");
     assert.equal((await pillButton())?.text, "Open");
     await page.screenshot({ path: join(shots, "control-needs-you.png") });
     const waiting = await sw.evaluate(async (id) => (await globalThis.__noa.sessions.eventsOf(id)).filter((e) => e.type === "approval_request").map((e) => e.request.id), r.sessionId);
@@ -248,9 +301,10 @@ try {
     const panels = () => sw.evaluate(async () => (await chrome.runtime.getContexts({ contextTypes: ["SIDE_PANEL"] })).map((c) => c.documentUrl));
     const before = await panels();
     await page.mouse.click(button.x, button.y);
+    // A new side panel context can exist a moment before its page loads (documentUrl still ""): wait for the page.
     const after = await waitFor(async () => {
       const p = await panels();
-      return p.length > before.length ? p : null;
+      return p.length > before.length && p.some((u) => u.endsWith("/sidepanel.html")) ? p : null;
     }, "the side panel to open");
     // The window's side panel (one per window; it shows the chat of the tab in front).
     assert.ok(after.some((u) => u.endsWith("/sidepanel.html")), JSON.stringify(after));
@@ -267,7 +321,7 @@ try {
     await fake.started("wait off");
     const v = await waitFor(async () => {
       const x = await view();
-      return x.group?.title === "Noa · working" ? x : null;
+      return x.group?.title === "Noa · Wait off" ? x : null;
     }, "the working look");
     assert.equal(v.badge, "RUN");
     assert.equal(v.overlay, null);

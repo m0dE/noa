@@ -1,20 +1,50 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { USER_STOP_REASON, type AgentEvent } from "@noa/shared";
-import { CONTROL_BADGES, ControlIndicator, groupLook, tabStates, type ControlledSession } from "../src/control-indicator.js";
+import { TOOL_NAMES, USER_STOP_REASON, type AgentEvent } from "@noa/shared";
+import { CONTROL_BADGES, ControlIndicator, controlBadge, groupLook, LIMITED_DETAILS, stepOf, tabDetails, tabStates, type ControlledSession } from "../src/control-indicator.js";
 import type { GroupLook } from "../src/chrome-tabs.js";
-import type { IndicatorVariant } from "../src/page-indicator.js";
+import type { IndicatorDetails, IndicatorVariant } from "../src/page-indicator.js";
 import type { BadgeLook } from "../src/tab-badges.js";
 
 describe("groupLook", () => {
   it("idle: the brand in grey", () => {
     expect(groupLook([])).toEqual({ title: "Noa", color: "grey" });
   });
-  it("one run acting: working in purple; several: how many", () => {
-    expect(groupLook(["working"])).toEqual({ title: "Noa · working", color: "purple" });
-    expect(groupLook(["working", "working"])).toEqual({ title: "Noa · 2 working", color: "purple" });
+  it("one run acting: its job in purple (working without a title); several: how many", () => {
+    expect(groupLook([{ state: "working", title: "Compare flight prices" }])).toEqual({ title: "Noa · Compare flight prices", color: "purple" });
+    expect(groupLook([{ state: "working" }])).toEqual({ title: "Noa · working", color: "purple" });
+    expect(groupLook([{ state: "working", title: "a" }, { state: "working", title: "b" }])).toEqual({ title: "Noa · 2 working", color: "purple" });
+  });
+  it("a long job title is cut short for the tab strip", () => {
+    const title = groupLook([{ state: "working", title: "Find three apartments near the office under the budget and book viewings" }]).title;
+    expect(title).toBe("Noa · Find three apartments near th…");
+    expect(title.length).toBe("Noa · ".length + 30);
   });
   it("any run waiting for the user wins: needs you in yellow", () => {
-    expect(groupLook(["working", "needs-you"])).toEqual({ title: "Noa · needs you", color: "yellow" });
+    expect(groupLook([{ state: "working", title: "a" }, { state: "needs-you", title: "b" }])).toEqual({ title: "Noa · needs you", color: "yellow" });
+  });
+});
+
+describe("what a controlled tab tells about its run", () => {
+  it("the popover: the job, what the agent does now (only while it works), limited mode", () => {
+    expect(tabDetails("working", { title: "Compare flight prices", step: "Opening kayak.com" })).toEqual({ job: "Compare flight prices", now: "Now: Opening kayak.com", limited: "" });
+    expect(tabDetails("needs-you", { title: "Compare flight prices", step: "Opening kayak.com" })).toEqual({ job: "Compare flight prices", now: "", limited: "" });
+    expect(tabDetails("working", { limited: { extensionId: null } })).toEqual({ job: "", now: "", limited: LIMITED_DETAILS });
+    expect(LIMITED_DETAILS).toMatch(/simulated.*can't upload files.*turn that extension off/s);
+  });
+  it("the badge's tooltip says the same in one line; without a job, as before", () => {
+    expect(controlBadge("working", { title: "Compare flight prices", step: "Typing", limited: { extensionId: "x" } })).toEqual({
+      ...CONTROL_BADGES.working,
+      title: "Noa is working in this tab: Compare flight prices · Now: Typing · Limited mode: another extension blocks Chrome's debugger here",
+    });
+    expect(controlBadge("needs-you", { title: "Compare flight prices", step: "Typing" }).title).toBe("Noa needs you in this tab: Compare flight prices");
+    expect(controlBadge("working", {})).toEqual(CONTROL_BADGES.working);
+  });
+  it("every tool's call says what the agent does now: its voice milestone, else the tool's own line", () => {
+    for (const name of TOOL_NAMES) expect(stepOf({ type: "tool_call", id: "1", name, args: {} }), name).toMatch(/^[A-Z][a-z]/);
+    expect(stepOf({ type: "tool_call", id: "1", name: "navigate", args: { url: "https://www.kayak.com/" } })).toBe("Opening kayak.com");
+    expect(stepOf({ type: "tool_call", id: "1", name: "list_tabs", args: {} })).toBe("Checking the open tabs");
+    expect(stepOf({ type: "tool_call", id: "1", name: "toString", args: {} })).toBeNull();
+    expect(stepOf({ type: "status", text: "Verifying" })).toBeNull();
   });
 });
 
@@ -36,6 +66,9 @@ describe("tabStates", () => {
 function harness() {
   let running: ControlledSession[] = [];
   let overlay = true;
+  const titles = new Map<string, string>();
+  const limited = new Map<number, string | null>();
+  const details = new Map<number, IndicatorDetails>();
   const groupOfTab = new Map<number, number>();
   const knownGroups = new Set<number>();
   const looks = new Map<number, GroupLook>();
@@ -48,6 +81,8 @@ function harness() {
       running: async () => running,
       tabsOf: async (sessionId) => running.find((s) => s.sessionId === sessionId)?.tabs ?? [],
       chatTabOf: async (sessionId) => (sessionId === "chat" ? 50 : null),
+      titleOf: async (sessionId) => titles.get(sessionId) ?? null,
+      limited: (tabId) => (limited.has(tabId) ? { extensionId: limited.get(tabId) ?? null } : null),
       showOverlay: async () => overlay,
       groups: {
         of: async (tabId) => groupOfTab.get(tabId) ?? null,
@@ -61,8 +96,9 @@ function harness() {
         },
       },
       pages: {
-        show: async (tabId, variant) => {
+        show: async (tabId, variant, d) => {
           pages.set(tabId, variant);
+          details.set(tabId, d);
           shows.push([tabId, variant]);
         },
         remove: async (tabId) => void pages.delete(tabId),
@@ -82,6 +118,9 @@ function harness() {
     badges,
     pages,
     shows,
+    titles,
+    limited,
+    details,
   };
 }
 
@@ -237,6 +276,100 @@ describe("ControlIndicator", () => {
     expect(h.pages.has(1)).toBe(false);
     expect(h.badges.has(1)).toBe(false);
     expect(h.looks.get(10)?.title).toBe("Noa");
+  });
+
+  it("the job and what the agent does now: in the group's title, the popover and the badge's tooltip, kept up to date", async () => {
+    h.titles.set("s1", "Compare flight prices");
+    h.setRunning([{ sessionId: "s1", tabs: [1, 2], needsYou: false }]);
+    await ind.applyNow();
+    expect(h.looks.get(10)).toEqual({ title: "Noa · Compare flight prices", color: "purple" });
+    expect(h.details.get(2)).toEqual({ job: "Compare flight prices", now: "", limited: "" });
+    expect(h.badges.get(2)?.title).toBe("Noa is working in this tab: Compare flight prices");
+
+    ind.onEvent("s1", { type: "tool_call", id: "c1", name: "navigate", args: { url: "https://www.kayak.com/flights" } });
+    await ind.applyNow();
+    expect(h.details.get(1)).toEqual({ job: "Compare flight prices", now: "Now: Opening kayak.com", limited: "" });
+    expect(h.badges.get(1)?.title).toBe("Noa is working in this tab: Compare flight prices · Now: Opening kayak.com");
+
+    // A step that says nothing new (the same one again) changes nothing on the pages.
+    h.shows.length = 0;
+    ind.onEvent("s1", { type: "tool_call", id: "c2", name: "navigate", args: { url: "https://kayak.com/a" } });
+    ind.onEvent("s1", { type: "tool_call", id: "c3", name: "navigate", args: { url: "https://kayak.com/b" } });
+    await ind.applyNow();
+    expect(h.shows).toEqual([]);
+
+    // Renamed (the title model, or the user): the next refresh says so.
+    h.titles.set("s1", "Flights to Lisbon");
+    await ind.applyNow();
+    expect(h.looks.get(10)?.title).toBe("Noa · Flights to Lisbon");
+    expect(h.details.get(1)?.job).toBe("Flights to Lisbon");
+
+    // Waiting for the user: no "Now" (it waits), the job stays.
+    ind.onEvent("s1", end("paused", "Which dates?"));
+    h.setRunning([]);
+    await ind.applyNow();
+    expect(h.details.get(1)).toEqual({ job: "Flights to Lisbon", now: "", limited: "" });
+    expect(h.badges.get(1)?.title).toBe("Noa needs you in this tab: Flights to Lisbon");
+
+    // The next turn starts afresh: no step from the last one.
+    ind.onEvent("s1", { type: "user_message", text: "May 3 to 10" });
+    h.setRunning([{ sessionId: "s1", tabs: [1], needsYou: false }]);
+    await ind.applyNow();
+    expect(h.details.get(1)?.now).toBe("");
+  });
+
+  it("a tab in limited mode: 'Limited' on its pill with what it means, and in the badge's tooltip; gone when the debugger is back", async () => {
+    h.setRunning([{ sessionId: "s1", tabs: [1, 2], needsYou: false }]);
+    h.limited.set(2, "abcdefghijklmnopabcdefghijklmnop");
+    await ind.applyNow();
+    expect(h.details.get(2)?.limited).toBe(LIMITED_DETAILS);
+    expect(h.details.get(1)?.limited).toBe("");
+    expect(h.badges.get(2)?.title).toMatch(/Limited mode: another extension blocks Chrome's debugger here$/);
+    expect(h.badges.get(2)?.text).toBe("RUN");
+    h.limited.delete(2);
+    await ind.applyNow();
+    expect(h.details.get(2)?.limited).toBe("");
+    expect(h.badges.get(2)?.title).toBe("Noa is working in this tab");
+  });
+
+  it("a restarted service worker shows the same details and tooltip it kept", async () => {
+    h.titles.set("s1", "Compare flight prices");
+    h.setRunning([{ sessionId: "s1", tabs: [1], needsYou: false }]);
+    ind.onEvent("s1", { type: "tool_call", id: "c1", name: "screenshot", args: {} });
+    await ind.applyNow();
+    const shown = { details: h.details.get(1), badge: h.badges.get(1) };
+    h.details.clear();
+    h.badges.clear();
+    const restarted = h.make();
+    await restarted.ready;
+    expect(h.details.get(1)).toEqual(shown.details);
+    expect(h.badges.get(1)).toEqual(shown.badge);
+    expect(shown.details?.now).toBe("Now: Looking at the page");
+  });
+
+  it("a tool call with no spoken milestone still replaces what the agent does now (never the last step, stale)", async () => {
+    h.setRunning([{ sessionId: "s1", tabs: [1], needsYou: false }]);
+    ind.onEvent("s1", { type: "tool_call", id: "c1", name: "navigate", args: { url: "https://kayak.com/" } });
+    await ind.applyNow();
+    expect(h.details.get(1)?.now).toBe("Now: Opening kayak.com");
+    ind.onEvent("s1", { type: "tool_call", id: "c2", name: "list_tabs", args: {} });
+    await ind.applyNow();
+    expect(h.details.get(1)?.now).toBe("Now: Checking the open tabs");
+    // A name no tool has: nothing is claimed.
+    ind.onEvent("s1", { type: "tool_call", id: "c3", name: "no_such_tool", args: {} });
+    await ind.applyNow();
+    expect(h.details.get(1)?.now).toBe("");
+  });
+
+  it("a restarted service worker keeps what the agent does now through its next refresh", async () => {
+    h.setRunning([{ sessionId: "s1", tabs: [1], needsYou: false }]);
+    ind.onEvent("s1", { type: "tool_call", id: "c1", name: "screenshot", args: {} });
+    await ind.applyNow();
+    const restarted = h.make();
+    await restarted.ready;
+    await restarted.applyNow();
+    expect(h.details.get(1)?.now).toBe("Now: Looking at the page");
+    expect(h.badges.get(1)?.title).toBe("Noa is working in this tab · Now: Looking at the page");
   });
 
   it("refresh() gathers a burst of changes into one pass", async () => {

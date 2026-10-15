@@ -17,6 +17,12 @@ export function installChromeStub(data) {
   // scenarios name only the latest (`running`) unless they set more.
   const withRunning = (s) => (s.runningSessions ? s : { ...s, runningSessions: s.running ? [s.running] : [] });
   data.state = withRunning(data.state);
+  window.__later = data.later ?? {};
+  /** The background's state changes (e.g. a run stopped): pushed like the real one does. */
+  window.__setState = (patch) => {
+    data.state = { ...data.state, ...patch };
+    window.__push({ type: "state", state: data.state });
+  };
   data.vault ??= { exists: true, locked: false, sites: ["example.com", "news.ycombinator.com"] };
   const pushListeners = [];
   /** A message's files as the background keeps them (attachment-store.ts): references with the panel's thumbnails. */
@@ -337,10 +343,12 @@ export function installChromeStub(data) {
   /** Tab addresses: none unless a case gives them (data.tabUrls). */
   const tabUrl = (id) => data.tabUrls?.[id];
   const noEvent = { addListener: () => {} };
-  // The helper's one-line installer on the site: online unless a case says otherwise (data.helperInstallerDown).
+  // The helper's one-line installer on the site: online unless a case says otherwise (data.helperInstallerDown:
+  // "missing" answers 404, "unreachable" fails like a request with no network).
   const realFetch = window.fetch.bind(window);
-  window.fetch = (url, init) =>
-    String(url) === "https://noa.bot/helper/install.sh" ? Promise.resolve(new Response(null, { status: data.helperInstallerDown ? 404 : 200 })) : realFetch(url, init);
+  const installer = () =>
+    data.helperInstallerDown === "unreachable" ? Promise.reject(new TypeError("Failed to fetch")) : Promise.resolve(new Response(null, { status: data.helperInstallerDown ? 404 : 200 }));
+  window.fetch = (url, init) => (String(url) === "https://noa.bot/helper/install.sh" ? installer() : realFetch(url, init));
   window.chrome = {
     runtime: {
       id: "abcdefghijklmnopabcdefghijklmnop",
@@ -359,6 +367,7 @@ export function installChromeStub(data) {
       }),
       openOptionsPage: () => {},
       getURL: (path) => `${location.origin}/${path}`,
+      getManifest: () => ({ version: "9.8.7" }),
     },
     commands: {
       getAll: async () => [

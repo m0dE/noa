@@ -36,6 +36,7 @@ import {
   isApprovalGated,
   isXUrl,
   PERMISSION_TITLE,
+  SWITCH_APPROVAL_TIMEOUT_MS,
   type ApprovalGatedMethod,
   type ApprovalOutcome,
   type AgentTabInfo,
@@ -52,6 +53,7 @@ import {
 } from "@noa/shared";
 import type { BrowserCaller } from "@noa/core";
 import { normalizeId } from "../agent-tab.js";
+import { clip } from "../text.js";
 import type { ApprovalRequestOptions } from "./broker.js";
 import { classifyByRules, hostOf, type GateAction, type GateMethod, type TypedField } from "./consequence.js";
 import type { SystemOneLike } from "./jev-judge.js";
@@ -225,24 +227,49 @@ export class ApprovalGate {
    * the card is kept in the thread and the run pauses for the user's OK at once, instead of waiting for nobody.
    */
   private async ask(sessionId: string, ctx: GateContext, request: Omit<ApprovalRequest, "id" | "expiresAt">): Promise<void> {
-    const now = this.deps.now?.() ?? Date.now();
-    const left = ctx.endsAt === undefined ? undefined : Math.max(0, ctx.endsAt - now - APPROVAL_TURN_MARGIN_MS);
-    const unattended = !(ctx.attended ?? ctx.level !== "full_within_task");
-    const opts: ApprovalRequestOptions = {
-      ...(left === undefined || left >= APPROVAL_TIMEOUT_MS ? {} : { timeoutMs: left }),
-      ...(ctx.interrupt ? { signal: ctx.interrupt } : {}),
-      ...(unattended ? { unattended: true } : {}),
-    };
+    const unattended = isUnattended(ctx);
+    const opts: ApprovalRequestOptions = { ...this.waitOptions(ctx, APPROVAL_TIMEOUT_MS), ...(unattended ? { unattended: true } : {}) };
     const waited = unattended ? undefined : this.waiting?.();
     const outcome = await this.deps.request(sessionId, request, opts).finally(() => waited?.());
     if (outcome === "paused") ctx.pause?.(approvalPauseReason(request));
     // An answer that comes after the turn ended (the slot moved on) or after Stop does nothing.
-    const still = this.sessionOf() === sessionId && !ctx.stopped?.() && ctx.interrupt?.reason !== "stop";
+    const still = this.still(sessionId, ctx);
     if ((outcome === "allow_once" || outcome === "allow_task") && still) {
       if (outcome === "allow_task") this.allowAll = true;
       return;
     }
     throw new Error(approvalRefusalText(outcome === "allow_once" || outcome === "allow_task" ? "ended" : outcome, request.action));
+  }
+
+  /**
+   * The user's OK to bring a tab of the run to the front so the agent can see it (Auto tab switching is off:
+   * agent-slots.ts). Asked at every automation level: it is about the user's screen, not a change to the page. It
+   * waits like an action's card (the turn's time, Stop, a message from the user, left out of the turn's clock), at
+   * most SWITCH_APPROVAL_TIMEOUT_MS. A run nobody watches is not asked at all ("unattended"): an action's card would
+   * pause such a run (ask), which a screenshot is not worth, since read_page sees the page without it. An OK that
+   * comes after Stop or the turn's end counts as "ended".
+   */
+  async askToSwitch(sessionId: string, request: Omit<ApprovalRequest, "id" | "expiresAt">): Promise<ApprovalOutcome | "unattended"> {
+    this.follow(sessionId);
+    const ctx = await this.deps.context(sessionId);
+    if (ctx.stopped?.()) return "ended";
+    if (isUnattended(ctx)) return "unattended";
+    const waited = this.waiting?.();
+    const outcome = await this.deps.request(sessionId, request, this.waitOptions(ctx, SWITCH_APPROVAL_TIMEOUT_MS)).finally(() => waited?.());
+    return (outcome === "allow_once" || outcome === "allow_task") && !this.still(sessionId, ctx) ? "ended" : outcome;
+  }
+
+  /** How long a card may wait (no longer than the turn allows, at most `most`), and what ends it early. */
+  private waitOptions(ctx: GateContext, most: number): ApprovalRequestOptions {
+    const now = this.deps.now?.() ?? Date.now();
+    const left = ctx.endsAt === undefined ? undefined : Math.max(0, ctx.endsAt - now - APPROVAL_TURN_MARGIN_MS);
+    const timeoutMs = left === undefined ? most : Math.min(left, most);
+    return { ...(timeoutMs >= APPROVAL_TIMEOUT_MS ? {} : { timeoutMs }), ...(ctx.interrupt ? { signal: ctx.interrupt } : {}) };
+  }
+
+  /** The session still has its turn here and was not stopped: an answer to its card still counts. */
+  private still(sessionId: string, ctx: GateContext): boolean {
+    return this.sessionOf() === sessionId && !ctx.stopped?.() && ctx.interrupt?.reason !== "stop";
   }
 
   /** Why this action waits at this level; null: it runs. How a consequential action was judged goes to the trace (approval.judge). */
@@ -281,6 +308,8 @@ export class ApprovalGate {
     const action: GateAction = { method, page: { url: this.page?.url ?? "", title: this.page?.title ?? "" }, typed: [...this.typed] };
     const element = this.elementAt(p.index);
     if (element) action.element = element;
+    const target = element?.context === undefined ? undefined : this.page?.contexts?.[element.context];
+    if (target) action.target = target;
     const account = this.page && isXUrl(this.page.url) ? activeXAccount(this.page) : null;
     if (account) action.account = account;
     if (typeof p.checked === "boolean") action.checked = p.checked;
@@ -361,6 +390,11 @@ export class ApprovalGate {
         return;
     }
   }
+}
+
+/** Nobody can answer a card now: a scheduled run, unless its conversation is open (GateContext.attended). */
+function isUnattended(ctx: GateContext): boolean {
+  return !(ctx.attended ?? ctx.level !== "full_within_task");
 }
 
 /** The refusal for an action of a run that was stopped. */
@@ -455,6 +489,9 @@ function actionText(a: GateAction): string | undefined {
   return fields.map((t) => `${t.element.name || "Field"}: ${t.text}`).join("\n");
 }
 
+/** The target the card shows at most (the page's own text around the element). */
+const MAX_CARD_TARGET = 160;
+
 /** The approval request for an action that waits. */
 export function approvalAsk(a: GateAction, why: string, kind?: ConsequenceKind): Omit<ApprovalRequest, "id" | "expiresAt"> {
   const where = a.method === "navigate" || a.method === "openTabs" ? (a.urls?.[0] ?? "") : a.method === "handleDialog" ? (a.dialog?.url ?? a.page.url) : a.page.url;
@@ -466,5 +503,6 @@ export function approvalAsk(a: GateAction, why: string, kind?: ConsequenceKind):
     why,
     ...(kind ? { kind } : {}),
     ...(text ? { text: text.length > MAX_CARD_TEXT ? `${text.slice(0, MAX_CARD_TEXT - 1)}…` : text } : {}),
+    ...(a.target ? { target: clip(a.target, MAX_CARD_TARGET) } : {}),
   };
 }

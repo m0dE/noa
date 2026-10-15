@@ -12,6 +12,7 @@ describe("milestoneOf", () => {
     expect(milestoneOf(call("read_page"))).toBe("Reading the page");
     expect(milestoneOf(call("read_page", { tabs: ["t2", "t3"] }))).toBe("Reading 2 pages");
     expect(milestoneOf(call("screenshot"))).toBe("Looking at the page");
+    expect(milestoneOf(call("find_text", { text: "Order 4417" }))).toBe("Searching the page");
     expect(milestoneOf(call("act", { steps: [{ goal: "click Post" }] }))).toBe("Clicking through the page");
     expect(milestoneOf(call("act", { steps: [{ goal: "type the post", text: "gm" }, { goal: "click Post" }] }))).toBe("Typing");
     expect(milestoneOf(call("act", { steps: [{ goal: "name", text: "Ada" }, { goal: "email", text: "a@b.c" }, { goal: "agree", checked: true }] }))).toBe(

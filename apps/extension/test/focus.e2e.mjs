@@ -1,4 +1,4 @@
-// The agent never takes over the user's screen, in the built extension in a HEADED
+// With Auto tab switching off, the agent never takes over the user's screen, in the built extension in a HEADED
 // Playwright Chromium (a real window, so tab visibility is real): a one-off run starts in
 // tab A, the user switches to tab B, and the run keeps working in A (reads, screenshots,
 // opens and switches tabs, a second turn) while B stays the active tab the whole time.
@@ -36,6 +36,10 @@ const { context, sw } = ext;
 try {
   const version = context.browser()?.version() ?? (await sw.evaluate(() => navigator.userAgent.match(/Chrome\/([\d.]+)/)?.[1] ?? "?"));
   console.log(`Chromium ${version} (headed)`);
+
+  // Auto tab switching off: then nothing but the user's own Show Tab brings a tab forward (auto-tab-switching.test.ts
+  // covers it on). No card is asked here: the scripted run's background screenshots go through the debugger.
+  await sw.evaluate(() => globalThis.__noa.settings.save({ autoTabSwitching: false }));
 
   // The spy: every tabs.update({active}) / windows.update({focused}) the extension makes,
   // and every tab activation, whoever caused it.

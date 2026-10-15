@@ -1562,7 +1562,7 @@ export const PANEL_CASES = [
     names: ["panel-error-auto-switch"],
     async run({ ctx, size, scheme, label, fail, openPanel, shoot, checkLayout, reportErrors }) {
       const p = await openPanel(ctx, "err-helper", "#chat-log .ev-end");
-      await p.evaluate(() => (window.__refuse = { "run.message": "Local Claude Code is not available, and Auto does not move this chat to Noa AI on its own" }));
+      await p.evaluate(() => (window.__refuse = { "run.message": "Local Claude Code is not available, and Noa does not move this chat to Noa AI on its own" }));
       await p.fill("#now-text", "and reply to the first comment");
       await p.click("#now-submit");
       await p.waitForSelector("#now-notice .ev-error");
@@ -2461,7 +2461,7 @@ export const PANEL_CASES = [
   // it goes live ("Listening"). A start that never gets there ends after START_TIMEOUT_MS with what went wrong and
   // Try again.
   {
-    names: ["panel-handsfree-connecting", "panel-handsfree-opening-mic", "panel-handsfree-start-failed"],
+    names: ["panel-handsfree-connecting", "panel-handsfree-opening-mic", "panel-handsfree-no-mic", "panel-handsfree-start-failed"],
     async run({ ctx, size, scheme, label, fail, want, openPanel, shoot, checkLayout, reportErrors, base }) {
       await ctx.grantPermissions(["microphone"], { origin: base });
       const look = (p) =>
@@ -2536,6 +2536,19 @@ export const PANEL_CASES = [
         await p.evaluate(() => window.__push({ type: "panel.voice" }));
         await p.waitForFunction(() => document.querySelector("#voice-bar").hidden);
         reportErrors(p, `handsfree-opening-mic ${label}`);
+        await p.close();
+      }
+
+      // No microphone (Chrome: "Requested device not found"): it says it is the microphone and what to do, with Try again.
+      if (want("panel-handsfree-no-mic", size, scheme)) {
+        const p = await openPanel(ctx, "account", undefined, { edit: (d) => (d.state.settings.voiceEngine = "standard"), init: [installVoiceFakes, () => (navigator.mediaDevices.getUserMedia = () => Promise.reject(new DOMException("Requested device not found", "NotFoundError")))] });
+        await p.evaluate(() => window.__push({ type: "panel.voice" }));
+        await p.waitForFunction(() => document.querySelector("#now-notice:not([hidden])"), null, { timeout: 10_000 }).catch(() => fail(`no notice without a microphone ${label}`));
+        const n = await look(p);
+        check(n, n.hidden && n.micState === "idle" && /^No microphone found\. Plug one in/.test(n.notice ?? "") && /Try again/.test(n.notice ?? "") && !/Requested device/.test(n.notice ?? ""), "no microphone");
+        await checkLayout(p, `handsfree-no-mic ${label}`);
+        await shoot(p, "panel-handsfree-no-mic", size, scheme);
+        reportErrors(p, `handsfree-no-mic ${label}`);
         await p.close();
       }
 

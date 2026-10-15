@@ -79,8 +79,9 @@ export class SessionEndedError extends Error {
 export interface Brain {
   readonly kind: BrainKind;
   /**
-   * The brain keeps the conversation's attachments itself (Claude Code: in its session's folder, where it can
-   * Read and upload them). Otherwise the runner writes them to Downloads for upload, each turn.
+   * The brain keeps the conversation's attachments itself (Claude Code: the helper keeps them in its session's
+   * folder for upload, and shows the images and PDFs to the model). Otherwise the runner writes them to Downloads
+   * for upload, each turn.
    */
   readonly keepsAttachments?: true;
   start(opts: BrainStartOptions): BrainRun;

@@ -18,7 +18,7 @@ import {
 } from "@noa/shared";
 import { isPaidActive } from "../account/types.js";
 import { approvalJevSource, CLOUD_JEV, HOSTED_LABEL, JEV_SOURCE_LABELS, jevSourceFor, resolveBrain } from "../engine/brain-resolver.js";
-import { brainLabel, modelLabel } from "../ui/labels.js";
+import { modelLabel } from "../ui/labels.js";
 import type { AccountView, BrainStatus, JevSource } from "../ui-protocol.js";
 
 // ---------------------------------------------------------------- sections (the sidebar)
@@ -60,6 +60,7 @@ const SECTION_ALIASES: Record<string, SectionId> = {
   memories: "memory",
   cloud: "advanced",
   "self-hosting": "advanced",
+  "tab-switching": "tasks",
 };
 
 const hashName = (hash: string | null | undefined) => (hash ?? "").replace(/^#/, "").trim().toLowerCase();
@@ -83,6 +84,7 @@ const ANCHORS: Record<string, string> = {
   voice: "voice-group",
   images: "images-group",
   schedule: "schedule-group",
+  "tab-switching": "tab-switching-row",
 };
 
 /** "#jev" -> "jev-group": the group to show (its sub-tab) and scroll to once its section shows; null for a section's own link. */
@@ -144,8 +146,11 @@ export interface BrainOption {
 export interface SettingsView {
   signedIn: boolean;
   options: BrainOption[];
-  /** Under Auto: which brain it would pick right now. */
-  autoPick: { text: string; tone: Tone };
+  /**
+   * The source whose radio is checked. The saved "auto" (the default, never picked on this page; there is no Auto
+   * radio) shows the source it runs on right now, or Local Claude Code while nothing works yet.
+   */
+  shownBrain: Exclude<BrainMode, "auto">;
   /** Under Noa AI when signed in: plan, credit, what to buy. */
   hosted: HostedAccount | null;
   /** Signed out: the "Log in to use Noa AI" action under Noa AI. */
@@ -155,8 +160,6 @@ export interface SettingsView {
   showApiKey: boolean;
   /** Claude API selected without a key. */
   apiKeyMissing: boolean;
-  /** Where the helper's status and install steps show: under Local Claude Code, or under Auto when Auto runs on it or nothing works yet. */
-  helperUnder: "auto" | "claude-code" | null;
   showModel: boolean;
   model: ModelChoice;
   /** Under Reasoning: what the chosen level does. */
@@ -213,33 +216,26 @@ function modelChoice(draft: Draft): ModelChoice {
   let hint = "Used by every source. You can also switch it from the side panel.";
   if (draft.brain === "noa") {
     hint = known || !id ? "Noa AI runs this model." : `Noa AI does not offer this model, so it runs ${modelLabel(DEFAULT_MODEL)}.`;
-  } else if (draft.brain === "auto" && !known && id) {
-    hint = `If Auto picks Noa AI, it runs ${modelLabel(DEFAULT_MODEL)} instead: it does not offer this model.`;
   }
   return { selected, custom: selected === CUSTOM_MODEL, hint };
 }
 
 export function settingsView(input: ViewInput): SettingsView {
-  const { settings, draft, brain } = input;
+  const { settings, brain } = input;
   const account = input.account ?? null;
   const acct = brainAccount(account);
   const signedIn = acct.signedIn;
 
-  // What Auto would pick right now: the runner's own resolver, with brain = auto.
+  // Not picked yet ("auto"): the source the runner's own resolver runs on right now, else Local Claude Code.
   const auto = resolveBrain({
     settings: { ...settings, brain: "auto" },
     helper: brain.helper,
     helperError: brain.helperError ?? null,
     account: acct,
   });
-  const autoPick = auto.effective
-    ? { text: `Right now this picks ${auto.effective === "claude-code" ? "Local Claude Code" : brainLabel(auto.effective)}.`, tone: "ok" as Tone }
-    : {
-        text: brain.helper
-          ? "Nothing set up yet."
-          : "Nothing set up yet. To use the Claude Code on this computer, install the helper below.",
-        tone: "bad" as Tone,
-      };
+  const running = auto.effective === "noa" || auto.effective === "claude-api" ? auto.effective : "claude-code";
+  const shownBrain = input.draft.brain === "auto" ? running : input.draft.brain;
+  const draft: Draft = { ...input.draft, brain: shownBrain };
 
   // The chosen brain as the runner resolves it (same function, the draft's choice).
   const chosen = resolveBrain({
@@ -257,14 +253,13 @@ export function settingsView(input: ViewInput): SettingsView {
   // Local Claude Code and the Claude API say what is missing in their own inline sections.
 
   const options: BrainOption[] = [
-    { value: "auto", label: "Auto", detail: "Uses your own Claude first, then Noa AI.", enabled: true },
+    { value: "claude-code", label: "Local Claude Code", detail: "Runs on the Claude subscription you already pay for, through the helper app. A fraction of the cost of Noa AI or the Claude API.", enabled: true },
     {
       value: "noa",
       label: "Noa AI",
       detail: signedIn ? "Hosted by Noa, paid from your usage credit. Nothing to set up." : "Hosted by Noa. Needs an account.",
       enabled: signedIn,
     },
-    { value: "claude-code", label: "Local Claude Code (Recommended)", detail: "Runs on the Claude subscription you already pay for, through the helper app. A fraction of the cost of Noa AI or the Claude API.", enabled: true },
     { value: "claude-api", label: "Claude API", detail: "Your Anthropic API key, straight from Chrome.", enabled: true },
   ];
 
@@ -286,13 +281,12 @@ export function settingsView(input: ViewInput): SettingsView {
   return {
     signedIn,
     options,
-    autoPick,
+    shownBrain,
     hosted: signedIn && account ? hostedAccount(account) : null,
     showHostedSignIn: !signedIn,
     brainProblem,
     showApiKey: draft.brain === "claude-api",
     apiKeyMissing: draft.brain === "claude-api" && !settings.anthropicApiKey,
-    helperUnder: draft.brain === "claude-code" ? "claude-code" : draft.brain === "auto" && (auto.effective === "claude-code" || (!auto.effective && !brain.helper)) ? "auto" : null,
     // Every brain runs the chosen model (the hosted AI only its own list).
     showModel: true,
     model: modelChoice(draft),
@@ -332,7 +326,7 @@ export const NUMBER_FIELDS = [
   "maxConsecutiveFailures",
 ] as const satisfies readonly (keyof ExtensionSettings)[];
 export const TEXT_FIELDS = ["anthropicModel", "accountApiBase"] as const satisfies readonly (keyof ExtensionSettings)[];
-export const BOOL_FIELDS = ["jevEnabled", "reasoningAutoRaise", "showControlOverlay"] as const satisfies readonly (keyof ExtensionSettings)[];
+export const BOOL_FIELDS = ["jevEnabled", "reasoningAutoRaise", "showControlOverlay", "autoTabSwitching", "shareOtherTabs"] as const satisfies readonly (keyof ExtensionSettings)[];
 export type NumberField = (typeof NUMBER_FIELDS)[number];
 export type TextField = (typeof TEXT_FIELDS)[number];
 export type BoolField = (typeof BOOL_FIELDS)[number];

@@ -191,6 +191,8 @@ const slots: AgentSlots = new AgentSlots(
     onCloudError: (err) => logger("images")(`cloud copy of a generated image failed: ${errorMessage(err)}`),
   }),
   { list: (p) => noaFiles.list(p), fetch: (paths) => noaFiles.fetch(paths), save: (p, ctx) => fileSaver.save(p, ctx) },
+  // Auto tab switching: a tab the agent needs to see for a screenshot comes to the front (off: the user is asked).
+  async () => (await loadSettings()).autoTabSwitching,
 );
 const { tab: agentTab, driver, browser } = slots.get(0);
 const db = new IdbKvDb();
@@ -645,6 +647,8 @@ const controlIndicator = new ControlIndicator({
     ),
   tabsOf: (sessionId) => slots.tabsOf(sessionId),
   chatTabOf: (sessionId) => tabChats.tabOf(sessionId),
+  titleOf: async (sessionId) => (await sessions.get(sessionId))?.title ?? null,
+  limited: (tabId) => slots.fallbackOf(tabId),
   showOverlay: async () => (await loadSettings()).showControlOverlay,
   groups: { of: agentGroupOf, all: agentGroupIds, apply: applyGroupLook },
   badges: tabBadges,
@@ -655,7 +659,8 @@ const controlIndicator = new ControlIndicator({
   },
   log: logger("indicator"),
 });
-sessions.subscribe({ onEvent: (e) => controlIndicator.onEvent(e.sessionId, e) });
+// A chat's title (the job its tabs name) may have changed.
+sessions.subscribe({ onEvent: (e) => controlIndicator.onEvent(e.sessionId, e), onSession: () => controlIndicator.refresh() });
 controlIndicator.refresh();
 localStore.onChange(() => {
   hub.push({ type: "tasks.changed" });

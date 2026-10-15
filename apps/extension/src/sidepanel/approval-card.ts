@@ -10,7 +10,9 @@
 import { type ApprovalAnswer } from "@noa/shared";
 import { h } from "../ui/dom.js";
 import { clockLabel } from "./format.js";
-import { APPROVAL_ALLOW_ALL_NOTE, APPROVAL_BUTTONS, APPROVAL_KEYS, approvalKeyOf, PAUSED_BUTTONS, type ApprovalView } from "./approval-view.js";
+import { APPROVAL_ALLOW_ALL_NOTE, APPROVAL_BUTTONS, APPROVAL_KEYS, approvalKeyOf, PAUSED_BUTTONS, SWITCH_BUTTONS, type ApprovalView } from "./approval-view.js";
+import { TAB_SWITCHING_SETTING } from "./event-format.js";
+import { openSettings } from "./open-settings.js";
 
 export interface ApprovalCardActions {
   /** Sends the answer (by: a button, or its key); false when the request no longer waits. */
@@ -36,7 +38,13 @@ export function renderApproval(v: ApprovalView, actions?: ApprovalCardActions): 
   // A card its run paused at, still to be decided, waits like one of a running turn.
   const pending = v.state === "pending" || !!v.decidable;
   const tone = pending ? "pending" : ALLOWED.has(v.state) ? "allowed" : "refused";
-  const title = v.decidable ? "Paused for your OK" : pending ? "Waiting for your OK" : `${v.outcome ?? ""}${v.byVoice ? " (by voice)" : ""}`;
+  const title = v.decidable
+    ? "Paused for your OK"
+    : pending
+      ? v.switchTo
+        ? "Noa needs to see this tab to take a screenshot"
+        : "Waiting for your OK"
+      : `${v.outcome ?? ""}${v.byVoice ? " (by voice)" : ""}`;
   const card = h(
     "div.ev-approval",
     { "data-approval-id": v.id, "data-state": tone, "data-outcome": v.state, "data-decidable": v.decidable ? "true" : null, role: "group", "aria-label": pending ? "Approval needed" : `Approval: ${v.outcome ?? ""}` },
@@ -46,17 +54,34 @@ export function renderApproval(v: ApprovalView, actions?: ApprovalCardActions): 
       null,
       h("b", null, v.action),
       v.site ? h("span.appr-site", null, ` on ${v.site}`) : null,
-      h("span.appr-why", null, ` · ${v.why}`),
+      v.switchTo ? null : h("span.appr-why", null, ` · ${v.why}`),
     ),
+    v.target ? h("div.appr-target", { title: "What it acts on, as the page shows it" }, h("span.appr-target-label", null, "On: "), v.target) : null,
     v.text ? h("div.appr-text", { title: "The exact text" }, v.text) : null,
   );
   if (!pending || !actions) return card;
-  const note = h("div.appr-note", { role: "status" }, v.decidable ? "The run stopped here: nobody was there to answer." : `No answer by ${clockLabel(v.expiresAt)} counts as Deny.`);
-  const explain = v.decidable ? null : h("div.appr-note.appr-explain", null, APPROVAL_ALLOW_ALL_NOTE);
-  const buttons = (v.decidable ? PAUSED_BUTTONS : APPROVAL_BUTTONS).map(({ answer, label, hint }) => {
+  const note = h(
+    "div.appr-note",
+    { role: "status" },
+    v.decidable ? "The run stopped here: nobody was there to answer." : `No answer by ${clockLabel(v.expiresAt)} counts as ${v.switchTo ? "Not now" : "Deny"}.`,
+  );
+  const explain = v.decidable
+    ? null
+    : v.switchTo
+      ? h(
+          "div.appr-note.appr-explain",
+          null,
+          "Auto tab switching in Settings does this without asking. ",
+          h("button.link", { type: "button", onclick: () => void openSettings(TAB_SWITCHING_SETTING) }, "Open Settings"),
+        )
+      : h("div.appr-note.appr-explain", null, APPROVAL_ALLOW_ALL_NOTE);
+  const buttons = (v.decidable ? PAUSED_BUTTONS : v.switchTo ? SWITCH_BUTTONS : APPROVAL_BUTTONS).map(({ answer, label, hint }) => {
     const cls = answer === "allow_once" ? "button.small.primary" : answer === "deny" ? "button.small.danger" : "button.small";
     const b = h(cls as "button", { type: "button", "data-answer": answer, title: `${hint ?? label} (${APPROVAL_KEYS[answer].label})`, "aria-keyshortcuts": APPROVAL_KEYS[answer].label }, label);
     b.addEventListener("click", () => {
+      // Switch to it: the side panel opens by the tab (in its window, which may have none open), so the user still
+      // follows the chat there. Now, in the click's (or key press's) user gesture, which sidePanel.open() needs.
+      if (v.switchTo && answer === "allow_once") chrome.sidePanel?.open({ tabId: v.switchTo.tabId }).catch(() => undefined);
       // bindApprovalKeys marks the click it makes for a key press.
       const by = b.dataset.by === "keyboard" ? "keyboard" : "card";
       delete b.dataset.by;

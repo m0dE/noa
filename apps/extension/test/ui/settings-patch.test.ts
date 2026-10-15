@@ -62,6 +62,16 @@ describe("helperInstallCommand", () => {
       "curl -fsSL https://noa.bot/helper/install.sh | sh -s -- --extension-id abcdefghijklmnopabcdefghijklmnop",
     );
   });
+  // The site's current helper changes with every deploy; reinstalling it left an extension built from other code
+  // saying "Helper out of date" however often the user ran the command.
+  it("asks for the helper code this extension was built with", () => {
+    expect(helperInstallCommand("abcdefghijklmnopabcdefghijklmnop", "baab02a9cf9d")).toBe(
+      "curl -fsSL https://noa.bot/helper/baab02a9cf9d/install.sh | sh -s -- --extension-id abcdefghijklmnopabcdefghijklmnop",
+    );
+    expect(helperInstallCommandWindows("abcdefghijklmnopabcdefghijklmnop", "baab02a9cf9d")).toBe(
+      '$env:NOA_EXTENSION_ID="abcdefghijklmnopabcdefghijklmnop"; irm https://noa.bot/helper/baab02a9cf9d/install.ps1 | iex',
+    );
+  });
 });
 
 // An extension paired with an older helper keeps the old behaviour of clicks and tools; the helper's version string

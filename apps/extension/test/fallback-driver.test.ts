@@ -4,19 +4,11 @@ import { DRAWN, driverHarness, runInUserTab } from "./driver-harness.js";
 import type { AgentTab } from "../src/agent-tab.js";
 import { Cdp } from "../src/cdp.js";
 import { Driver } from "../src/driver.js";
-import { BACKGROUND_SHOT_SKIPPED, PAGE_MARKS, SCREENSHOT_JPEG_QUALITY } from "../src/driver-common.js";
+import { BACKGROUND_SHOT_SKIPPED, PAGE_MARKS, PAGE_SCRIPT_FAILED, SCREENSHOT_JPEG_QUALITY } from "../src/driver-common.js";
 import { FALLBACK_NOTE, fallbackNote } from "../src/fallback-driver.js";
-import {
-  checkStateInPage,
-  clickInPage,
-  insertTextInPage,
-  prepareTypingInPage,
-  pressKeyInPage,
-  selectOptionInPage,
-  setCheckedInPage,
-  typeTargetInPage,
-  viewportInPage,
-} from "../src/page-input.js";
+import { clickInPage, insertTextInPage, prepareTypingInPage, pressKeyInPage, scrollViewInPage, selectOptionInPage, setCheckedInPage, typedTextInPage } from "../src/page-input.js";
+import { checkStateInPage, coverInPage } from "../src/page-cover.js";
+import { suggestionsInPage } from "../src/page-listbox.js";
 import { isDebuggerBlocked } from "../src/restricted.js";
 import { scrollProbeInPage } from "../src/scroll-probe.js";
 import { snapshotPage } from "../src/page-snapshot.js";
@@ -33,6 +25,13 @@ let probes: number;
 let foreignFrame: boolean;
 
 const snap = { url: "https://mail.test/", title: "Inbox", text: "hi", elements: DRAWN, truncated: false };
+/** Where coverInPage finds the element free for a click. */
+const FREE = { x: 5, y: 6 };
+/** coverInPage's answer (args: PAGE_MARKS, index, act): free at FREE; a field to type into, else no checkbox. */
+const aimAnswer = (args: unknown[]) => ({
+  ok: true,
+  value: args[2] === "type" ? { cover: FREE, target: "field" } : { state: { checkable: false, checked: false, radio: false }, cover: FREE },
+});
 
 beforeEach(async () => {
   const h = driverHarness();
@@ -45,16 +44,18 @@ beforeEach(async () => {
   };
   probes = 0;
   foreignFrame = false;
-  chrome.scripting.respond = (func) =>
+  chrome.scripting.respond = (func, args) =>
     func === loadProbeInPage
       ? { doc: probes++ === 0 ? 1 : 2 + chrome.tabs.updateCalls.filter((c) => c.props.url).length, state: "complete", controls: 3, text: 10, foreignFrame }
       : func === snapshotPage
       ? snap
-      : func === viewportInPage
-        ? { ok: true, value: { w: 1000, h: 800 } }
+      : func === scrollViewInPage
+        ? { ok: true, value: { w: 1000, h: 800, stepW: 1000, stepH: 800 } }
         : func === scrollProbeInPage
           ? { ok: true, value: { before: probeAt(0), after: probeAt(1280) } }
-          : { ok: true, value: true };
+          : func === coverInPage
+            ? aimAnswer(args)
+            : { ok: true, value: true };
 });
 
 const probeAt = (top: number) => ({
@@ -117,31 +118,76 @@ describe("Driver on a page where Chrome refuses the debugger", () => {
       snapshotPage,
       // Once, for the note: which extension's frame is on the page.
       foreignExtensionInPage,
-      checkStateInPage,
+      // Before the click and the typing, in one script each: its check state or what typing into it means, and where
+      // a click reaches it (an open modal dialog may cover it).
+      coverInPage,
       clickInPage,
-      typeTargetInPage,
+      coverInPage,
       clickInPage,
       prepareTypingInPage,
       insertTextInPage,
+      // After the text: the field's suggestions.
+      suggestionsInPage,
       insertTextInPage,
       pressKeyInPage,
-      viewportInPage,
+      scrollViewInPage,
       scrollProbeInPage,
     ]);
     const args = chrome.scripting.calls.map((c) => c.args);
     expect(args.slice(2)).toEqual([
-      [PAGE_MARKS, 3],
-      [PAGE_MARKS, 3],
-      [PAGE_MARKS, 4],
-      [PAGE_MARKS, 4],
-      [PAGE_MARKS, 4],
+      [PAGE_MARKS, 3, "click"],
+      [PAGE_MARKS, 3, FREE],
+      [PAGE_MARKS, 4, "type"],
+      [PAGE_MARKS, 4, FREE],
+      [PAGE_MARKS, 4, false],
+      [PAGE_MARKS, 4, "Ada"],
       [PAGE_MARKS, 4, "Ada"],
       [PAGE_MARKS, null, "!"],
       [{ key: "Enter", code: "Enter", keyCode: 13, text: "\r", alt: false, ctrl: true, meta: false, shift: false }],
-      [],
+      [PAGE_MARKS, 1],
       [PAGE_MARKS, "scroll", 500, 400, 1, 0, 1280],
     ]);
     expect(chrome.debugger.commands).toEqual([]);
+  });
+
+  it("type with empty text in fallback: the element is prepared whole, then the empty text replaces it", async () => {
+    chrome.debugger.blocked.add(tabId);
+    await driver.readPage();
+    chrome.scripting.calls.length = 0;
+    let left = "";
+    const respond = chrome.scripting.respond;
+    chrome.scripting.respond = (func, args) => (func === typedTextInPage ? { ok: true, value: left } : respond(func, args));
+    expect(await driver.type({ index: 4, text: "" })).toEqual({ ok: true });
+    expect(injected()).toEqual([coverInPage, clickInPage, prepareTypingInPage, insertTextInPage, typedTextInPage]);
+    expect(chrome.scripting.calls.map((c) => c.args)).toEqual([
+      [PAGE_MARKS, 4, "type"],
+      [PAGE_MARKS, 4, FREE],
+      [PAGE_MARKS, 4, true],
+      [PAGE_MARKS, 4, ""],
+      [PAGE_MARKS, 4],
+    ]);
+    // Text the editor kept: its whole text selected again and a Backspace pressed on it (pressKeyInPage, which fires
+    // the beforeinput an editor like Slate edits by); read back still there, an error, not a success.
+    left = "old text";
+    chrome.scripting.calls.length = 0;
+    await expect(driver.type({ index: 4, text: "" })).rejects.toThrow('element 4 still holds "old text"');
+    expect(injected().slice(0, 7)).toEqual([coverInPage, clickInPage, prepareTypingInPage, insertTextInPage, typedTextInPage, prepareTypingInPage, pressKeyInPage]);
+    expect(chrome.scripting.calls[5]!.args).toEqual([PAGE_MARKS, 4, true]);
+    expect(chrome.scripting.calls[6]!.args).toEqual([{ key: "Backspace", code: "Backspace", keyCode: 8, text: null, alt: false, ctrl: false, meta: false, shift: false }]);
+  });
+
+  it("type into a rich editor in fallback: prepared twice, the second time once the editor's own selection restore has run", async () => {
+    chrome.debugger.blocked.add(tabId);
+    await driver.readPage();
+    chrome.scripting.calls.length = 0;
+    const respond = chrome.scripting.respond;
+    chrome.scripting.respond = (func, args) => (func === coverInPage ? { ok: true, value: { cover: FREE, target: "editor" } } : respond(func, args));
+    expect(await driver.type({ index: 4, text: "more" })).toEqual({ ok: true });
+    expect(injected().slice(0, 5)).toEqual([coverInPage, clickInPage, prepareTypingInPage, prepareTypingInPage, insertTextInPage]);
+    expect(chrome.scripting.calls.slice(2, 4).map((c) => c.args)).toEqual([
+      [PAGE_MARKS, 4, false],
+      [PAGE_MARKS, 4, false],
+    ]);
   });
 
   it("switches mid-run when a frame appears after the debugger was attached", async () => {
@@ -152,7 +198,31 @@ describe("Driver on a page where Chrome refuses the debugger", () => {
     chrome.debugger.blocked.add(tabId);
     cdp.handleDetach({ tabId }, "target_closed");
     expect(await driver.click({ index: 2 })).toEqual({ ok: true, note: FALLBACK_NOTE });
-    expect(injected()).toEqual([checkStateInPage, clickInPage, foreignExtensionInPage]);
+    expect(injected()).toEqual([coverInPage, clickInPage, foreignExtensionInPage]);
+  });
+
+  it("no answer before a click or typing (the page may be navigating) is no verdict in both drivers: the click goes to the element's center, typing fails as a page script that gave none", async () => {
+    // The debugger: no value from coverInPage; the element's center from the expression that scrolls to it.
+    chrome.debugger.respond = (method, params) => {
+      if (method !== "Runtime.evaluate") return {};
+      const expr = String((params as { expression: string }).expression);
+      return { result: { value: !expr.startsWith("(function") && expr.includes("scrollIntoView") ? { x: 7, y: 8 } : undefined } };
+    };
+    expect(await driver.click({ index: 3 })).toEqual({ ok: true });
+    expect(chrome.debugger.commands.filter((c) => c.method === "Input.dispatchMouseEvent").map((c) => [(c.params as { x: number }).x, (c.params as { y: number }).y])).toEqual([[7, 8], [7, 8], [7, 8]]);
+    await expect(driver.type({ index: 4, text: "Ada" })).rejects.toThrow(PAGE_SCRIPT_FAILED);
+    // The fallback: Chrome gives null for coverInPage. Before, this click failed with "Page script failed".
+    chrome.debugger.blocked.add(tabId);
+    await driver.readPage();
+    chrome.scripting.calls.length = 0;
+    const respond = chrome.scripting.respond;
+    chrome.scripting.respond = (func, args) => (func === coverInPage ? null : respond(func, args));
+    expect(await driver.click({ index: 3 })).toEqual({ ok: true });
+    expect(chrome.scripting.calls.map((c) => [c.func, c.args])).toEqual([
+      [coverInPage, [PAGE_MARKS, 3, "click"]],
+      [clickInPage, [PAGE_MARKS, 3]],
+    ]);
+    await expect(driver.type({ index: 4, text: "Ada" })).rejects.toThrow(PAGE_SCRIPT_FAILED);
   });
 
   it("switches when a command fails even though the session is still attached", async () => {
@@ -195,6 +265,37 @@ describe("Driver on a page where Chrome refuses the debugger", () => {
     await chrome.tabs.update(tabId, { active: true });
     expect(await driver.screenshot()).toMatchObject({ base64: "RkFLRQ==", mimeType: "image/jpeg" });
     expect(chrome.tabs.captureCalls).toEqual([{ windowId, opts: { format: "jpeg", quality: SCREENSHOT_JPEG_QUALITY } }]);
+  });
+
+  it("a capture refused for Chrome's per-second quota is tried again after a wait; other errors and a lasting refusal are not hidden", async () => {
+    chrome.debugger.blocked.add(tabId);
+    await chrome.tabs.update(tabId, { active: true });
+    const real = chrome.tabs.captureVisibleTab.bind(chrome.tabs);
+    const quota = () => new Error("This request exceeds the MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND quota.");
+    let refusals = 1;
+    chrome.tabs.captureVisibleTab = async (w: number, o: Record<string, unknown>) => {
+      if (refusals-- > 0) throw quota();
+      return real(w, o);
+    };
+    try {
+      expect(await driver.screenshot()).toMatchObject({ base64: "RkFLRQ==" });
+      // Another error is not retried.
+      refusals = 0;
+      chrome.tabs.captureVisibleTab = async () => {
+        throw new Error("Cannot access contents of the page.");
+      };
+      await expect(driver.screenshot()).rejects.toThrow(/Cannot access contents/);
+      // A refusal that lasts still fails, after a bounded number of tries.
+      let tries = 0;
+      chrome.tabs.captureVisibleTab = async () => {
+        tries++;
+        throw quota();
+      };
+      await expect(driver.screenshot()).rejects.toThrow(/MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND/);
+      expect(tries).toBe(4);
+    } finally {
+      chrome.tabs.captureVisibleTab = real;
+    }
   });
 
   it("navigates with tabs.update, then tries the debugger again on the new page", async () => {
@@ -258,6 +359,35 @@ describe("Driver on a page where Chrome refuses the debugger", () => {
     expect(chrome.tabs.updateCalls.filter((c) => c.props.url)).toEqual([]);
   });
 
+  it("fallbackOf: whether a tab is in limited mode now and the extension its note named; onFallback after each call there", async () => {
+    const id = "gppongmhjkpfnbhagpmjfkannfbllamg";
+    const seen: [number, { extensionId: string | null } | null][] = [];
+    const told = new Driver(cdp, agent, { sleep: async () => {}, onFallback: (t) => seen.push([t, told.fallbackOf(t)]) });
+    const respond = chrome.scripting.respond;
+    chrome.scripting.respond = (func, args) => (func === foreignExtensionInPage ? id : respond(func, args));
+    await told.readPage();
+    expect(told.fallbackOf(tabId)).toBeNull();
+    expect(seen).toEqual([]);
+
+    chrome.debugger.blocked.add(tabId);
+    chrome.debugger.attached.delete(tabId);
+    cdp.handleDetach({ tabId }, "target_closed");
+    await told.readPage();
+    await told.click({ index: 2 });
+    // Named from the first call on (its note), for every call after.
+    expect(seen).toEqual([
+      [tabId, { extensionId: id }],
+      [tabId, { extensionId: id }],
+    ]);
+    expect(told.fallbackOf(tabId)).toEqual({ extensionId: id });
+
+    // A new page without the other extension's frame: the debugger again, not limited.
+    chrome.debugger.blocked.delete(tabId);
+    await told.navigate({ url: "https://other.test/" });
+    expect(told.fallbackOf(tabId)).toBeNull();
+    expect(seen.at(-1)).toEqual([tabId, null]);
+  });
+
   it("each blocked tab gets its own note", async () => {
     chrome.debugger.blocked.add(tabId);
     expect((await driver.readPage()).note).toBe(FALLBACK_NOTE);
@@ -274,14 +404,14 @@ describe("page functions", () => {
   it("are self-contained so chrome.scripting can serialize them", () => {
     for (const fn of [
       clickInPage,
-      typeTargetInPage,
+      coverInPage,
       prepareTypingInPage,
       selectOptionInPage,
       checkStateInPage,
       setCheckedInPage,
       insertTextInPage,
       pressKeyInPage,
-      viewportInPage,
+      scrollViewInPage,
       scrollProbeInPage,
       snapshotPage,
     ]) {

@@ -156,36 +156,24 @@ describe("what each brain reveals", () => {
     expect(view({ draft: { brain: "claude-api" }, settings: { anthropicApiKey: "sk" } }).apiKeyMissing).toBe(false);
     expect(view({ draft: { brain: "auto" } }).apiKeyMissing).toBe(false);
   });
-  it("helper status under local Claude Code, and under Auto when Auto runs on it or nothing works yet", () => {
-    expect(view({ draft: { brain: "claude-code" } }).helperUnder).toBe("claude-code");
-    expect(view({ draft: { brain: "auto" } }).helperUnder).toBe("auto");
-    expect(view({ draft: { brain: "auto" }, account: PLUS }).helperUnder).toBeNull();
-    // Auto runs on Local Claude Code: its helper's status (out of date, say) and update steps show under Auto.
-    expect(view({ draft: { brain: "auto" }, helper: HELPER }).helperUnder).toBe("auto");
-    expect(view({ draft: { brain: "claude-api" } }).helperUnder).toBeNull();
-  });
 });
 
-describe("Auto says what it would pick now", () => {
-  it("the user's own Claude first: local Claude Code when the helper works, even with credit", () => {
-    expect(view({ account: PLUS, helper: HELPER }).autoPick.text).toBe("Right now this picks Local Claude Code.");
-    expect(view({ account: FREE_EMPTY, helper: HELPER }).autoPick.text).toBe("Right now this picks Local Claude Code.");
+describe("the source shown checked", () => {
+  it("Local Claude Code first, then Noa AI and the Claude API; no Auto, no (Recommended)", () => {
+    const labels = view({}).options.map((o) => o.label);
+    expect(labels).toEqual(["Local Claude Code", "Noa AI", "Claude API"]);
   });
-  it("then the Claude API key, then Noa AI when signed in with credit", () => {
-    expect(view({ account: PLUS, settings: { anthropicApiKey: "sk" } }).autoPick.text).toBe("Right now this picks Claude API.");
-    expect(view({ account: PLUS }).autoPick.text).toBe("Right now this picks Noa AI.");
+  it("a picked source is shown as picked", () => {
+    for (const brain of ["noa", "claude-code", "claude-api"] as const) expect(view({ brain, draft: { brain } }).shownBrain).toBe(brain);
   });
-  it("Claude API with a key and no helper", () => {
-    expect(view({ settings: { anthropicApiKey: "sk" } }).autoPick).toEqual({ text: "Right now this picks Claude API.", tone: "ok" });
+  it("not picked yet: the source that runs now, the user's own Claude first", () => {
+    expect(view({ account: PLUS, helper: HELPER }).shownBrain).toBe("claude-code");
+    expect(view({ account: FREE_EMPTY, helper: HELPER }).shownBrain).toBe("claude-code");
+    expect(view({ account: PLUS, settings: { anthropicApiKey: "sk" } }).shownBrain).toBe("claude-api");
+    expect(view({ account: PLUS }).shownBrain).toBe("noa");
   });
-  it("nothing set up", () => {
-    expect(view({ helperError: "not found" }).autoPick).toEqual({
-      text: "Nothing set up yet. To use the Claude Code on this computer, install the helper below.",
-      tone: "bad",
-    });
-  });
-  it("is the same whatever brain is saved", () => {
-    expect(view({ brain: "claude-api", account: PLUS }).autoPick.text).toMatch(/Noa AI/);
+  it("not picked yet and nothing works: Local Claude Code, whose install steps then show", () => {
+    expect(view({ helperError: "not found" }).shownBrain).toBe("claude-code");
   });
 });
 
@@ -196,7 +184,8 @@ describe("model, Jev and cloud", () => {
   });
   it("tells that Noa AI runs Sonnet 5 for a model it does not offer", () => {
     expect(view({ draft: { brain: "noa", anthropicModel: "claude-x-test" } }).model.hint).toMatch(/runs Sonnet 5/);
-    expect(view({ draft: { brain: "auto", anthropicModel: "claude-x-test" } }).model.hint).toMatch(/Sonnet 5/);
+    // Not picked yet, running on Noa AI now: the same hint.
+    expect(view({ account: PLUS, draft: { brain: "auto", anthropicModel: "claude-x-test" } }).model.hint).toMatch(/runs Sonnet 5/);
     expect(view({ draft: { brain: "claude-api", anthropicModel: "claude-x-test" } }).model.hint).not.toMatch(/Sonnet 5/);
   });
   it("model is shown for every brain (all of them run it)", () => {
@@ -210,7 +199,7 @@ describe("model, Jev and cloud", () => {
     expect(view({ helper: HELPER }).jevNote).toMatch(/TYPESAFE_API_KEY.*Noa's cloud Jev/);
     expect(view({ helper: HELPER, draft: { jevEnabled: false } }).jevNote).toBeNull();
   });
-  it("Noa AI (chosen, or picked by Auto) includes Jev: no key field, no key in the copy", () => {
+  it("Noa AI (chosen, or running while nothing is picked) includes Jev: no key field, no key in the copy", () => {
     for (const brain of ["noa", "auto"] as const) {
       const v = view({ account: PLUS, draft: { brain } });
       expect(v.showJevKey).toBe(false);

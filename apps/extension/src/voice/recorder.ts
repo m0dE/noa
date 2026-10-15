@@ -9,6 +9,7 @@ import { VOICE_LIMITS } from "@noa/shared";
 import type { AudioSource } from "./dictation.js";
 import { Resampler } from "./wav.js";
 import { MIC_CONSTRAINTS, PCM_PROCESSOR, PCM_WORKLET_FILE } from "./capture-config.js";
+import { micError } from "./mic-errors.js";
 
 /** ScriptProcessor fallback buffer (samples at the context rate). */
 const SCRIPT_PROCESSOR_SAMPLES = 2048;
@@ -41,7 +42,10 @@ export class MicSource implements AudioSource {
   ) {}
 
   async start(onSamples: (samples: Float32Array) => void): Promise<void> {
-    const stream = await this.deps.getUserMedia({ audio: MIC_CONSTRAINTS });
+    // Its failures in plain words (mic-errors.ts): the panel shows them as they are.
+    const stream = await this.deps.getUserMedia({ audio: MIC_CONSTRAINTS }).catch((err: unknown) => {
+      throw micError(err);
+    });
     this.stream = stream;
     if (this.stopped) return this.release();
     const ctx = this.deps.createContext(this.sampleRate);

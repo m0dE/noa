@@ -3,26 +3,30 @@
  * one tab. Driver decides which tab, and when a tab needs FallbackDriver
  * instead (errors that isDebuggerBlocked() recognizes pass through).
  */
-import { INPUT_BLOCKED_TEXT, type Sleep, type PageSnapshot, type Screenshot } from "@noa/shared";
+import { INPUT_BLOCKED_TEXT, SETTLE_REQUESTS_MAX_MS, type Settle, type Settled, type Sleep, type PageSnapshot, type Screenshot } from "@noa/shared";
 import {
   clickElement,
   indexedElement,
   notFound,
   PAGE_MARKS,
+  PAGE_SCRIPT_FAILED,
   POLL_MS,
-  pollUntil,
   SCREENSHOT_JPEG_QUALITY,
   SCROLL_SETTLE_MS,
   scrollDelta,
-  SETTLE_MS,
   typeIntoElement,
-  type CheckState,
+  type ClickPoint,
+  type InputProbe,
+  type PageDriver,
+  type PageFunction,
   type Params as P,
   type Result as R,
 } from "./driver-common.js";
-import type { keyEvents } from "./keys.js";
-import { checkStateInPage, prepareTypingInPage, selectOptionInPage, setCheckedInPage, typeTargetInPage } from "./page-input.js";
+import { keyEvents } from "./keys.js";
+import { armInputProbe } from "./page-cover.js";
+import { scrollViewInPage, searchFieldInPage } from "./page-input.js";
 import { loadProbeInPage, waitForUsablePage, type LoadProbe } from "./page-load.js";
+import { FIND_LIMITS, findTextInPage } from "./page-find.js";
 import { snapshotExpression } from "./page-snapshot.js";
 import { waitInPage, type PageWait, type PageWaitArgs } from "./page-wait.js";
 import { FOUND_KEY, xAccountEntryInPage, xHandleParam, type XEntryMode, type XEntryStep } from "./page-x-account.js";
@@ -43,23 +47,39 @@ const DRAG_COPY = 1;
 export function inputProbeExpression(mode: "arm" | "read", nonce: string, x: number, y: number): string {
   const key = JSON.stringify(INPUT_PROBE_KEY);
   if (mode === "read") return `(() => { const p = window[${key}]; return !p || p.nonce !== ${JSON.stringify(nonce)} ? "gone" : p.seen ? "seen" : "none"; })()`;
-  return `(() => {
-    const at = document.elementFromPoint(${x}, ${y});
-    if (!at || /^(IFRAME|FRAME|EMBED|OBJECT)$/.test(at.tagName)) return false;
-    const p = { nonce: ${JSON.stringify(nonce)}, seen: false };
-    window[${key}] = p;
-    const mark = () => { p.seen = true; };
-    for (const t of ["pointermove", "pointerdown", "mousedown", "pointerup", "mouseup", "click"]) window.addEventListener(t, mark, { capture: true, once: true });
-    return true;
-  })()`;
+  return `(${armInputProbe.toString()})(${key}, ${JSON.stringify(nonce)}, ${x}, ${y})`;
 }
 const INPUT_PROBE_KEY = "noa.inputProbe";
+/** A click's own input check name. */
+const newNonce = () => `${Date.now()}-${Math.random()}`;
+
+/** How often a settling input checks whether the page's requests are done. */
+const REQUESTS_POLL_MS = 50;
+/**
+ * After typing into a search field (searchFieldInPage), how long a request may take to start: a search box often
+ * searches only once the typing has stopped for a moment (a debounce, commonly 200-800 ms).
+ */
+const SEARCH_REQUEST_START_MS = 1200;
+/** After the requests an input waited for are done: time for the page to show what they brought. */
+const REQUESTS_RENDER_MS = 150;
+
+/**
+ * The wait after an input (CdpActions.settled): settleMs; then, while no request started, up to startWithinMs after
+ * the input; then while requests are loading, up to SETTLE_REQUESTS_MAX_MS after it, and REQUESTS_RENDER_MS more
+ * when it waited for any. Time is counted in the sleeps.
+ */
+export async function settleAfterInput(watch: { open(): number; started(): number } | null, sleep: Sleep, settleMs: number, startWithinMs = 0): Promise<void> {
+  await sleep(settleMs);
+  let waited = settleMs;
+  // A field that searches a moment after the typing stops: its request may not have started yet.
+  for (; watch && !watch.started() && waited < startWithinMs; waited += REQUESTS_POLL_MS) await sleep(REQUESTS_POLL_MS);
+  if (!watch?.open()) return;
+  for (; watch.open() && waited < SETTLE_REQUESTS_MAX_MS; waited += REQUESTS_POLL_MS) await sleep(REQUESTS_POLL_MS);
+  await sleep(REQUESTS_RENDER_MS);
+}
 
 /** Extra readings after a wheel while the position still changes (smooth scrolling). */
 const SCROLL_SETTLE_POLLS = 6;
-
-/** A page function of page-input.ts: PAGE_MARKS, then its own arguments. */
-type PageFunction<T> = (marks: typeof PAGE_MARKS, ...args: never[]) => PageResult<T>;
 
 interface EvaluateResult<T> {
   result?: { value?: T };
@@ -105,33 +125,52 @@ export class CdpActions {
     return this.evaluate<PageResult<PageWait> | undefined>(tabId, `(${waitInPage.toString()})(${JSON.stringify(args)})`);
   }
 
+  /** find_text in the page (page-find.ts). */
+  async findText(tabId: number, { text, place, scroll, again }: P<"browser.findText">): Promise<R<"browser.findText">> {
+    const out = await this.pageResult(tabId, findTextInPage, [text, place ?? 1, scroll === true, FIND_LIMITS, again === true]);
+    if (!out) throw new Error(PAGE_SCRIPT_FAILED);
+    if (!out.ok) throw new Error(out.error);
+    return out.value;
+  }
+
   async screenshot(tabId: number): Promise<Screenshot> {
     const shot = await this.send<{ data: string }>(tabId, "Page.captureScreenshot", { format: "jpeg", quality: SCREENSHOT_JPEG_QUALITY });
     return { base64: shot.data, mimeType: "image/jpeg" };
   }
 
   click(tabId: number, p: P<"browser.click">): Promise<R<"browser.click">> {
-    const index = Math.trunc(p.index);
-    return clickElement(p, {
-      state: async () => {
-        const out = await this.pageResult<CheckState>(tabId, checkStateInPage, [index]);
-        if (out?.ok === false) throw new Error(out.error);
-        return out?.ok === true ? out.value : null;
-      },
-      click: () => this.mouseClick(tabId, index),
-      force: (checked) => this.inPage<boolean>(tabId, setCheckedInPage, [index, checked]),
-    });
+    return this.settled(tabId, p, () => clickElement(p, this.page(tabId)));
   }
 
   /**
-   * A trusted mouse click at the element's center, scrolled into view first. Throws INPUT_BLOCKED_TEXT when the page got
-   * none of it: something outside the page holds the tab's input (a dialog of Chrome's own, which the agent cannot
-   * see), and every click and key would otherwise "succeed" with nothing happening.
+   * The input, then the page's time to react (Settle): settleMs, and longer while requests the page started since
+   * the input began are loading (a search's results), up to SETTLE_REQUESTS_MAX_MS; then REQUESTS_RENDER_MS for the
+   * page to show what they brought. startWithin: from the input's result, how long after the input a request may still
+   * start when none did within settleMs (a search field's debounce). Without settleMs, only the input.
    */
-  private async mouseClick(tabId: number, index: number): Promise<void> {
-    const { x, y } = await this.centerOf(tabId, index);
-    const nonce = `${Date.now()}-${Math.random()}`;
-    const armed = await this.evaluate<boolean>(tabId, inputProbeExpression("arm", nonce, x, y)).catch(() => false);
+  private async settled<T extends object>(tabId: number, { settleMs }: Settle, input: () => Promise<T>, startWithin: (out: T) => number = () => 0): Promise<T & Settled> {
+    if (settleMs === undefined) return input();
+    const watch = await this.cdp.watchRequests(tabId).catch(() => null);
+    try {
+      const out = await input();
+      await settleAfterInput(watch, this.sleep, settleMs, startWithin(out));
+      return { ...out, settled: true };
+    } finally {
+      await watch?.stop();
+    }
+  }
+
+  /**
+   * A trusted mouse click at `at` (a point of the element coverInPage found free, where it left the element) or else
+   * at the element's center, scrolled into view first. Throws INPUT_BLOCKED_TEXT when the page got none of it:
+   * something outside the page holds the tab's input (a dialog of Chrome's own, which the agent cannot see), and
+   * every click and key would otherwise "succeed" with nothing happening.
+   */
+  private async mouseClick(tabId: number, index: number, at?: ClickPoint, probe?: { probe: InputProbe; armed: boolean }): Promise<void> {
+    const { x, y } = at ?? (await this.centerOf(tabId, index));
+    // Armed by coverInPage at `at` already, or armed here.
+    const nonce = probe && at ? probe.probe.nonce : newNonce();
+    const armed = probe && at ? probe.armed : await this.evaluate<boolean>(tabId, inputProbeExpression("arm", nonce, x, y)).catch(() => false);
     await this.send(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none" });
     await this.send(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
     await this.send(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
@@ -141,16 +180,29 @@ export class CdpActions {
     if (seen === "none") throw new Error(INPUT_BLOCKED_TEXT);
   }
 
-  type(tabId: number, { index, text }: P<"browser.type">): Promise<R<"browser.type">> {
-    const i = Math.trunc(index);
-    return typeIntoElement({
-      target: () => this.inPage(tabId, typeTargetInPage, [i]),
-      select: () => this.inPage<string>(tabId, selectOptionInPage, [i, text]),
-      click: () => this.mouseClick(tabId, i),
-      prepare: () => this.inPage<true>(tabId, prepareTypingInPage, [i]).then(() => undefined),
+  async type(tabId: number, p: P<"browser.type">): Promise<R<"browser.type">> {
+    // Text typed into a search field: its search may start only once the typing has stopped for a moment.
+    const field = p.settleMs !== undefined && p.text !== "" ? await this.pageResult(tabId, searchFieldInPage, [p.index]).catch(() => undefined) : undefined;
+    // Not when the typing already chose a suggestion or listed some: the page has answered it.
+    const searches = field?.ok === true && field.value;
+    return this.settled(tabId, p, () => typeIntoElement(p, this.page(tabId)), (r) => (searches && r.selected === undefined && !r.suggestions?.length ? SEARCH_REQUEST_START_MS : 0));
+  }
+
+  /** What clickElement and typeIntoElement need, through the debugger. */
+  private page(tabId: number): PageDriver {
+    return {
+      run: (fn, args) => this.pageResult(tabId, fn, args),
+      clickAt: (index, at, armed) => this.mouseClick(tabId, index, at, armed),
+      inputProbe: () => ({ key: INPUT_PROBE_KEY, nonce: newNonce() }),
       // Trusted text input at the focus, like typing.
-      insert: () => this.send(tabId, "Input.insertText", { text }).then(() => undefined),
-    });
+      insertText: async (_index, text) => {
+        await this.send(tabId, "Input.insertText", { text });
+      },
+      backspace: async () => {
+        await this.pressKey(tabId, keyEvents("Backspace"));
+      },
+      sleep: this.sleep,
+    };
   }
 
   async paste(tabId: number, { text }: P<"browser.paste">): Promise<R<"browser.paste">> {
@@ -158,16 +210,22 @@ export class CdpActions {
     return { ok: true };
   }
 
-  async pressKey(tabId: number, [down, up]: ReturnType<typeof keyEvents>): Promise<R<"browser.pressKey">> {
-    await this.send(tabId, "Input.dispatchKeyEvent", down);
-    await this.send(tabId, "Input.dispatchKeyEvent", up);
-    return { ok: true };
+  pressKey(tabId: number, [down, up]: ReturnType<typeof keyEvents>, settle: Settle = {}): Promise<R<"browser.pressKey">> {
+    return this.settled(tabId, settle, async () => {
+      await this.send(tabId, "Input.dispatchKeyEvent", down);
+      await this.send(tabId, "Input.dispatchKeyEvent", up);
+      return { ok: true as const };
+    });
   }
 
   async scroll(tabId: number, { direction, amount = 1, index }: P<"browser.scroll">): Promise<R<"browser.scroll">> {
-    const view = await this.evaluate<{ w: number; h: number }>(tabId, "({ w: window.innerWidth, h: window.innerHeight })");
+    // The box a step is measured against (scrollViewInPage); the window when the page gives no answer.
+    const viewed = await this.pageResult(tabId, scrollViewInPage, [index ?? null]);
+    const view = viewed?.ok
+      ? viewed.value
+      : await this.evaluate<{ w: number; h: number; stepW: number; stepH: number }>(tabId, "({ w: innerWidth, h: innerHeight, stepW: innerWidth, stepH: innerHeight })");
     const at = index === undefined ? { x: view.w / 2, y: view.h / 2 } : await this.centerOf(tabId, index);
-    const { dx: deltaX, dy: deltaY } = scrollDelta(direction, amount, view);
+    const { dx: deltaX, dy: deltaY } = scrollDelta(direction, amount, { w: view.stepW, h: view.stepH });
     // What could move under the wheel, measured before and after (never fails the scroll itself).
     const probe = (mode: "measure" | "read") =>
       this.evaluate<PageResult<ScrollProbe>>(tabId, scrollProbeExpression(mode, at.x, at.y, index ?? null)).then(
@@ -369,18 +427,6 @@ export class CdpActions {
     );
     if (!pos) throw notFound(index);
     return pos;
-  }
-
-  /**
-   * Runs a page function (page-input.ts) with PAGE_MARKS and `args`, and
-   * returns its value; its error is thrown. No answer (the page navigated
-   * meanwhile) is an error too.
-   */
-  private async inPage<T>(tabId: number, fn: PageFunction<T>, args: unknown[]): Promise<T> {
-    const out = await this.pageResult(tabId, fn, args);
-    if (!out) throw new Error("Page script failed (or the page was navigating); call read_page and try again");
-    if (!out.ok) throw new Error(out.error);
-    return out.value;
   }
 
   /** A page function's result as it is; undefined when the page gave none. */

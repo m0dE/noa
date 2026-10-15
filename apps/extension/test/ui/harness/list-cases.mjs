@@ -351,6 +351,30 @@ export const LIST_CASES = [
       await p.close();
     },
   },
+  // The same run pausing while its page is open: the card arrives live, then the run ends (task_end, then the state
+  // without it running). The card it paused at gets Allow & continue and Don't then, without opening the page again.
+  {
+    names: ["panel-approval-pausing"],
+    async run({ ctx, size, scheme, label, fail, openPanel, openJob, shoot, checkLayout, reportErrors }) {
+      const p = await openPanel(ctx, "approval-pausing");
+      await openJob(p, "task:t-post");
+      await p.waitForSelector("#chat-log .ev-jev, #chat-log .ev-tool");
+      await p.evaluate(() => {
+        for (const event of window.__later["s-paused"]) window.__push({ type: "event", event });
+      });
+      await p.waitForSelector("#chat-log .ev-approval[data-outcome=paused]");
+      const during = await p.evaluate(() => document.querySelectorAll("#chat-log .ev-approval button").length);
+      if (during) fail(`pausing: buttons while the run still runs (${during})`);
+      await p.evaluate(() => window.__setState({ running: null, runningSessions: [] }));
+      const ok = await p.waitForSelector('#chat-log .ev-approval[data-decidable="true"]', { timeout: 3000 }).then(() => true, () => false);
+      const buttons = await p.evaluate(() => [...document.querySelectorAll("#chat-log .ev-approval button")].map((b) => b.textContent));
+      if (!ok || JSON.stringify(buttons) !== JSON.stringify(["Allow & continue", "Don't"])) fail(`pausing: the card's answers once the run stopped ${JSON.stringify(buttons)}`);
+      await checkLayout(p, `pausing ${label}`);
+      await shoot(p, "panel-approval-pausing", size, scheme);
+      reportErrors(p, `pausing ${label}`);
+      await p.close();
+    },
+  },
   // Dismissing jobs (job-dismiss.ts): Dismiss all on Needs you, Undo; ✕ on a row (on hover) moves a need to Recent
   // as Dismissed with Undo above the box; Delete on a focused row does the same and the focus goes on; nothing is kept
   // until Undo's time is over or the panel goes away (then jobs.dismiss); a Recent row dismissed leaves the list, and

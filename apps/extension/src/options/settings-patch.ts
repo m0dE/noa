@@ -1,5 +1,5 @@
 /** Pure helpers for the options page: building settings.save patches and status text. */
-import { HELPER_INSTALL_PS1_URL, HELPER_INSTALL_URL, SECRET_SETTING_KEYS, type ExtensionSettings, type HelperInfo } from "@noa/shared";
+import { helperInstallUrl, SECRET_SETTING_KEYS, type ExtensionSettings, type HelperInfo } from "@noa/shared";
 import { HELPER_CODE } from "../build-config.js";
 import { HELPER_NOT_INSTALLED } from "../helper-link.js";
 
@@ -8,15 +8,16 @@ export const HELPER_WHY = "Signing in to Claude Code is not enough: Chrome reach
 
 /**
  * The Terminal command that installs the helper for this extension (macOS, Linux): the installer
- * downloads the helper itself, so it needs no checkout of the repo.
+ * downloads the helper itself, so it needs no checkout of the repo. It is the installer of the helper code this
+ * extension was built with, so what it installs is never out of date for it.
  */
-export function helperInstallCommand(extensionId: string): string {
-  return `curl -fsSL ${HELPER_INSTALL_URL} | sh -s -- --extension-id ${extensionId}`;
+export function helperInstallCommand(extensionId: string, code: string = HELPER_CODE): string {
+  return `curl -fsSL ${helperInstallUrl("sh", code)} | sh -s -- --extension-id ${extensionId}`;
 }
 
 /** The PowerShell command that does the same on Windows (install.ps1 takes the id from NOA_EXTENSION_ID). */
-export function helperInstallCommandWindows(extensionId: string): string {
-  return `$env:NOA_EXTENSION_ID="${extensionId}"; irm ${HELPER_INSTALL_PS1_URL} | iex`;
+export function helperInstallCommandWindows(extensionId: string, code: string = HELPER_CODE): string {
+  return `$env:NOA_EXTENSION_ID="${extensionId}"; irm ${helperInstallUrl("ps1", code)} | iex`;
 }
 
 /** A key field: masked, saved one by one with its own buttons (secret-field.ts). */

@@ -6,7 +6,8 @@ import { chromium, type Browser, type Page } from "@playwright/test";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { PageSnapshot } from "@noa/shared";
 import { PAGE_MARKS } from "../src/driver-common.js";
-import { clickInPage, insertTextInPage, prepareTypingInPage, typeTargetInPage } from "../src/page-input.js";
+import { clickInPage, insertTextInPage, prepareTypingInPage } from "../src/page-input.js";
+import { coverInPage } from "../src/page-cover.js";
 import { snapshotPage } from "../src/page-snapshot.js";
 import type { PageResult } from "../src/scroll-probe.js";
 
@@ -56,7 +57,7 @@ describe("fields in shadow roots", () => {
 
   it("is clicked, focused and typed into by number, replacing its value", async () => {
     const i = (await snapshot()).elements.find((e) => e.name === "Summary")!.index;
-    expect(await run(typeTargetInPage, i)).toEqual({ ok: true, value: "field" });
+    expect(await run(coverInPage, i, "type")).toMatchObject({ ok: true, value: { target: "field" } });
     expect(await run(clickInPage, i)).toEqual({ ok: true, value: true });
     expect(await run(prepareTypingInPage, i)).toEqual({ ok: true, value: true });
     expect(await run(insertTextInPage, i, "Printer offline")).toEqual({ ok: true, value: true });

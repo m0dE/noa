@@ -31,8 +31,10 @@ try {
   });
 
   await step("alarm scheduled on install", async () => {
-    const alarm = await sw.evaluate(() => chrome.alarms.get("noa-run"));
-    assert.equal(alarm?.periodInMinutes, 15);
+    // runtime.onInstalled schedules it (background.ts onStart -> ensureAlarm, which reads the settings first): it
+    // fires after the worker the test found started, so the alarm comes a moment later, never at once.
+    const alarm = await waitFor(() => sw.evaluate(() => chrome.alarms.get("noa-run")), "the alarm onInstalled schedules");
+    assert.equal(alarm.periodInMinutes, 15);
     return `period ${alarm.periodInMinutes} min`;
   });
 

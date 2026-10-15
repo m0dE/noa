@@ -43,6 +43,7 @@ const METHODS: { [M in BrowserMethod]: (t: Targets, params: BrowserMethods[M]["p
   "browser.navigate": ({ driver }, p) => driver.navigate(p),
   "browser.readPage": ({ driver }, p) => driver.readPage(p ?? {}),
   "browser.screenshot": ({ driver }, p) => driver.screenshot(p),
+  "browser.findText": ({ driver }, p) => driver.findText(p),
   "browser.click": ({ driver }, p) => driver.click(p),
   "browser.type": ({ driver }, p) => driver.type(p),
   "browser.paste": ({ driver }, p) => driver.paste(p),
@@ -152,6 +153,8 @@ function resultSize(method: BrowserMethod, r: unknown): Record<string, TraceValu
       const chars = els.reduce((n, e) => n + (typeof e.name === "string" ? e.name.length : 0) + (typeof e.text === "string" ? e.text.length : 0), 0);
       return { elements: els.length, chars };
     }
+    case "browser.findText":
+      return typeof o.total === "number" ? { matches: o.total, places: typeof o.placeCount === "number" ? o.placeCount : 0 } : {};
     case "browser.screenshot":
       return typeof o.base64 === "string" ? { kb: Math.round((o.base64.length * 3) / 4 / 1024) } : {};
     case "browser.navigate":

@@ -39,8 +39,10 @@ export interface FakeXOptions {
   menuOpenedBefore?: boolean;
   /** The page ignores an untrusted click on a menu entry (only a real mouse press switches). */
   ignoresPageClicks?: boolean;
-  /** The switcher ignores its click in the first N page loads (X not ready yet: the menu does not open). */
+  /** The switcher ignores its click in the first N page loads, the one the fake starts on included (X not ready yet: the menu does not open). */
   deadSwitcherLoads?: number;
+  /** After an entry's click X closes the menu at once but shows the new account only after this many more browser calls (a switch takes a while). */
+  switchCalls?: number;
   hasSwitcher?: boolean;
   credentials?: Record<string, { username: string; password: string }>;
   vaultLocked?: boolean;
@@ -69,6 +71,9 @@ export class FakeX {
   entryClicks: { handle: string; press: boolean }[] = [];
   ignoresPageClicks: boolean;
   deadSwitcherLoads: number;
+  switchCalls: number;
+  /** A switch X has started: the account it lands on, and the calls left until it does. */
+  private pending: { account: string; calls: number } | null = null;
   composeText = "";
   files: string[] = [];
   posts: FakePost[];
@@ -89,6 +94,7 @@ export class FakeX {
     this.hasSwitcher = opts.hasSwitcher ?? true;
     this.ignoresPageClicks = opts.ignoresPageClicks ?? false;
     this.deadSwitcherLoads = opts.deadSwitcherLoads ?? 0;
+    this.switchCalls = opts.switchCalls ?? 0;
     this.credentials = opts.credentials ?? {};
     this.vaultLocked = opts.vaultLocked ?? false;
     this.posts = opts.posts ?? [];
@@ -125,6 +131,12 @@ export class FakeX {
   }
 
   private switchTo(acc: string): void {
+    if (this.switchCalls > 0 && !this.pending) {
+      this.pending = { account: acc, calls: this.switchCalls };
+      this.menuOpen = false;
+      return;
+    }
+    this.pending = null;
     this.account = acc;
     this.menuOpen = false;
     this.url = "https://x.com/home";
@@ -161,7 +173,7 @@ export class FakeX {
           { tag: "button", role: "button", name: "Account menu", text: `${this.account} @${this.account}`, testId: "SideNav_AccountSwitcher_Button" },
           {
             onClick: () => {
-              if (this.pageLoads <= this.deadSwitcherLoads) return;
+              if (this.pageLoads < this.deadSwitcherLoads) return;
               this.menuOpen = !this.menuOpen;
               this.callsSinceOpen = 0;
             },
@@ -238,6 +250,7 @@ export class FakeX {
   async handle<M extends BrowserMethod>(method: M, params: BrowserMethods[M]["params"]): Promise<BrowserMethods[M]["result"]> {
     this.calls.push({ method, params });
     this.tick();
+    if (this.pending && --this.pending.calls < 0) this.switchTo(this.pending.account);
     return (await this.dispatch(method, params as Record<string, any>)) as BrowserMethods[M]["result"];
   }
 

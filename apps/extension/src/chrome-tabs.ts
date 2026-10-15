@@ -88,9 +88,9 @@ export async function agentGroupIds(): Promise<number[]> {
  * set again for that group); collapsing is never touched. Best effort: a group that is gone is skipped.
  */
 export async function applyGroupLook(groupId: number, look: GroupLook): Promise<void> {
-  const update = await changeGroupRecords(async (records) => {
+  await changeGroupRecords(async (records) => {
     const group = await chrome.tabGroups?.get(groupId).catch(() => null);
-    if (!group) return { save: false, value: null };
+    if (!group) return { save: false, value: undefined };
     const managed: Managed = records[groupId] ?? { title: group.title ?? "", color: group.color };
     if (managed.title !== null && (group.title ?? "") !== managed.title) managed.title = null;
     if (managed.color !== null && group.color !== managed.color) managed.color = null;
@@ -98,9 +98,11 @@ export async function applyGroupLook(groupId: number, look: GroupLook): Promise<
     if (managed.title !== null && managed.title !== look.title) props.title = managed.title = look.title;
     if (managed.color !== null && managed.color !== look.color) props.color = (managed.color = look.color) as chrome.tabGroups.Color;
     records[groupId] = managed;
-    return { save: true, value: props };
+    // Set while the records are held: a look set after the chain moved on could land after the user renamed the
+    // group, put the old title back, and the next look would then take the group's title as still this extension's.
+    if (Object.keys(props).length) await chrome.tabGroups.update(groupId, props).catch(() => undefined);
+    return { save: true, value: undefined };
   });
-  if (update && Object.keys(update).length) await chrome.tabGroups.update(groupId, update).catch(() => undefined);
 }
 
 /** How a group of the agent looks while it does nothing. */
@@ -201,4 +203,41 @@ export function tabUrl(tab: Pick<chrome.tabs.Tab, "url" | "pendingUrl">): string
 export function mustId(tab: chrome.tabs.Tab | undefined): number {
   if (tab?.id === undefined) throw new Error("Could not open a tab for the agent");
   return tab.id;
+}
+
+/** chrome.idle's shortest detection interval (seconds): "active" means mouse or keyboard input in the last 15 s. */
+const USER_ACTIVE_SECONDS = 15;
+
+/**
+ * Whether the user may be typing where making this tab active would take their keys: its window has the focus (or
+ * Chrome does not say) and they used the mouse or keyboard in the last USER_ACTIVE_SECONDS (chrome.idle). True when
+ * that cannot be read: the safe answer, as a wrong switch puts their keystrokes into the run's page.
+ */
+export async function userActiveInWindowOf(tabId: number): Promise<boolean> {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    const win = await chrome.windows.get(tab.windowId);
+    // Keys go to the focused window only.
+    if (win.focused === false) return false;
+    return (await chrome.idle.queryState(USER_ACTIVE_SECONDS)) === "active";
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Makes the tab its window's active tab; restore: a minimized window is shown again; focus: the window comes in front
+ * of the others too (what the user asked for when they let Noa switch). False when the tab is gone.
+ */
+export async function bringTabForward(tabId: number, opts: { restore: boolean; focus: boolean }): Promise<boolean> {
+  try {
+    const tab = await chrome.tabs.update(tabId, { active: true });
+    if (tab?.windowId === undefined) return false;
+    const win = await chrome.windows.get(tab.windowId);
+    if (opts.focus) await chrome.windows.update(tab.windowId, win.state === "minimized" ? { focused: true, state: "normal" } : { focused: true });
+    else if (opts.restore && win.state === "minimized") await chrome.windows.update(tab.windowId, { state: "normal" });
+    return true;
+  } catch {
+    return false;
+  }
 }
