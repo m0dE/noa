@@ -9,6 +9,26 @@
     <link rel="stylesheet" href="voice.css" />
   </head>
   <body class="panel">
+    <!--
+      "Before you start" (before-start.ts): covers the whole panel on every open until I understand is pressed
+      (settings.disclaimerAccepted). The points and the button's words come from the code; the icons are here.
+    -->
+    <section id="before-start" class="before-start" role="dialog" aria-modal="true" aria-labelledby="before-start-title" hidden>
+      <div class="before-start-body">
+        <h1 id="before-start-title" class="before-start-title"></h1>
+        <ul id="before-start-points" class="before-start-points"></ul>
+        <button id="before-start-ok" type="button" class="primary before-start-ok"></button>
+      </div>
+      <template id="before-start-icon-mistakes">
+        <svg class="before-start-icon" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3v4.5"/><path d="M6.5 6.5c-1.2 1-2 2.5-2 4.3 0 2.6 1.4 4.6 3.2 5.5"/><path d="M13.5 6.5c1.2 1 2 2.5 2 4.3 0 2.6-1.4 4.6-3.2 5.5"/><path d="M8 17h4"/><path d="m8.5 11.5 1.5 1.5 1.5-1.5"/></svg>
+      </template>
+      <template id="before-start-icon-sees">
+        <svg class="before-start-icon" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10s3-5.5 8-5.5S18 10 18 10s-3 5.5-8 5.5S2 10 2 10z"/><circle cx="10" cy="10" r="2.5"/></svg>
+      </template>
+      <template id="before-start-icon-tricks">
+        <svg class="before-start-icon" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3 2.5 16h15z"/><path d="M10 8v4"/><path d="M10 14.2v.1"/></svg>
+      </template>
+    </section>
     <header class="top">
       <!--
         Over every view: the name, the jobs view (Home | Scheduled, job-list.ts; on a job's page it goes back to the

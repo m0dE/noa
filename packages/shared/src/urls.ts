@@ -9,6 +9,12 @@ export const X_HOME_URL = "https://x.com/home";
 export const TERMS_URL = "https://noa.bot/terms";
 
 /**
+ * The website's "Before you start" page (apps/web/public/safety.html): what can go wrong when an AI acts in your
+ * browser and what to do about it. "Learn more" on the side panel's first-open screen opens it.
+ */
+export const SAFETY_URL = "https://noa.bot/safety";
+
+/**
  * The helper's installer for macOS and Linux (apps/web/public/helper/install.sh): it downloads the helper
  * the homepage build bundled beside it and registers it for Chrome, so no checkout of the repo is needed.
  */

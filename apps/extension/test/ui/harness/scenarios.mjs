@@ -127,7 +127,7 @@ export function scenario(kind) {
     delayMinSec: 60, delayMaxSec: 180, maxToolCalls: 60, maxTaskMinutes: 10, maxParallelTasks: 2, jevEnabled: true, jevThreshold: 0.8,
     pauseRetryMinutes: 15, accountApiBase: "https://app.noa.bot",
     voiceEngine: "realtime", speechVoice: "", speechRate: 1, realtimeVoice: "marin", realtimeSpeed: 1, voiceSounds: true, notificationVoice: "same", deepgramVoice: "thalia", deepgramSpeed: 1, showControlOverlay: true, imageGeneration: true, imageModel: "gpt-image-2",
-    automationLevel: "ask_consequential", scheduledAutomation: "full_within_task",
+    automationLevel: "ask_consequential", scheduledAutomation: "full_within_task", disclaimerAccepted: true,
     memoryPaused: false, memoryKindsOff: [], reasoning: "fast", reasoningAutoRaise: true,
   };
   const state = {

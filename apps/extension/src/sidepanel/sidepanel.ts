@@ -33,6 +33,7 @@ import { initMemoryAsk } from "./memory-ask.js";
 import { initMigrateOffer } from "./migrate-offer.js";
 import { openSettings } from "./open-settings.js";
 import { initAutonomyWarning } from "./autonomy-warning.js";
+import { initBeforeStart } from "./before-start.js";
 import { connectBackground } from "./port.js";
 import type { PanelMessage } from "../panel-command.js";
 import { agentTabToView, chatInTab, isBound, ownChatOfTab, tabOfSession } from "./tab-chat.js";
@@ -544,6 +545,8 @@ async function signIn(): Promise<void> {
 const header = initHeader({ onState: (s) => applyState(s), onBilling: billing, onSignIn: () => void signIn() });
 // While the agent may act without asking, the panel says so (Settings > Permission).
 const autonomyWarning = initAutonomyWarning((patch) => uiRequest({ type: "settings.save", settings: patch }).then(applyState, () => undefined));
+// The first open: "Before you start" covers the panel until the user says they understand.
+const beforeStart = initBeforeStart((patch) => uiRequest({ type: "settings.save", settings: patch }).then(applyState, () => undefined));
 const say = (text: string) => composer.notices.show({ key: ACCOUNT_NOTICE, level: "info", text });
 const migrate = initMigrateOffer({ onState: (s) => applyState(s), onMoved: say });
 const memoryAsk = initMemoryAsk({ onState: (s) => applyState(s), onAnswered: say });
@@ -616,6 +619,7 @@ function applyState(s: UiState): void {
   setErrorFixes(errorFixes(s));
   header.render(s);
   autonomyWarning.render(s.settings);
+  beforeStart.render(s.settings);
   migrate.render(s.account);
   memoryAsk.render(s);
   voice.setAllowed(!!s.account?.signedIn && voiceAllowed(s.account.plan));

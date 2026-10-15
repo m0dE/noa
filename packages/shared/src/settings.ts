@@ -149,6 +149,12 @@ export const ExtensionSettings = z.object({
   automationLevel: AutomationLevel.default(DEFAULT_AUTOMATION_LEVEL),
   /** The side panel's "Permission: Full autonomy" line was closed; cleared when full autonomy is turned off (it shows again when turned on). */
   autonomyWarningClosed: z.boolean().default(false),
+  /**
+   * The user pressed "I understand" on the side panel's "Before you start" screen (sidepanel/before-start.ts: Noa can
+   * make mistakes, sees the pages it works on, a page can try to trick it). Until then the screen covers the panel
+   * every time it opens.
+   */
+  disclaimerAccepted: z.boolean().default(false),
   /** The same for scheduled runs of the TODO list (automation.ts). */
   scheduledAutomation: ScheduledAutomation.default(DEFAULT_SCHEDULED_AUTOMATION),
   /**

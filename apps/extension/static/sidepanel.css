@@ -985,3 +985,21 @@ body:has(.voice-orb:not([hidden])) .composer { z-index: var(--z-above-veil); }
   font-size: inherit; line-height: 1; padding: 2px 4px; border-radius: 4px; opacity: 0.8;
 }
 .autonomy-close:hover { opacity: 1; background: color-mix(in srgb, var(--bad) 12%, transparent); }
+
+/* "Before you start" (before-start.ts): over everything until I understand is pressed; the panel behind it is inert. */
+.before-start {
+  position: fixed; inset: 0; z-index: var(--z-popup); display: flex; align-items: center; justify-content: center;
+  padding: 24px 16px; overflow-y: auto; background: var(--bg);
+}
+.before-start[hidden] { display: none; }
+.before-start-body { width: 100%; max-width: 420px; margin: auto; display: flex; flex-direction: column; align-items: center; gap: 18px; }
+.before-start-title { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -0.01em; text-align: center; }
+.before-start-points { list-style: none; margin: 0; padding: 0; width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.before-start-point { display: flex; gap: 12px; padding: 14px 14px 14px 12px; font-size: var(--text-md); line-height: 1.5; color: var(--text); }
+.before-start-point + .before-start-point { border-top: 1px solid var(--border); }
+.before-start-point[data-warn] { color: var(--bad); }
+.before-start-icon { flex: none; margin-top: 1px; color: var(--muted); }
+.before-start-point[data-warn] .before-start-icon { color: var(--bad); }
+.before-start-text { margin: 0; min-width: 0; }
+.before-start-point[data-warn] a { color: inherit; font-weight: 500; }
+.before-start-ok { padding: 8px 20px; font-size: var(--text-lg); }

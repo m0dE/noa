@@ -950,6 +950,54 @@ export const PANEL_CASES = [
       }
     },
   },
+  // The first open: "Before you start" covers the panel (the rest inert) with three points, the first that Noa can
+  // make mistakes, the last in red with Learn more to the website; I understand saves disclaimerAccepted and the
+  // panel shows, and a later state with it saved keeps the screen away.
+  {
+    names: ["panel-before-start"],
+    async run({ ctx, size, scheme, label, fail, openPanel, shoot, checkLayout, reportErrors }) {
+      const p = await openPanel(ctx, "idle", "#before-start:not([hidden])", { edit: (d) => (d.state.settings.disclaimerAccepted = false) });
+      const w = await p.evaluate(() => {
+        const el = document.getElementById("before-start");
+        const points = [...el.querySelectorAll(".before-start-point")];
+        const inside = (n) => { const r = n.getBoundingClientRect(); return r.left >= -0.5 && r.right <= innerWidth + 0.5 && r.top >= -0.5 && r.bottom <= innerHeight + 0.5; };
+        const link = el.querySelector("a");
+        return {
+          title: el.querySelector("#before-start-title").textContent,
+          points: points.map((n) => n.textContent.replace(/\s+/g, " ").trim()),
+          warn: points.map((n) => n.hasAttribute("data-warn")),
+          link: link && { text: link.textContent, href: link.href, target: link.target, inWarn: !!link.closest("[data-warn]") },
+          button: el.querySelector("#before-start-ok").textContent,
+          focused: document.activeElement?.id,
+          covers: el.getBoundingClientRect().width >= innerWidth - 0.5 && el.getBoundingClientRect().height >= innerHeight - 0.5,
+          inside: [...el.querySelectorAll("h1, li, button")].every(inside),
+          inert: ["header", "main", "footer"].every((t) => document.querySelector(t).inert),
+          composerBlocked: document.getElementById("now-text").closest("[inert]") !== null,
+        };
+      });
+      if (w.title !== "Before you start" || w.button !== "I understand") fail(`before-start words ${JSON.stringify(w)}`);
+      if (w.points.length !== 3 || !w.points[0].startsWith("Noa can make mistakes.")) fail(`before-start points ${JSON.stringify(w.points)}`);
+      if (w.warn.join() !== "false,false,true" || !w.link?.inWarn || w.link.text !== "Learn more" || w.link.href !== "https://noa.bot/safety" || w.link.target !== "_blank") fail(`before-start link ${JSON.stringify(w)}`);
+      if (w.focused !== "before-start-ok" || !w.covers || !w.inside || !w.inert || !w.composerBlocked) fail(`before-start layout ${JSON.stringify(w)}`);
+      await shoot(p, "panel-before-start", size, scheme);
+      await p.click("#before-start-ok");
+      await p.waitForSelector("#before-start", { state: "hidden" });
+      const saved = await p.evaluate(() => window.__requests.filter((r) => r.type === "settings.save").map((r) => r.settings));
+      if (saved.length !== 1 || saved[0].disclaimerAccepted !== true) fail(`before-start saved ${JSON.stringify(saved)}`);
+      const after = await p.evaluate(() => ({ inert: ["header", "main", "footer"].some((t) => document.querySelector(t).inert), list: !document.getElementById("view-list").hidden }));
+      if (after.inert || !after.list) fail(`before-start after ${JSON.stringify(after)}`);
+      await checkLayout(p, `before-start done ${label}`);
+      // A state pushed later with it accepted keeps the screen away; one without it (another profile) brings it back.
+      const push = (accepted) => p.evaluate((a) => { const st = window.__data.state; window.__push({ type: "state", state: { ...st, rev: (st.rev ?? 0) + 1, settings: { ...st.settings, disclaimerAccepted: a } } }); }, accepted);
+      await push(true);
+      await p.waitForTimeout(100);
+      if (await p.isVisible("#before-start")) fail("before-start came back after it was accepted");
+      await push(false);
+      await p.waitForSelector("#before-start", { state: "visible" });
+      reportErrors(p, `before-start ${label}`);
+      await p.close();
+    },
+  },
   // A question answered in the chat, with Markdown: the latest turn at the bottom, the older one scrolled to the top.
   {
     names: ["panel-chat-answer", "panel-chat-answer-top"],

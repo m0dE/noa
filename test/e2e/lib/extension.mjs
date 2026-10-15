@@ -34,6 +34,9 @@ const isOurWorker = (w) => w.url().endsWith("/background.js");
  * - name: in the profile directory's name
  * - profile: an existing profile directory to start with (e.g. one a previous launch left data in);
  *   close() then keeps it (default: a fresh one, removed by close())
+ * - beforeStart: keep the side panel's "Before you start" screen (a fresh install shows it over the whole panel until
+ *   I understand is pressed). Default: it is marked understood before anything opens, as every run but a test of the
+ *   screen itself wants the panel usable (apps/extension/test/before-start.e2e.mjs tests the screen).
  * Returns { context, sw (the extension's service worker), extensionId, profile, close }.
  */
 export async function launchExtension({
@@ -46,6 +49,7 @@ export async function launchExtension({
   ignoreHTTPSErrors,
   name = "e2e",
   profile: existing,
+  beforeStart = false,
 } = {}) {
   const profile = existing ?? mkdtempSync(join(tmpdir(), `noa-${name}-`));
   if (prefs) {
@@ -67,12 +71,20 @@ export async function launchExtension({
   });
   const sw =
     context.serviceWorkers().find(isOurWorker) ?? (await context.waitForEvent("serviceworker", { predicate: isOurWorker, timeout: 15_000 }));
+  if (!beforeStart) await acceptBeforeStart(sw);
   const close = async () => {
     await context.close();
     // Retried: the helper may still be closing its log in the profile's helper-home.
     if (!existing) rmSync(profile, { recursive: true, force: true, maxRetries: 10 });
   };
   return { context, sw, extensionId: new URL(sw.url()).host, profile, close };
+}
+
+/** Presses "I understand" for the run: the side panel's first-open screen (settings.disclaimerAccepted) stays away. */
+async function acceptBeforeStart(sw) {
+  // The background's router is there once background.js has run; the worker can be reported before that.
+  await waitFor(() => sw.evaluate(() => !!globalThis.__noa?.router), "the background's router");
+  await routerUi(sw)({ type: "settings.save", settings: { disclaimerAccepted: true } });
 }
 
 const unwrap = (msg, res) => {
