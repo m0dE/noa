@@ -12,8 +12,8 @@ export interface EngineEvents {
   speech(): void;
   /** What the user said; forward: a message for the agent (Standard), else only checked for stop and cancel words. */
   heard(text: string, forward: boolean): void;
-  /** The user's words so far. */
-  partial(text: string): void;
+  /** The user's words so far; final (Realtime): the turn's words are in ("": it was not the user). */
+  partial(text: string, final?: boolean): void;
   /** The connection is up (Realtime): the microphone is being opened now. */
   openingMic(): void;
   /**
@@ -34,7 +34,7 @@ export interface EngineEvents {
    * heard: the user's words for it, word for word (each part of their speech, in order), shown folded under it.
    */
   forward(text: string, heard?: readonly string[]): void;
-  /** What the user said that led to no request (Realtime), word for word: kept for the record, not shown. */
+  /** What the user said that led to no request (Realtime), word for word: shown in the chat as the user's message, like anything they say. */
   userWords(words: readonly string[]): void;
   /** The narrator asks to stop the running task (stop_task, cancel_request); the answer goes back to it. */
   stopTask(): Promise<string>;

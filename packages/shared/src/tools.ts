@@ -167,7 +167,13 @@ export const ToolArgs = {
   switch_x_account: z.object({ handle: z.string().describe("Account handle, e.g. @myhandle") }),
   get_credential: z.object({ site: z.string().describe("Hostname, e.g. example.com") }),
   list_files: z.object({
-    search: z.string().trim().min(1).max(100).optional().describe("Only files whose name or subfolder contains this text (any case). Default: all files"),
+    search: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe("What the file is, in a few words (what it shows or is for, its name, the site or page it came from, when it was saved: 'latest', 'last week'): the best matches of all the user's files. Default: the newest files"),
   }),
   save_file: z.object({
     url: z.string().optional().describe("Save the file at this address (a link's href from read_page); the browser's sign-ins apply"),
@@ -177,6 +183,16 @@ export const ToolArgs = {
     download: z.boolean().optional().describe("true: save the file the browser downloaded last: for a file the page makes itself when you click its download or export button, which has no link to save by url"),
     name: z.string().trim().min(1).max(120).optional().describe("File name with its extension. Default: from the source"),
     folder: z.string().trim().max(60).optional().describe("One folder, named for the kind of file. Default: the top"),
+    about: z
+      .string()
+      .trim()
+      .min(1)
+      .max(300)
+      .optional()
+      .describe("One line on what the file is or shows and what it is for (for a picture: what is in it), kept with the file so it can be found and chosen later"),
+  }),
+  view_file: z.object({
+    path: z.string().describe("A picture's path, as list_files (or the tool that kept or made it) gave it"),
   }),
   generate_image: z.object({
     prompt: z
@@ -244,9 +260,9 @@ export const TOOL_NAMES = Object.keys(ToolArgs) as ToolName[];
 export type ToolArgsOf<N extends ToolName> = z.infer<(typeof ToolArgs)[N]>;
 
 export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
-  navigate: "Open a URL in the current tab and wait for it to load. Returns the page as read_page shows it.",
+  navigate: "Open a URL in the current tab and wait for it to load. Returns the page as read_page shows it. When the current page's form holds what was entered and the URL is on another site, that page is left as it is and the URL opens in a new tab instead.",
   read_page:
-    "Get the page URL, title, visible text (of a long page only the start: see find_text) and an indexed list of interactive elements. Give `tabs` to read several tabs in one call (each under its own header) without switching to them.",
+    "Get the page URL, title, visible text (of a long page only the start: see find_text), an indexed list of interactive elements, and the page's pictures (each one's address, description and size). Give `tabs` to read several tabs in one call (each under its own header) without switching to them.",
   screenshot: "Capture the visible part of the current tab as an image.",
   find_text:
     "Find text anywhere on the current page, also far below what read_page shows. Says how often it occurs and, per place (row, list item, paragraph), its text and its controls with their values; scrolls the first place (or `place`) into view for act. Use it to look up an item in a long list or to check that a change shows up, instead of scrolling.",
@@ -261,15 +277,17 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     "Open up to 8 URLs at once, each in a new tab, loading in parallel. Waits until all are loaded and returns their tab ids and titles. The current tab stays the same unless background is false.",
   switch_tab: "Make another tab the current tab: read_page, act, navigate, scroll, screenshot and the other tools then act on it.",
   list_tabs: "List this task's tabs, then the user's other tabs in its window, with id, URL, title, and which one is current.",
-  close_tabs: "Close tabs you opened and no longer need. The tab the task started on is never closed.",
+  close_tabs: "Close tabs you opened and no longer need. The tab the task started on is never closed. Never close a tab you are about to ask the user to act in (sign in, enter a code, solve a check): they do it there.",
   handle_dialog: `Answer the browser dialog (alert, confirm, prompt, or "Leave site?") open in a tab. While one is open its page is frozen: other tools on that tab say so until it is answered. One nobody answers is cancelled after ${DIALOG_AUTO_DISMISS_MS / 1000} s.`,
   wait_for: WAIT_FOR_DESCRIPTION,
   switch_x_account: "Switch X (Twitter) to another signed-in account using X's account switcher. It checks that the switcher shows the new account before it answers.",
   get_credential: "Get the stored username and password for a site. Never use this for X.",
   list_files:
-    "List the files the user keeps for Noa: their Noa folder (Downloads/Noa on their computer) and, when they are signed in, their Noa cloud files; newest first, with each one's absolute path, size and date. Any listed path can be given to upload (a cloud file is downloaded to it first).",
+    "List the files the user keeps for Noa: their Noa folder (Downloads/Noa on their computer) and, when they are signed in, their Noa cloud files. Without search: the newest ones and how many there are. With search: the best matches among all of them, by name, note, meaning, page, site and date. Each comes with its absolute path, size and date, and what is known about it: a picture's width x height, the address it came from, the page it was found on, and the note kept with it. Any listed path can be given to upload (a cloud file is downloaded to it first).",
   save_file:
-    "Keep a file for the user: it is saved in their Noa folder (Downloads/Noa/<folder>) and, when they are signed in on a plan with cloud files, in their Noa cloud files (cloud storage), where list_files and their other computers find it later. Give exactly one source: url, text, screenshot, path or download. A file with a link is saved by its url; a file the page makes itself when a button is clicked (an export or download button with no link to the file) is saved in two steps: click that button, then call save_file with download: true. The result gives its path, which upload takes.",
+    "Keep a file for the user, where their Storage setting says: their Noa cloud files (cloud storage; the default when they are signed in on a plan with cloud files), their Noa folder on this computer (Downloads/Noa/<folder>), or both. list_files, and for cloud files their other computers, find it later; the result says where it went. Give exactly one source: url, text, screenshot, path or download. A file with a link is saved by its url; a file the page makes itself when a button is clicked (an export or download button with no link to the file) is saved in two steps: click that button, then call save_file with download: true. The result gives its path, which upload takes. Pictures on a page are listed by read_page with their addresses: save one by its url.",
+  view_file:
+    "Look at a picture in the user's files (a path list_files gave, or the tool that kept or made it; a cloud file is downloaded first): shows it to you, smaller, with its size in pixels. Use it to tell which picture fits when the names and notes list_files gives do not say what each one shows.",
   generate_image:
     "Create a new picture (an icon, illustration, banner, photo-like image) from a text description, with Noa AI's image model, paid from the user's Noa usage credit. It is saved as a PNG in the user's Noa folder (Downloads/Noa/images); the result gives its path, which upload takes, and shows you the picture. Use it only when the user wants an image made, not to find existing ones.",
   schedule_task: SCHEDULE_TASK_DESCRIPTION,
@@ -297,7 +315,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
  */
 const JEV_DESCRIPTIONS: Partial<Record<ToolName, string>> = {
   read_page:
-    "Get the page URL, title, visible text (of a long page only the start: see find_text) and a compact list of the interactive elements (role and visible label, no index numbers). Describe the element you want in words in act; the fast picker finds it. Give `tabs` to read several tabs in one call (each under its own header) without switching to them.",
+    "Get the page URL, title, visible text (of a long page only the start: see find_text), a compact list of the interactive elements (role and visible label, no index numbers), and the page's pictures (each one's address, description and size). Describe the element you want in words in act; the fast picker finds it. Give `tabs` to read several tabs in one call (each under its own header) without switching to them.",
   act: `Do up to ${MAX_ACT_STEPS} small steps in order, in one call. Describe each step's element in words: its visible label and role, and its position when several look alike (e.g. 'click the Reply button under the first post', 'type into the Post text box'); a fast model picks the element. Give text for steps that fill a field (text "" empties it; a dropdown gets the option named by text), checked for checkboxes and radio buttons, and key for a step that only presses a key (e.g. {goal: 'submit the search', key: 'Enter'} after typing the search). If the fast model is not confident about a step, act stops there and returns a short numbered candidate list for that step only: send that step again with the same goal and the index of the right candidate, then continue. Do not send an index otherwise, except while results say Jev is paused: then each step names its element by index from the latest list, until a result says Jev is back.`,
 };
 

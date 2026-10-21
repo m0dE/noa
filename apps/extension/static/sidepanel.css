@@ -111,7 +111,23 @@ button.job-toggle[aria-disabled="true"] { opacity: 0.5; cursor: progress; }
 .job-row .job-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); line-height: 1.35; font-weight: 400; }
 .job-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-xs); line-height: 1.35; color: var(--muted); }
 .job-when { font-size: var(--text-xs); color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.job-row[data-state="needs"] .job-meta { color: var(--warn); }
+/* A waiting job (Upcoming, Next runs): its next run's clock on the left in place of the glyph, the time over the day. */
+.job-row.timed { grid-template-columns: 56px minmax(0, 1fr) auto; }
+.job-clock { display: flex; flex-direction: column; align-items: center; line-height: 1.2; color: var(--text); }
+.clock-time { font-size: var(--text-md); font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; white-space: nowrap; }
+.clock-half { margin-left: 2px; font-size: 9px; font-weight: 500; letter-spacing: 0; color: var(--muted); }
+.clock-day { font-size: 9.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); white-space: nowrap; }
+.job-clock[data-state="due"] { color: var(--accent); }
+.job-clock[data-state="due"] .clock-day, .job-clock[data-state="retry"] .clock-day { color: inherit; opacity: 0.8; }
+.job-clock[data-state="retry"] { color: var(--warn); }
+/* How often it repeats, on the right of an Upcoming row. */
+.job-pill {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 120px; padding: 2px 8px 2px 7px;
+  border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface);
+  font-size: var(--text-xs); font-weight: 500; color: var(--muted); white-space: nowrap;
+}
+.job-pill svg { flex: none; color: var(--faint); }
+.pill-text { overflow: hidden; text-overflow: ellipsis; }
 /* The state as a glyph: status colours only where they tell something (needs you, running, failed). */
 .job-icon { display: grid; place-items: center; color: var(--faint); }
 .job-icon[data-state="needs"] { color: var(--warn); }
@@ -363,6 +379,11 @@ button[aria-disabled="true"]:hover { border-color: var(--border); }
   background: var(--accent); opacity: 0.6; animation: pulse 1s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) { .md.streaming::after { animation: none; } }
+/* What the model is thinking about, live: quieter than its answer, and only its latest lines. */
+.log .ev-thinking { border-left: 2px solid var(--border); padding-left: 10px; }
+.log .ev-thinking-label { display: block; font-size: 11.5px; color: var(--faint); margin-bottom: 2px; }
+.log .ev-thinking-text { color: var(--muted); font-size: 12.5px; line-height: 1.5; max-height: 9em; overflow-y: auto; scrollbar-width: thin; }
+.log .ev-thinking-text > :last-child { margin-bottom: 0; }
 
 /* The user's messages: compact bubbles on the right. */
 .log .ev-user {
@@ -415,6 +436,15 @@ button[aria-disabled="true"]:hover { border-color: var(--border); }
 /* A spoken request (what the voice assistant understood and passed on) with, folded under it, the user's words as
    transcribed ("Word for word"), small and muted. */
 .log .ev-said { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+/* The user's words while hands-free voice hears them: their message at the end of the chat, growing, with a live dot,
+   until the kept message takes its place. */
+.log .ev-user.hearing { opacity: 0.85; }
+.log .ev-user.hearing::after {
+  content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px; vertical-align: middle;
+  border-radius: 50%; background: var(--live, #c8233f); animation: vb-blink 1s ease-in-out infinite;
+}
+@keyframes vb-blink { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .log .ev-user.hearing::after { animation: none; } }
 .log .ev-words { max-width: 85%; padding-right: 4px; font-size: var(--text-xs); line-height: 1.4; color: var(--faint); text-align: right; }
 .log .ev-words > summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 3px; }
 .log .ev-words > summary::-webkit-details-marker { display: none; }
@@ -816,8 +846,8 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 0.35); }
 .sheet-gate-title { margin: 0; font-weight: 600; font-size: var(--text-md); }
 .schedule-sheet .sched-request { max-height: 7.5em; margin-bottom: 8px; }
 
-/* Voice input (voice-input.ts): the Voice button left of Send (a small sound wave and the word), its tip, and the listening
-   orb in the panel's middle (the live look while hands-free is on, Mute, and the voice bar, are in voice.css).
+/* Voice input (voice-input.ts): the Voice button left of Send (a small sound wave and the word) and its tip (the live
+   look while hands-free is on, Mute, the lines above the box, and the voice bar, are in voice.css).
    --level (0..1) is the live microphone level. */
 .now-bar .voice-mic {
   position: relative; flex: none; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 9px 0 7px;
@@ -849,45 +879,7 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 0.35); }
   40% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 35%, transparent); color: var(--accent); }
 }
 
-/* The listening orb: calm, breathing, and swelling with the voice, on a veil that lets the chat recede.
-   The composer sits above the veil, so the orb never covers the input; nothing here takes clicks. */
-.voice-orb {
-  position: fixed; inset: 0; z-index: var(--z-veil); display: grid; place-items: center; pointer-events: none;
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(4px);
-}
-body:has(.voice-orb:not([hidden])) .composer { z-index: var(--z-above-veil); }
-.voice-orb-stack { display: grid; justify-items: center; margin-top: -40px; }
-.voice-orb-halo, .voice-orb-core { grid-area: 1 / 1; border-radius: 50%; }
-.voice-orb-halo {
-  width: 132px; height: 132px; align-self: center;
-  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 30%, transparent) 0%, color-mix(in srgb, var(--accent) 10%, transparent) 55%, transparent 72%);
-  transform: scale(calc(0.85 + var(--level, 0) * 0.45));
-  transition: transform 120ms ease-out;
-  animation: voice-breathe 3.2s ease-in-out infinite;
-}
-.voice-orb-core {
-  width: 64px; height: 64px; align-self: center;
-  background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--accent) 55%, #fff) 0%, var(--accent) 70%);
-  box-shadow: 0 6px 24px color-mix(in srgb, var(--accent) 35%, transparent);
-  transform: scale(calc(0.92 + var(--level, 0) * 0.16));
-  transition: transform 90ms ease-out;
-}
-.voice-caption {
-  grid-area: 2 / 1; margin: 18px 0 0; padding: 5px 11px; border-radius: 14px;
-  background: color-mix(in srgb, var(--surface) 88%, transparent); border: 1px solid var(--border);
-  color: var(--muted); font-size: var(--text-sm); line-height: 1.4; text-align: center;
-  max-width: min(320px, calc(100vw - 48px)); overflow-wrap: anywhere;
-}
-/* Hands-free not listening yet (the connection, the microphone): grey and waiting (voice.css). */
-/* Hands-free: a quicker breath while a message waits to be sent; the core breathes while a line is said. */
-.voice-orb[data-state="sending"] .voice-orb-halo { animation-duration: 0.9s; }
-.voice-orb[data-state="speaking"] .voice-orb-core { animation: voice-breathe 1.2s ease-in-out infinite; }
-@keyframes voice-breathe { 50% { opacity: 0.6; } }
-
 @media (prefers-reduced-motion: reduce) {
-  .voice-orb { backdrop-filter: none; }
-  .voice-orb-halo, .voice-orb-core { animation: none; transform: none; transition: none; }
   .voice-mic::after { transition: none; transform: none; }
   .voice-mic.nudge { animation: none; outline: 2px solid var(--accent); }
 }

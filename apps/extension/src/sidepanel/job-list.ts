@@ -1,10 +1,13 @@
 /**
- * The jobs list, the panel's first screen. One bar at its top: the view (Home | Scheduled, a segmented control: a
- * tablist, Left and Right move between them) and the search field beside it, always shown, which searches the view
- * shown. Home has the groups that have jobs (Needs you, Running, Upcoming with its soonest few and "All scheduled
- * (N)", Recent; jobs.ts); Scheduled has every scheduled job, soonest first, the paused ones last, each with its
- * schedule, its next run and Pause or Resume. One row per job: its state as an icon, its title (and, quietly under
- * it, why it needs you, its repeat rule or its site), and on the right when it ran or runs next. Recent shows a page
+ * The jobs list, the panel's first screen. One bar at its top: the view (Home | Scheduled | History, a segmented
+ * control: a tablist, Left and Right move between them) and the search field beside it, always shown, which searches
+ * the view shown. Home has the groups that have jobs (Needs you, Running, Upcoming with its soonest few and "All
+ * scheduled (N)", Recent; jobs.ts); Scheduled has every scheduled job, soonest first, the paused ones last, each with
+ * its schedule and Pause or Resume; History has every job that ran, those put away too, newest first by day (a page
+ * at a time, Show more). One row per job: its state as an icon, its title (and, quietly under it, why it
+ * needs you or its site), and on the right when it ran. A job waiting for its time (Upcoming, Next runs) has its
+ * next run's clock on the left instead of the icon (the time over the day, "9:10 AM" over "TMRW"; "Now" over "DUE"),
+ * its account under the title, and on Home how often it repeats as a pill on the right ("Daily"). Recent shows a page
  * at a time (Show more). Up and Down move between rows (from the search field too), Home and End to the ends, Enter
  * opens. A row of Needs you or Recent can be dismissed (job-dismiss.ts): its ✕ (on hover or focus; always on touch
  * screens), or Delete (Backspace) on the focused row, which then moves to the next one; Needs you has Dismiss all.
@@ -15,7 +18,8 @@ import { h } from "../ui/dom.js";
 import { HOLD_TITLE, RELEASE_TITLE } from "./job-actions.js";
 import type { JobData } from "./job-data.js";
 import type { ListPlace } from "./job-nav.js";
-import { jobRow, scheduleRow, STATE_LABELS, viewLayout, type Job, type JobState, type JobView } from "./jobs.js";
+import { jobRow, scheduleRow, STATE_LABELS, viewLayout, type Job, type JobRow, type JobState, type JobView } from "./jobs.js";
+import { repeatLabel } from "@noa/shared";
 
 /** Recent shows this many rows at first, and this many more with each Show more. */
 export const RECENT_PAGE = 25;
@@ -49,7 +53,7 @@ export interface JobList {
   show(place: ListPlace): void;
   /** Where the list is now (its view, search, scroll and the focused row), to come back to. */
   place(focusKey?: string | null): ListPlace;
-  /** Shows a view (Home, or every scheduled job). */
+  /** Shows a view (Home, every scheduled job, or every job that ran). */
   setView(view: JobView): void;
   setShortcuts(shortcuts: Shortcuts): void;
   /** The clock moved on (relative times, due tasks). */
@@ -70,25 +74,31 @@ const ICONS: Record<JobState | "repeat", string> = {
   done: '<path d="M3.5 8.4 6.6 11.3 12.5 4.9"/>',
   failed: '<circle cx="8" cy="8" r="5.5"/><path d="M6 6l4 4M10 6l-4 4"/>',
   stopped: '<rect x="4.5" y="4.5" width="7" height="7" rx="1.5"/>',
+  talk: '<path d="M2 6.75v2.5M5 4.5v7M8 2v12M11 4.5v7M14 6.75v2.5"/>',
   cancelled: '<circle cx="8" cy="8" r="5.5"/><path d="M4.2 11.8l7.6-7.6"/>',
   dismissed: '<circle cx="8" cy="8" r="5.5"/><path d="M5.5 8h5"/>',
   lapsed: '<path d="M4.5 2.5h7M4.5 13.5h7M5.5 2.5v1.8L8 8l2.5-3.7V2.5M5.5 13.5v-1.8L8 8l2.5 3.7v1.8"/>',
 };
 
-/** The job's state as a glyph (a waiting repeating job: the repeat arrows). */
-export function stateIcon(state: JobState, repeating = false): SVGSVGElement {
+/** One of ICONS drawn at `size` px, in the current colour. */
+function glyph(paths: string, size: number): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, "svg");
   svg.setAttribute("viewBox", "0 0 16 16");
-  svg.setAttribute("width", "16");
-  svg.setAttribute("height", "16");
+  svg.setAttribute("width", String(size));
+  svg.setAttribute("height", String(size));
   svg.setAttribute("aria-hidden", "true");
   svg.setAttribute("fill", "none");
   svg.setAttribute("stroke", "currentColor");
   svg.setAttribute("stroke-width", "1.5");
   svg.setAttribute("stroke-linecap", "round");
   svg.setAttribute("stroke-linejoin", "round");
-  svg.innerHTML = ICONS[repeating && state === "scheduled" ? "repeat" : state];
+  svg.innerHTML = paths;
   return svg;
+}
+
+/** The job's state as a glyph (a repeating job that runs a repeat or is on hold keeps its state's; see nextClock for the waiting ones). */
+export function stateIcon(state: JobState, repeating = false): SVGSVGElement {
+  return glyph(ICONS[repeating && state === "scheduled" ? "repeat" : state], 16);
 }
 
 const DISMISS_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>';
@@ -96,13 +106,35 @@ const DISMISS_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidde
 /** A held job shows the pause glyph wherever it is listed (a job paused after failures is also "needs"). */
 const iconState = (job: Job): JobState => (job.held ? "paused" : job.state);
 
-function rowButton(job: Job, r: { title: string; meta: string; when: string; label: string }, extra: Record<string, string> = {}): HTMLButtonElement {
+/**
+ * A waiting job's left column: its next run's time over its day (jobs.ts nextClock), in the state's colour when its
+ * time has come or it retries. A 12-hour time's AM or PM is set smaller after the digits.
+ */
+function clockOf(job: Job, r: JobRow): HTMLElement {
+  const { time, day, words } = r.clock!;
+  const [digits, half] = time.split(" ");
   return h(
-    "button.job-row",
+    "span.job-clock",
+    { "data-state": job.state, title: words },
+    h("span.clock-time", null, digits, half ? h("span.clock-half", null, half) : null),
+    h("span.clock-day", null, day),
+  );
+}
+
+/** "Daily" with the repeat arrows, on the right of an Upcoming row; the whole rule as its tooltip. */
+function pillOf(job: Job, text: string): HTMLElement {
+  return h("span.job-pill", { title: repeatLabel(job.repeat) }, glyph(ICONS.repeat, 12), h("span.pill-text", null, text));
+}
+
+function rowButton(job: Job, r: JobRow, extra: Record<string, string> = {}): HTMLButtonElement {
+  return h(
+    r.clock ? "button.job-row.timed" : "button.job-row",
     { type: "button", "data-key": job.key, "data-state": job.state, "aria-label": r.label, title: job.title, ...extra },
-    h("span.job-icon", { "data-state": iconState(job), title: job.held ? STATE_LABELS.paused : STATE_LABELS[job.state] }, stateIcon(iconState(job), !!job.repeat)),
+    r.clock
+      ? clockOf(job, r)
+      : h("span.job-icon", { "data-state": iconState(job), title: job.held ? STATE_LABELS.paused : STATE_LABELS[job.state] }, stateIcon(iconState(job), !!job.repeat)),
     h("span.job-main", null, h("span.job-title", null, r.title), r.meta ? h("span.job-meta", null, r.meta) : null),
-    h("span.job-when", null, r.when),
+    r.pill ? pillOf(job, r.pill) : r.when ? h("span.job-when", null, r.when) : null,
   ) as HTMLButtonElement;
 }
 
@@ -164,6 +196,10 @@ export function initJobList(root: HTMLElement, deps: JobListDeps): JobList {
       if (q) return h("div.jobs-empty", { role: "status" }, h("p.empty-title", null, "No scheduled jobs match"), h("p", null, `No scheduled job has “${q}” in its title, request or site.`));
       return h("div.jobs-empty", null, h("p.empty-title", null, "Nothing scheduled"), h("p", null, "Say when in a request, like “every day at 9 post a tip on X”, and it shows here."));
     }
+    if (view === "history") {
+      if (q) return h("div.jobs-empty", { role: "status" }, h("p.empty-title", null, "Nothing in history matches"), h("p", null, `No past chat or run has “${q}” in its title, request or site.`));
+      return h("div.jobs-empty", null, h("p.empty-title", null, "No history yet"), h("p", null, "Every chat and run shows here once it starts, newest first."));
+    }
     if (q) return h("div.jobs-empty", { role: "status" }, h("p.empty-title", null, "No jobs match"), h("p", null, `Nothing has “${q}” in its title, request or site.`));
     return h(
       "div.jobs-empty",
@@ -189,8 +225,8 @@ export function initJobList(root: HTMLElement, deps: JobListDeps): JobList {
     }
     const current = tabs.find((t) => t.dataset.view === view);
     if (current) groupsEl.setAttribute("aria-labelledby", current.id);
-    search.placeholder = view === "scheduled" ? "Search scheduled" : "Search jobs";
-    search.setAttribute("aria-label", view === "scheduled" ? "Search scheduled jobs" : "Search jobs");
+    search.placeholder = view === "scheduled" ? "Search scheduled" : view === "history" ? "Search history" : "Search jobs";
+    search.setAttribute("aria-label", view === "scheduled" ? "Search scheduled jobs" : view === "history" ? "Search history" : "Search jobs");
   }
 
   function render(): void {
@@ -202,12 +238,25 @@ export function initJobList(root: HTMLElement, deps: JobListDeps): JobList {
     const query = search.value;
     const keep = focusedKey() ?? (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(".job-toggle")?.dataset.key ?? null;
     const keepToggle = !!(document.activeElement as HTMLElement | null)?.closest(".job-toggle");
-    const { groups, upcomingHidden, scheduledCount } = viewLayout(view, data.jobs(now), query);
+    const { groups, upcomingHidden, scheduledCount } = viewLayout(view, data.jobs(now), query, now);
+    // Recent shows a page at a time, and so does History across its days: the rows past the page wait for Show more.
+    const history = view === "history";
+    let room = recentShown;
+    const paged = groups
+      .map((g) => {
+        if (!history) return { ...g, shown: g.id === "recent" ? g.jobs.slice(0, recentShown) : g.jobs };
+        const shown = g.jobs.slice(0, Math.max(0, room));
+        room -= shown.length;
+        return { ...g, shown };
+      })
+      .filter((g) => g.shown.length > 0);
+    const left = (g: (typeof paged)[number], i: number) =>
+      history ? (i === paged.length - 1 ? groups.reduce((n, x) => n + x.jobs.length, 0) - recentShown : 0) : g.jobs.length - g.shown.length;
     groupsEl.replaceChildren(
-      ...groups.map((g) => {
+      ...paged.map((g, i) => {
         const id = `group-${g.id}`;
-        const list = g.id === "recent" ? g.jobs.slice(0, recentShown) : g.jobs;
-        const more = g.jobs.length - list.length;
+        const list = g.shown;
+        const more = left(g, i);
         const head = h("h2.group-head", { id }, g.label, h("span.count", null, String(g.jobs.length + (g.id === "scheduled" ? upcomingHidden : 0))));
         const all = g.id === "needs" ? g.jobs.filter((j) => deps.canDismiss(j)) : [];
         const dismissAll =
@@ -217,7 +266,7 @@ export function initJobList(root: HTMLElement, deps: JobListDeps): JobList {
           "section.job-group",
           { "aria-labelledby": id, "data-group": g.id },
           dismissAll ? h("div.group-bar", null, head, dismissAll) : head,
-          h("ul.job-rows", null, ...list.map((j) => (scheduledView ? scheduleRowOf(j, now) : rowOf(j, now, deps.canDismiss(j))))),
+          h("ul.job-rows", null, ...list.map((j) => (scheduledView ? scheduleRowOf(j, now) : rowOf(j, now, !history && deps.canDismiss(j))))),
           g.id === "scheduled" && upcomingHidden > 0
             ? h("button.link.show-more.all-scheduled", { type: "button", onclick: () => setView("scheduled", true) }, `All scheduled (${scheduledCount}) →`)
             : null,
@@ -227,11 +276,12 @@ export function initJobList(root: HTMLElement, deps: JobListDeps): JobList {
                 {
                   type: "button",
                   onclick: () => {
-                    const first = list.length;
+                    const first = history ? recentShown : list.length;
                     recentShown += RECENT_PAGE;
                     render();
                     // The first new row takes the focus (the button is gone).
-                    groupsEl.querySelectorAll<HTMLButtonElement>('section[aria-labelledby="group-recent"] button.job-row')[first]?.focus();
+                    const shown = history ? rows() : [...groupsEl.querySelectorAll<HTMLButtonElement>('section[aria-labelledby="group-recent"] button.job-row')];
+                    shown[first]?.focus();
                   },
                 },
                 `Show ${Math.min(more, RECENT_PAGE)} more`,

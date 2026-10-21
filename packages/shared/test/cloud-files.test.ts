@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CloudFolder, cloudFolderName, MAX_CLOUD_FOLDER_CHARS } from "../src/cloud-files.js";
+import { CloudFolder, cloudFolderName, fileStorageFor, MAX_CLOUD_FOLDER_CHARS } from "../src/cloud-files.js";
 
 describe("cloud folders", () => {
   it("are the top, images, or one folder name of letters, digits, spaces, - and _", () => {
@@ -13,5 +13,15 @@ describe("cloud folders", () => {
     expect(cloudFolderName(undefined)).toBe("");
     expect(cloudFolderName("///")).toBe("");
     for (const raw of ["Invoices/2026", "x".repeat(80), " a . b ", "x".repeat(59) + " y"]) expect(CloudFolder.safeParse(cloudFolderName(raw)).success, raw).toBe(true);
+  });
+});
+
+describe("fileStorageFor", () => {
+  it("the cloud by default when the user can keep files there; their choice; this computer without the cloud", () => {
+    expect(fileStorageFor(undefined, true)).toBe("cloud");
+    expect(fileStorageFor("both", true)).toBe("both");
+    expect(fileStorageFor("local", true)).toBe("local");
+    expect(fileStorageFor(undefined, false)).toBe("local");
+    expect(fileStorageFor("cloud", false)).toBe("local");
   });
 });

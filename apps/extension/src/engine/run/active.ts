@@ -24,15 +24,17 @@ export interface ForcedStop {
   kind: StopKind;
   outcome: AbortOutcome;
   reason: string;
+  /** pause-url: the tab that reached the page (the user is needed there). */
+  tabId?: number;
 }
 
 export function stopOf(kind: keyof typeof STOPS): ForcedStop {
   return { kind, ...STOPS[kind] };
 }
 
-/** The agent's tab reached a page that needs the user; reason: what it needs (pauseReasonForUrl). */
-export function pauseUrlStop(reason: string): ForcedStop {
-  return { kind: "pause-url", outcome: "paused", reason };
+/** The agent's tab `tabId` reached a page that needs the user; reason: what it needs (pauseReasonForUrl). */
+export function pauseUrlStop(reason: string, tabId?: number): ForcedStop {
+  return { kind: "pause-url", outcome: "paused", reason, ...(tabId === undefined ? {} : { tabId }) };
 }
 
 /** Nobody was there to approve an action (an unattended scheduled run); reason: what needs the user's OK (approvalPauseReason). */

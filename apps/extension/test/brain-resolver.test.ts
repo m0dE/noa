@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS, type BrainMode, type HelperInfo } from "@noa/shared";
-import { approvalJevSource, autoSwitchRefusal, CLAUDE_CODE_GONE, jevSourceFor, needsHelper, resolveBrain } from "../src/engine/brain-resolver.js";
+import { approvalJevSource, jevSourceFor, needsHelper, resolveBrain } from "../src/engine/brain-resolver.js";
 
 const base: HelperInfo = { version: "2", jevAvailable: false, claudePath: "C:\\claude.exe", logDir: "L" };
 const ok: HelperInfo = { ...base, selfTest: { ok: true, ms: 900, at: "2026-09-24T00:00:00Z" } };
@@ -34,12 +34,29 @@ describe("resolveBrain", () => {
     expect(r(mode, helper, key).effective).toBe(expected);
   });
 
+  it("local model: runs only when picked, on OpenCode in the helper, with a server address and a model; Auto never picks it", () => {
+    // OpenCode found; Claude Code missing or failing does not matter.
+    const opencode: HelperInfo = { ...noClaude, opencodePath: "/noa/opencode/node_modules/opencode-ai/bin/opencode.exe" };
+    expect(r("local", opencode, false, { localModel: "qwen3:8b" }).effective).toBe("local");
+    expect(r("local", { ...failed, opencodePath: "/oc" }, false, { localModel: "qwen3:8b" }).effective).toBe("local");
+    expect(r("local", opencode, false).note).toBe("No local model picked");
+    expect(r("local", opencode, false, { localModel: "qwen3:8b", localModelUrl: "localhost" }).note).toBe("No local model server address set");
+    // What to run when the helper or OpenCode is missing.
+    expect(r("local", null, false, { localModel: "qwen3:8b" }).note).toBe("Helper not installed: run npx -y noa-local-llm to set up the local model");
+    expect(r("local", ok, false, { localModel: "qwen3:8b" }).note).toBe("OpenCode not found: run npx -y noa-local-llm to set up the local model");
+    expect(r("auto", opencode, false, { localModel: "qwen3:8b" }).effective).toBeNull();
+    // Jev: the key set here first, then the helper's own.
+    expect(r("local", opencode, false, { localModel: "qwen3:8b", jevApiKey: "jk" }).jevSource).toBe("key");
+    expect(r("local", { ...opencode, jevAvailable: true }, false, { localModel: "qwen3:8b", jevApiKey: "" }).jevSource).toBe("helper");
+    expect(needsHelper({ brain: "local" })).toBe(true);
+  });
+
   it("explains why nothing is usable", () => {
     const s = r("auto", null, false);
-    expect(s.note).toBe("No AI set up. Install the helper, add a Claude API key, or log in.");
+    expect(s.note).toBe("No AI set up. Log in, install the helper, or add a Claude API key.");
     expect(s.helperError).toBe("Helper not installed");
     const exited = resolveBrain({ settings: { ...DEFAULT_SETTINGS, anthropicApiKey: "" }, helper: null, helperError: "Helper exited" });
-    expect(exited.note).toBe("No AI set up. Reconnect the helper, add a Claude API key, or log in.");
+    expect(exited.note).toBe("No AI set up. Log in, reconnect the helper, or add a Claude API key.");
     expect(r("auto", failed, false).note).toBe("No AI set up: Claude Code self-test failed: not logged in.");
     expect(r("claude-code", failed, true).note).toMatch(/self-test failed: not logged in/);
     expect(r("claude-code", noClaude, true).note).toMatch(/not found/);
@@ -96,11 +113,11 @@ describe("resolveBrain with the Noa account", () => {
     resolveBrain({ settings: { ...DEFAULT_SETTINGS, brain: mode, anthropicApiKey: key ? "sk" : "" }, helper, helperError: helper ? null : "Helper not installed", account });
 
   it.each([
-    // mode, account, helper, own key, expected: Auto takes the user's own Claude first.
-    ["auto", credit, ok, true, "claude-code"],
-    ["auto", credit, ok, false, "claude-code"],
-    ["auto", credit, null, true, "claude-api"],
-    ["auto", credit, failed, true, "claude-api"],
+    // mode, account, helper, own key, expected: Auto takes Noa AI first when it can run, else the user's own Claude.
+    ["auto", credit, ok, true, "noa"],
+    ["auto", credit, ok, false, "noa"],
+    ["auto", credit, null, true, "noa"],
+    ["auto", credit, failed, true, "noa"],
     ["auto", credit, null, false, "noa"],
     ["auto", credit, notTested, false, "noa"],
     ["auto", noCredit, ok, true, "claude-code"],
@@ -121,11 +138,13 @@ describe("resolveBrain with the Noa account", () => {
   it("explains what the hosted AI needs", () => {
     expect(ra("noa", signedOut, ok, true).note).toBe("Sign in to use Noa AI");
     expect(ra("noa", noCredit, ok, true).note).toMatch(/^Out of usage credit/);
-    expect(ra("auto", noCredit, null, false).note).toBe("Out of credit. Install the helper, add a Claude API key, or top up.");
-    expect(ra("auto", signedOut, null, false).note).toBe("No AI set up. Install the helper, add a Claude API key, or log in.");
-    // The helper is there but Claude Code does not work: the note says why the hosted AI runs.
-    expect(ra("auto", credit, failed, false).note).toBe("Using Noa AI (Claude Code self-test failed: not logged in)");
+    expect(ra("auto", noCredit, null, false).note).toBe("Out of credit. Top up, install the helper, or add a Claude API key.");
+    expect(ra("auto", signedOut, null, false).note).toBe("No AI set up. Log in, install the helper, or add a Claude API key.");
+    // Noa AI runs first, so a broken Claude Code needs no note.
+    expect(ra("auto", credit, failed, false).note).toBeUndefined();
     expect(ra("auto", credit, null, false).note).toBeUndefined();
+    // Out of credit, the helper is there but Claude Code does not work: the note says why the API key runs.
+    expect(ra("auto", noCredit, failed, true).note).toBe("Using the Claude API key (Claude Code self-test failed: not logged in)");
   });
 
   it("the hosted AI brings its own Jev (no key needed); off when Jev is switched off", () => {
@@ -140,16 +159,5 @@ describe("needsHelper", () => {
     expect(needsHelper({ brain: "auto" })).toBe(true);
     expect(needsHelper({ brain: "claude-api" })).toBe(false);
     expect(needsHelper({ brain: "noa" })).toBe(false);
-  });
-});
-
-describe("autoSwitchRefusal", () => {
-  it("Auto never moves a Claude Code chat to the paid hosted AI by itself", () => {
-    expect(autoSwitchRefusal("auto", "claude-code", "noa")).toBe(CLAUDE_CODE_GONE);
-    expect(autoSwitchRefusal("auto", "claude-code", "claude-api")).toBeNull();
-    expect(autoSwitchRefusal("auto", "claude-code", "claude-code")).toBeNull();
-    expect(autoSwitchRefusal("auto", "noa", "claude-code")).toBeNull();
-    // A brain the user chose is theirs to pay for.
-    expect(autoSwitchRefusal("noa", "claude-code", "noa")).toBeNull();
   });
 });

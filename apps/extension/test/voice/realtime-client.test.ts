@@ -57,7 +57,7 @@ class FakeSocket implements RealtimeSocketLike {
 
 function setup(handlers: RealtimeHandlers = {}, languages?: string[]) {
   let socket!: FakeSocket;
-  const client = new RealtimeClient({
+  const client = new RealtimeClient({ passOnEverything: false, 
     url: "wss://api.example.com/v1/ai/realtime",
     token: "tok123",
     instructions: "Be brief.",
@@ -100,17 +100,17 @@ describe("RealtimeClient: connecting", () => {
     expect(update.session.audio.output.format).toEqual({ type: "audio/pcm", rate: REALTIME_SAMPLE_RATE });
     expect(update.session.audio.input.turn_detection).toMatchObject({ type: "server_vad", create_response: true, interrupt_response: false });
     // The user's own words for the chat (the server's price includes them).
-    expect(update.session.audio.input.transcription).toEqual({ model: "gpt-transcribe", prompt: TRANSCRIPTION_PROMPT });
+    expect(update.session.audio.input.transcription).toEqual({ model: "gpt-live-transcribe", prompt: TRANSCRIPTION_PROMPT });
     expect(update.session.tools.map((t: { name: string }) => t.name)).toEqual(["send_to_agent", "cancel_request", "stop_task", "answer_approval", "use_this_tab", "end_voice"]);
     expect(update.session.tools.every((t: { type: string }) => t.type === "function")).toBe(true);
     expect(NARRATOR_TOOLS).toHaveLength(6);
   });
 
-  it("tells the transcription the languages the user speaks (gpt-transcribe's `languages`, ISO 639-1)", () => {
+  it("tells the transcription the languages the user speaks (the transcription's `languages`, ISO 639-1)", () => {
     const { socket } = setup({}, ["en", "ko"]);
     socket().open();
     const [update] = socket().sent as [{ session: Record<string, any> }];
-    expect(update.session.audio.input.transcription).toEqual({ model: "gpt-transcribe", languages: ["en", "ko"], prompt: TRANSCRIPTION_PROMPT });
+    expect(update.session.audio.input.transcription).toEqual({ model: "gpt-live-transcribe", languages: ["en", "ko"], prompt: TRANSCRIPTION_PROMPT });
   });
 
   it("speaks in the default voice at normal speed, or the voice and speed from Settings (kept in OpenAI's range)", () => {
@@ -119,7 +119,7 @@ describe("RealtimeClient: connecting", () => {
     expect((socket().sent[0] as { session: Record<string, any> }).session.audio.output).toMatchObject({ voice: DEFAULT_REALTIME_VOICE, speed: 1 });
     for (const [speed, sent] of [[1.2, 1.2], [9, 1.5], [0.1, 0.25]] as const) {
       let s!: FakeSocket;
-      new RealtimeClient({ url: "wss://x/v1/ai/realtime", token: "t", voice: "cedar", speed, open: (u, p) => (s = new FakeSocket(u, p)), handlers: {} }).connect();
+      new RealtimeClient({ passOnEverything: false,  url: "wss://x/v1/ai/realtime", token: "t", voice: "cedar", speed, open: (u, p) => (s = new FakeSocket(u, p)), handlers: {} }).connect();
       s.open();
       expect((s.sent[0] as { session: Record<string, any> }).session.audio.output).toMatchObject({ voice: "cedar", speed: sent });
     }
@@ -376,10 +376,10 @@ describe("RealtimeClient: the feed, the narrator's replies and its tools", () =>
     const { socket } = ready({ onTool });
     socket().event({ type: "input_audio_buffer.committed", item_id: "in1", previous_item_id: null });
     socket().event({ type: "response.created", response: { id: "r1" } });
-    socket().event({ type: "conversation.item.input_audio_transcription.completed", item_id: "in1", transcript: "post gm on x" });
+    socket().event({ type: "conversation.item.input_audio_transcription.completed", item_id: "in1", transcript: "post gm on x." });
     socket().event({ type: "response.function_call_arguments.done", call_id: "c1", name: "send_to_agent", arguments: '{"text":"Post gm on X"}', item_id: "f1" });
     await flush();
-    expect(onTool).toHaveBeenCalledWith("send_to_agent", { text: "Post gm on X" }, "in1", ["post gm on x"]);
+    expect(onTool).toHaveBeenCalledWith("send_to_agent", { text: "Post gm on X" }, "in1", ["post gm on x."]);
     expect(socket().sent.at(-1)).toEqual({ type: "conversation.item.create", item: { type: "function_call_output", call_id: "c1", output: "Started." } });
     socket().event({ type: "response.done", response: { id: "r1", status: "completed", output: [] } });
     expect(socket().sent.at(-1)).toEqual({ type: "response.create", response: ackResponse("Post gm on X") });
@@ -387,7 +387,7 @@ describe("RealtimeClient: the feed, the narrator's replies and its tools", () =>
 
   it("other tools ask for a plain reply after their output (the narrator says what happened)", async () => {
     const { socket } = ready({ onTool: async () => "Stopped the task." });
-    userSaid(socket(), "stop the task");
+    userSaid(socket(), "stop the task.");
     socket().event({ type: "response.function_call_arguments.done", call_id: "c1", name: "stop_task", arguments: "{}" });
     await flush();
     expect(socket().sent.at(-1)).toEqual({ type: "response.create", response: TOOL_ANSWER_RESPONSE });
@@ -398,7 +398,7 @@ describe("RealtimeClient: the feed, the narrator's replies and its tools", () =>
       throw new Error("No chat to stop");
     });
     const { socket } = ready({ onTool });
-    userSaid(socket(), "stop the task");
+    userSaid(socket(), "stop the task.");
     socket().event({ type: "response.function_call_arguments.done", call_id: "c1", name: "stop_task", arguments: "{}" });
     socket().event({ type: "response.function_call_arguments.done", call_id: "c2", name: "rm_rf", arguments: "{}" });
     socket().event({ type: "response.function_call_arguments.done", call_id: "c3", name: "send_to_agent", arguments: "{not json" });
@@ -535,14 +535,14 @@ describe("RealtimeClient: timing trace", () => {
       socket().event({ type: "response.output_audio.delta", delta: "AAAA", item_id: "a1" });
       socket().event({ type: "response.output_audio.delta", delta: "AAAA", item_id: "a1" });
       vi.advanceTimersByTime(200);
-      socket().event({ type: "conversation.item.input_audio_transcription.completed", item_id: "item_1", transcript: " check my email ", usage: { input_tokens: 40, output_tokens: 5 } });
+      socket().event({ type: "conversation.item.input_audio_transcription.completed", item_id: "item_1", transcript: " check my email. ", usage: { input_tokens: 40, output_tokens: 5 } });
       vi.advanceTimersByTime(900);
       socket().event({ type: "response.done", response: { status: "completed", usage: { input_tokens: 900, output_tokens: 120, input_token_details: { audio_tokens: 300, cached_tokens: 512 }, output_token_details: { audio_tokens: 100 } } } });
       await vi.runAllTimersAsync();
 
       expect(traces.map((x) => x.name)).toEqual(["voice.connect", "voice.user_words", "voice.narrator"]);
       expect(traces[0]).toMatchObject({ t: 1_000_000, ms: 420, data: { openMs: 120, readyMs: 300, model: "gpt-realtime" }, inputId: null });
-      expect(traces[1]).toMatchObject({ t: 1_002_500, ms: 740, data: { chars: 14, inTokens: 40, outTokens: 5 }, inputId: "item_1" });
+      expect(traces[1]).toMatchObject({ t: 1_002_500, ms: 740, data: { chars: 15, inTokens: 40, outTokens: 5 }, inputId: "item_1" });
       expect(traces[2]).toMatchObject({
         t: 1_002_420,
         ms: 1720,

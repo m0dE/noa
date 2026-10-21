@@ -1,5 +1,5 @@
 /** The options page's Test buttons. Each resolves { ok, detail } and never throws. */
-import { ANTHROPIC_API_BASE, ANTHROPIC_API_VERSION, errorMessage, type ExtensionSettings, type PageSnapshot } from "@noa/shared";
+import { ANTHROPIC_API_BASE, ANTHROPIC_API_VERSION, errorMessage, LOCAL_SETUP_COMMAND, localModelsUrl, type ExtensionSettings, type PageSnapshot } from "@noa/shared";
 import type { JevLike } from "@noa/core";
 import type { BrainStatus } from "../ui-protocol.js";
 import { CLOUD_JEV, HOSTED_SIGN_IN } from "./brain-resolver.js";
@@ -36,6 +36,36 @@ export async function testClaude(settings: ExtensionSettings, fetchFn: typeof fe
   const model = settings.anthropicModel;
   const modelNote = ids.length === 0 ? "" : ids.includes(model) ? `; model ${model} is available` : `; model ${model} is not in the list for this key`;
   return { ok: true, detail: `Key accepted${ids.length ? ` (${ids.length} models)` : ""}${modelNote}` };
+}
+
+export interface LocalModelTestResult extends TestResult {
+  /** The models the server offers, as it names them (empty when it could not be asked). */
+  models: string[];
+}
+
+/**
+ * GET /v1/models on the local model's server: proves it is running and says whether the picked model is there. The
+ * runs themselves go from the helper (OpenCode), which Ollama does not turn away as it does an extension's posts.
+ * Nothing is generated.
+ */
+export async function testLocalModel(settings: ExtensionSettings, fetchFn: typeof fetch = (i, init) => fetch(i, init)): Promise<LocalModelTestResult> {
+  const url = localModelsUrl(settings.localModelUrl);
+  if (!url) return { ok: false, detail: "Enter the server's address, e.g. http://localhost:11434", models: [] };
+  const server = new URL(url).origin;
+  let res: Response;
+  try {
+    res = await fetchFn(url, { method: "GET" });
+  } catch (err) {
+    return { ok: false, detail: `Cannot reach ${server}: is the server running? ${LOCAL_SETUP_COMMAND} sets one up. (${errorMessage(err)})`, models: [] };
+  }
+  const body = (await res.json().catch(() => null)) as { data?: { id?: unknown }[] } | null;
+  if (!res.ok) return { ok: false, detail: `${server} answered HTTP ${res.status}`, models: [] };
+  const models = (body?.data ?? []).map((m) => m.id).filter((x): x is string => typeof x === "string" && !!x);
+  if (!models.length) return { ok: false, detail: `${server} answered but offers no models: ${LOCAL_SETUP_COMMAND} downloads one`, models };
+  const model = settings.localModel.trim();
+  const found = `Connected: ${models.length} model${models.length === 1 ? "" : "s"}`;
+  if (!model) return { ok: true, detail: `${found}. Pick one.`, models };
+  return models.includes(model) ? { ok: true, detail: `${found}; ${model} is there.`, models } : { ok: false, detail: `${found}, but not ${model}. Pick one of them.`, models };
 }
 
 const TEST_SNAPSHOT: PageSnapshot = {

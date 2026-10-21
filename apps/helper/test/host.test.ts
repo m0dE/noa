@@ -6,10 +6,10 @@
 // @ts-expect-error: a plain .mjs build module
 import { helperCodeId } from "../code-id.mjs";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HelperErrorCode, type AgentEvent, type BrowserMethod, type RunConfig, type TaskRunResult } from "@noa/shared";
+import { HelperErrorCode, LOCAL_SEARCH_MAX, MAX_LISTED_FILES, type AgentEvent, type BrowserMethod, type RunConfig, type TaskRunResult } from "@noa/shared";
 import { ENV } from "../src/env-names.js";
 import helperPackage from "../package.json" with { type: "json" };
 import { FakeX } from "./fake-x.js";
@@ -53,6 +53,8 @@ describe("dist/host.js over native messaging", () => {
       jevAvailable: false,
       brain: "scripted",
       claudePath: null,
+      // The scripted brain looks for no OpenCode either.
+      opencodePath: null,
       logDir: join(home, "logs"),
       openSessions: [],
       selfTest: { ok: true, ms: 0, at: expect.any(String) },
@@ -127,6 +129,25 @@ describe("dist/host.js over native messaging", () => {
     expect(tail.text.length).toBeLessThanOrEqual(200);
     await expect(ext.call("helper.runLog", { path: join(home, "helper.json") }, { timeoutMs: 5000 })).rejects.toThrow(/not a Noa run log/);
     await expect(ext.call("helper.runLog", { path: join(home, "runs", "..", "selftest.json") }, { timeoutMs: 5000 })).rejects.toThrow(/not a Noa run log/);
+  });
+
+  it("lists the Noa folder: the newest MAX_LISTED_FILES, or up to `max` for a search; keeps and reads back a file's note", async () => {
+    const dir = join(home, "Noa");
+    mkdirSync(dir, { recursive: true });
+    for (let i = 0; i < MAX_LISTED_FILES + 50; i++) {
+      writeFileSync(join(dir, `f${i}.txt`), "x");
+      const t = new Date(Date.UTC(2026, 0, 1) + i * 60_000);
+      utimesSync(join(dir, `f${i}.txt`), t, t);
+    }
+    const page = await host.ext.call("files.list", { folder: dir }, { timeoutMs: 10_000 });
+    expect(page).toMatchObject({ total: MAX_LISTED_FILES + 50 });
+    expect(page.files).toHaveLength(MAX_LISTED_FILES);
+    const all = await host.ext.call("files.list", { folder: dir, max: LOCAL_SEARCH_MAX }, { timeoutMs: 10_000 });
+    expect(all.files).toHaveLength(MAX_LISTED_FILES + 50);
+    expect(await host.ext.call("files.note", { folder: dir, path: join(dir, "f0.txt"), meta: { about: "the first one" } }, { timeoutMs: 5000 })).toEqual({ ok: true });
+    const again = await host.ext.call("files.list", { folder: dir, max: LOCAL_SEARCH_MAX }, { timeoutMs: 10_000 });
+    expect(again.files.find((f) => f.name === "f0.txt")?.meta).toEqual({ about: "the first one" });
+    await expect(host.ext.call("files.list", { folder: dir, max: -1 }, { timeoutMs: 5000 })).rejects.toThrow(/max must be a whole number/);
   });
 
   it("returns the live log tail", async () => {

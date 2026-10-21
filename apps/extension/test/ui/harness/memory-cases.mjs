@@ -350,6 +350,48 @@ const MEMORY_FLOWS = [
       await p.ctx.close();
     },
   },
+  // Where memory is kept: this computer by default; the account once chosen (synced), and back again.
+  {
+    name: "options-memory-where",
+    size: { w: 420 },
+    scheme: "light",
+    async run(h) {
+      const p = await openMemory(h, { w: 420, h: 900 }, "light", (d) => ((d.memory = memoryEntries()), (d.memorySync = { state: "local", cloud: "allowed" })));
+      const checked = () => p.$$eval("#memory-where input", (els) => els.filter((e) => e.checked).map((e) => e.value).join());
+      await h.optChecks(p, "memory where default", [
+        ["This computer is chosen", async () => (await checked()) === "local"],
+        ["and nothing says it syncs", async () => !(await shown(p, "#memory-sync"))],
+      ]);
+      await h.optShot(p, "options-memory-where-local", { w: 420 }, "light");
+      await p.click("#memory-where-cloud");
+      await h.optChecks(p, "memory where", [
+        ["choosing the account is sent", async () => eventually(async () => (await requests(p, "memory.where")).some((r) => r.where === "cloud"))],
+        ["then it says it syncs", async () => eventually(async () => /^Synced with your account/.test((await p.textContent("#memory-sync")) ?? ""))],
+        ["and the account is chosen", async () => eventually(async () => (await checked()) === "cloud")],
+      ]);
+      await p.click("#memory-where-local");
+      await h.optChecks(p, "memory where back", [
+        ["back to this computer", async () => eventually(async () => (await requests(p, "memory.where")).some((r) => r.where === "local") && (await checked()) === "local")],
+        ["the sync line goes", async () => eventually(async () => !(await shown(p, "#memory-sync")))],
+      ]);
+      await p.ctx.close();
+    },
+  },
+  // Free plan: the account cannot be chosen, and the page says what it takes.
+  {
+    name: "options-memory-where-free",
+    size: { w: 360 },
+    scheme: "dark",
+    async run(h) {
+      const p = await openMemory(h, { w: 360, h: 900 }, "dark", (d) => ((d.memory = memoryEntries()), (d.memorySync = { state: "local", cloud: "no-plan" })));
+      await h.optChecks(p, "memory where free", [
+        ["the account is off", async () => p.$eval("#memory-where-cloud", (e) => e.disabled)],
+        ["and the page says it takes a paid plan", async () => /comes with a paid plan/.test((await p.textContent("#memory-sync")) ?? "")],
+      ]);
+      await h.optShot(p, "options-memory-where-free", { w: 360 }, "dark");
+      await p.ctx.close();
+    },
+  },
   // Signed in to another account: Add sends this computer's memory there; then it says it syncs.
   {
     name: "options-memory-ask-add",

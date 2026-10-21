@@ -1,0 +1,35 @@
+{
+  "name": "noa-local-llm",
+  "version": "0.1.0",
+  "description": "One command to run a local model for Noa: installs Ollama if needed, lets Chrome extensions in, downloads a model.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "noa-local-llm": "bin/noa-local-llm.mjs"
+  },
+  "files": [
+    "bin",
+    "src"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/m0dE/noa.git",
+    "directory": "packages/local-llm"
+  },
+  "homepage": "https://www.noa.bot",
+  "keywords": [
+    "noa",
+    "ollama",
+    "local-llm",
+    "qwen"
+  ],
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.0"
+  }
+}

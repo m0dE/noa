@@ -1,7 +1,8 @@
 /**
  * Voice in the side panel: the voice controls in the composer row, left of
- * Send, the orb in the middle of the panel, voice's notices, and the
- * microphone permission.
+ * Send, voice's notices, and the microphone
+ * permission. Nothing covers the panel while voice is on: the chat stays in
+ * view.
  *
  * - The Voice button (a small sound wave and the word) and the voice shortcut do the
  *   same: start a hands-free session (hands-free.ts) with the engine picked in
@@ -10,11 +11,14 @@
  *   button (still "Voice", pressed: filled in the accent, so the task's red
  *   Stop is the only red one, a ring following the voice; its tooltip says
  *   it turns voice off and the task keeps running),
- *   the orb, and the box (a glow and "Listening · go ahead" while it listens
- *   for this tab; muted, no glow and a placeholder that says so); the status
- *   strip at the top is hands-free.ts's. Until it really listens (starting,
- *   reconnecting) nothing looks live: the button is an outline that pulses,
- *   the orb is grey, the box says "Not listening yet" without its glow.
+ *   and the box (a glow and "Listening · go ahead" while it listens for this
+ *   tab; muted, no glow and a placeholder that says so). What is said shows
+ *   in the chat (hands-free.ts opens one when the tab has none); the box
+ *   holds only what is typed (Standard writes the user's words there to
+ *   send them). The status strip at the
+ *   top is hands-free.ts's. Until it really listens (starting, reconnecting)
+ *   nothing looks live: the button is an outline that pulses, the box says
+ *   "Not listening yet" without its glow.
  * - While a session runs here: Mute (a mic icon, slashed while muted; a
  *   toggle, Alt+M) left of Voice. A line being said is cut off by Esc or by
  *   talking. The task's own Stop is the composer's (a square): it stops the
@@ -78,18 +82,10 @@ export interface VoiceInputDeps {
   };
   /** The dashboard's Billing page (pick a plan, top up). */
   openBilling(): void;
-  /** Where the orb goes (the panel's body). */
-  host: HTMLElement;
 }
 
-/** How a hands-free session shows on the mic button and the orb (null: none is on). */
+/** How a hands-free session shows on the mic button and the box (null: none is on). */
 export interface HandsFreeLook {
-  /** The orb in the middle of the panel (the pill carries the session once something was sent). */
-  orb: boolean;
-  /** Under the orb. */
-  caption: string;
-  /** "sending" / "speaking" change the orb's rhythm. */
-  phase: string;
   /** It listens for another tab than the one shown (the box here is not its). */
   elsewhere: boolean;
   /** It really listens now (the microphone's audio reaches the engine, not muted); false while it starts or reconnects. */
@@ -121,7 +117,7 @@ export interface VoiceInput {
   readonly state: VoiceUiState;
   /** Wires the hands-free session in (the shortcut and the button then start and end it). */
   attachHandsFree(control: HandsFreeControl): void;
-  /** The hands-free session's look on the button and the orb. */
+  /** The hands-free session's look on the button and the box. */
   showHandsFree(look: HandsFreeLook | null): void;
   /** The microphone level (the hands-free session's), 0..1. */
   setLevel(level: number): void;
@@ -164,16 +160,7 @@ export function initVoiceInput(deps: VoiceInputDeps): VoiceInput {
   const mute = h("button.now-tool.voice-mute", { type: "button", hidden: true, "aria-pressed": "false", "aria-keyshortcuts": MUTE_KEY.label });
   composer.actionSlot.append(mute, button);
 
-  const caption = h("p.voice-caption");
-  // A veil over the panel (the input stays above it) with the orb and its caption in the middle.
-  const orb = h(
-    "div.voice-orb",
-    { "aria-hidden": "true", hidden: true },
-    h("div.voice-orb-stack", null, h("div.voice-orb-halo"), h("div.voice-orb-core"), caption),
-  );
-  deps.host.append(orb);
-
-  // The level drives the orb, the button ring and the voice bar's meter (all read --level), once per frame at most.
+  // The level drives the button ring and the voice bar's meter (both read --level), once per frame at most.
   let level = 0;
   let frame = 0;
   const paint = () => {
@@ -213,11 +200,6 @@ export function initVoiceInput(deps: VoiceInputDeps): VoiceInput {
         mute.innerHTML = m.pressed ? MIC_OFF_ICON : MIC_LIVE_ICON;
       }
     }
-    orb.hidden = !look?.orb;
-    orb.dataset.state = look?.phase ?? "idle";
-    if (look?.muted) orb.dataset.muted = "true";
-    else delete orb.dataset.muted;
-    caption.textContent = look?.caption ?? "";
     // The box shows it listens only on the session's own tab (elsewhere, what is said goes to that tab's chat).
     const box = boxLook(look);
     composer.setDictating(box);

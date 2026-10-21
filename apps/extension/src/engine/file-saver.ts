@@ -1,18 +1,29 @@
 /**
  * save_file (files.save): keeps a file for the user. Its bytes come from one source (a web address fetched with the
  * browser's sign-ins, text the agent wrote, a screenshot of the tab, a file on this computer the agent may use, or the
- * browser's last download); it is saved in the Noa folder (Downloads/Noa/<folder>/<name>, a name already there gets a
- * number) unless it is in the folder already, and, on a plan with cloud files, stored in the account's cloud files in
- * the same folder. The cloud copy never fails the tool: the result says why there is none.
+ * browser's last download); it is kept where the user's Storage setting says (FileStorage): in the Noa folder
+ * (Downloads/Noa/<folder>/<name>, a name already there gets a number; a file in the folder already stays), in the
+ * account's cloud files in the same folder, or both. Cloud only: nothing is written here; the path is where the file is
+ * downloaded when it is uploaded. A cloud copy that cannot be made never fails the tool or loses the file: cloud only,
+ * it is kept here instead, and the result says why there is no cloud copy.
+ *
+ * What is known about the file is kept with both copies (FileMeta, which list_files shows): its size in pixels for a
+ * picture, the web address its bytes came from, the page that was open, and the agent's note on what it shows. The
+ * Noa folder keeps it in its notes (the helper's files.note), the cloud copy in its row.
  *
  * Files on this computer are read by the helper (files.read), a piece at a time: an extension cannot read them.
  */
 import {
+  cleanFileMeta,
   cloudFileName,
   cloudFolderName,
   errorMessage,
   formatBytes,
+  imageSizeOfBytes,
   SAVE_FILE_MAX_BYTES,
+  type CloudFile,
+  type FileMeta,
+  type FileStorage,
   type SavedFile,
   type SaveFileParams,
 } from "@noa/shared";
@@ -32,8 +43,14 @@ export interface FileSaverDeps {
   fetch?: typeof fetch;
   /** Writes the bytes to `rel` under the download folder ("Noa/<folder>/<name>"); resolves with the absolute path. */
   writeLocal(rel: string, blob: Blob): Promise<string>;
-  /** Stores a copy in the account's cloud files. */
-  cloud(blob: Blob, name: string, folder: string): Promise<{ saved: true; folder?: string } | { saved: false; why: "signed-out" | "no-plan" }>;
+  /** Stores a copy in the account's cloud files, with what is known about it. */
+  cloud(blob: Blob, name: string, folder: string, meta: FileMeta | undefined): Promise<{ saved: true; file: CloudFile; folder?: string } | { saved: false; why: "signed-out" | "no-plan" }>;
+  /** Where the user keeps files (Settings > Storage, fileStorageFor). Absent: both. */
+  where?(): Promise<FileStorage>;
+  /** The path in the Noa folder a cloud-only file is downloaded to when it is uploaded (NoaFiles.adopt). */
+  cloudPath?(file: CloudFile): Promise<string>;
+  /** Keeps the note on a file saved in the Noa folder (the helper's files.note). Absent or failing: no local note. */
+  note?(path: string, meta: FileMeta): Promise<void>;
   /** The whole file at `path` on this computer (the helper's files.read). Absent: such files cannot be read here. */
   readLocal?(path: string): Promise<Blob>;
   /** The browser's newest finished download of the last 15 minutes, or null. */
@@ -109,30 +126,68 @@ function stamp(): string {
   return new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
 }
 
+/** What save_file is told about the tab it runs in. */
+export interface SaveContext {
+  /** The current tab's picture, for the screenshot source. */
+  screenshot?: () => Promise<{ base64: string; mimeType: string }>;
+  /** The current tab's address and title, kept as where the file was found. */
+  page?: () => Promise<{ url: string; title: string } | null>;
+}
+
 export class FileSaver {
   constructor(private readonly deps: FileSaverDeps) {}
 
-  /** Keeps the file (see the header); ctx.screenshot: the current tab's picture, for the screenshot source. */
-  async save(p: SaveFileParams, ctx: { screenshot?: () => Promise<{ base64: string; mimeType: string }> }): Promise<SavedFile> {
+  /** Keeps the file (see the header). */
+  async save(p: SaveFileParams, ctx: SaveContext): Promise<SavedFile> {
     const got = await this.source(p, ctx);
     if (got.blob.size > SAVE_FILE_MAX_BYTES) throw tooLarge(got.blob.size);
     const contentType = got.blob.type || typeOfName(got.name) || "application/octet-stream";
     const name = savedName(p.name, got.name, contentType);
     const folder = cloudFolderName(p.folder ?? (p.screenshot ? "images" : ""));
     const blob = got.blob.type ? got.blob : new Blob([got.blob], { type: contentType });
-    const path = (await this.alreadyInFolder(got.localPath, folder, name)) ?? (await this.deps.writeLocal(["Noa", ...(folder ? [folder] : []), name].join("/"), blob));
+    const meta = await this.metaOf(p, got, blob, ctx);
+    const where = (await this.deps.where?.()) ?? "both";
+    const writeHere = () => this.deps.writeLocal(["Noa", ...(folder ? [folder] : []), name].join("/"), blob);
+    // A file that is in the Noa folder already stays there, whatever the setting.
+    let path = await this.alreadyInFolder(got.localPath, folder, name);
+    if (!path && where !== "cloud") path = await writeHere();
     // The name it got here (a name already there gets a number), so both copies match.
-    const keptName = baseName(path) || name;
-    const saved: SavedFile = { path, name: keptName, folder, size: blob.size, contentType, cloud: "saved" };
-    try {
-      const r = await this.deps.cloud(blob, keptName, folder);
-      if (!r.saved) saved.cloud = r.why;
-      else if (r.folder !== undefined && r.folder !== folder) saved.cloudFolder = r.folder;
-    } catch (err) {
-      saved.cloud = "failed";
-      saved.cloudError = errorMessage(err);
+    const keptName = (path && baseName(path)) || name;
+    const saved: SavedFile = { path: path ?? "", local: !!path, name: keptName, folder, size: blob.size, contentType, cloud: "saved", ...(meta ? { meta } : {}) };
+    if (where === "local") saved.cloud = "off";
+    else {
+      try {
+        const r = await this.deps.cloud(blob, keptName, folder, meta);
+        if (!r.saved) saved.cloud = r.why;
+        else {
+          if (r.folder !== undefined && r.folder !== folder) saved.cloudFolder = r.folder;
+          if (!path && this.deps.cloudPath) saved.path = await this.deps.cloudPath(r.file);
+        }
+      } catch (err) {
+        saved.cloud = "failed";
+        saved.cloudError = errorMessage(err);
+      }
     }
+    // Cloud only, and the cloud has no copy (or it cannot be found again): kept here instead.
+    if (!saved.path) {
+      saved.path = await writeHere();
+      saved.local = true;
+      saved.name = baseName(saved.path) || name;
+    }
+    if (saved.local && meta && this.deps.note) await this.deps.note(saved.path, meta).catch(() => {});
     return saved;
+  }
+
+  /** What is known about the file: its size in pixels (a picture), where its bytes came from, the open page, the note. */
+  private async metaOf(p: SaveFileParams, got: { webSource?: string }, blob: Blob, ctx: SaveContext): Promise<FileMeta | undefined> {
+    const raw: Record<string, unknown> = { source: got.webSource, about: p.about };
+    if (/^image\//i.test(blob.type)) Object.assign(raw, imageSizeOfBytes(new Uint8Array(await blob.slice(0, 2 * 1024 * 1024).arrayBuffer())) ?? {});
+    // A file kept from the computer (path) was not found on the open page.
+    if (p.path === undefined) {
+      const page = await ctx.page?.().catch(() => null);
+      if (page) Object.assign(raw, { page: page.url, pageTitle: page.title });
+    }
+    return cleanFileMeta(raw);
   }
 
   /** The path of a file on this computer that is in the Noa folder at the asked place already (no copy needed). */
@@ -148,9 +203,9 @@ export class FileSaver {
   private async source(
     p: SaveFileParams,
     ctx: { screenshot?: () => Promise<{ base64: string; mimeType: string }> },
-  ): Promise<{ blob: Blob; name: string; localPath?: string }> {
+  ): Promise<{ blob: Blob; name: string; localPath?: string; webSource?: string }> {
     if (p.text !== undefined) return { blob: new Blob([p.text], { type: typeOfName(p.name ?? "") || "text/plain" }), name: p.name ?? "notes.txt" };
-    if (p.url !== undefined) return { blob: await this.fetchUrl(p.url), name: urlFileName(p.url) || "file" };
+    if (p.url !== undefined) return { blob: await this.fetchUrl(p.url), name: urlFileName(p.url) || "file", webSource: p.url };
     if (p.screenshot) {
       if (!ctx.screenshot) throw new Error("No tab to take a screenshot of.");
       const shot = await ctx.screenshot();
@@ -163,12 +218,12 @@ export class FileSaver {
       const name = baseName(d.filename);
       if (this.deps.readLocal) {
         try {
-          return { blob: await this.readLocal(d.filename, d.mime), name, localPath: d.filename };
+          return { blob: await this.readLocal(d.filename, d.mime), name, localPath: d.filename, webSource: d.url };
         } catch (err) {
           if (!/^https?:/i.test(d.url)) throw err;
         }
       }
-      if (/^https?:/i.test(d.url)) return { blob: await this.fetchUrl(d.url), name };
+      if (/^https?:/i.test(d.url)) return { blob: await this.fetchUrl(d.url), name, webSource: d.url };
       throw new Error(`${name} was made by the page itself, and only Noa's helper can read it from this computer: it is not connected. It is in the downloads folder: ${d.filename}`);
     }
     throw new Error("save_file needs one source: url, text, screenshot, path or download.");

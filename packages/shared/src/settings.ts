@@ -1,9 +1,11 @@
 import { z } from "zod";
 import { DEFAULT_MODEL } from "./models.js";
+import { DEFAULT_LOCAL_MODEL_URL } from "./local-model.js";
 import { DEFAULT_REASONING, ReasoningLevel } from "./reasoning.js";
 import { MemoryKind } from "./memory.js";
 import { AutomationLevel, DEFAULT_AUTOMATION_LEVEL, DEFAULT_SCHEDULED_AUTOMATION, ScheduledAutomation } from "./automation.js";
 import { DEFAULT_IMAGE_MODEL, ImageModelId } from "./images.js";
+import { FileStorage } from "./cloud-files.js";
 import { LanguageSetting } from "./language.js";
 import {
   DEEPGRAM_SPEED,
@@ -47,20 +49,24 @@ export function currentAccountApiBase(url: string): string {
   return PREVIOUS_ACCOUNT_API_BASES.includes(u) || fnv1a(u) === PRE_REBRAND_ACCOUNT_API_BASE_HASH ? ACCOUNT_API_BASE : u;
 }
 
-export const BrainMode = z.enum(["auto", "claude-code", "claude-api", "noa"]);
+export const BrainMode = z.enum(["auto", "claude-code", "claude-api", "noa", "local"]);
 export type BrainMode = z.infer<typeof BrainMode>;
 
 /** Extension settings stored in chrome.storage.local under "settings". */
 export const ExtensionSettings = z.object({
   /**
-   * Which agent runs tasks. auto: the user's own Claude first (local Claude
-   * Code when the helper is connected and its self-test passed, else the
-   * Claude API key), else Noa AI when signed in with usage credit or
-   * an active paid plan (apps/extension/src/engine/brain-resolver.ts).
+   * Which agent runs tasks. auto: Noa AI when signed in with usage credit or
+   * an active paid plan, else the user's own Claude (local Claude Code when
+   * the helper is connected and its self-test passed, else the Claude API
+   * key) (apps/extension/src/engine/brain-resolver.ts). local runs only when picked.
    */
   brain: BrainMode.default("auto"),
   anthropicApiKey: z.string().default(""),
   anthropicModel: z.string().default(DEFAULT_MODEL),
+  /** The local model's server (local-model.ts): Ollama, LM Studio, llama.cpp's server or vLLM. */
+  localModelUrl: z.string().default(DEFAULT_LOCAL_MODEL_URL),
+  /** The local model's id as its server names it (e.g. "qwen3:8b"); "" = none picked yet. */
+  localModel: z.string().default(""),
   /** How much Claude thinks before it acts, for every brain (reasoning.ts). */
   reasoning: ReasoningLevel.default(DEFAULT_REASONING),
   /** Fast only: when a run gets stuck (a step keeps failing, the same action repeats), its next steps think. */
@@ -134,9 +140,11 @@ export const ExtensionSettings = z.object({
   /** A tab the agent controls shows it on the page: a glow and a "Noa is working" pill with Stop (Settings > Tasks). */
   showControlOverlay: z.boolean().default(true),
   /**
-   * Auto tab switching: when the agent needs to see a tab that is hidden (a screenshot of a background tab, or of a
-   * minimized window's tab where Chrome cannot capture it), its tab is brought to the front without asking, and the
-   * chat says so once. Off: the agent asks first (a card in the chat), and without an OK it cannot see that tab.
+   * Auto tab switching (Settings > Permission): when the agent needs to see a tab that is hidden (a screenshot of a
+   * background tab, or of a minimized window's tab where Chrome cannot capture it), or its turn ends needing the
+   * user on the page its tab shows (a sign-in, a code), the tab is brought to the front without asking, and the chat
+   * says so once. Off: the agent asks first for a screenshot (a card in the chat), and without an OK it cannot see
+   * that tab; a tab it needs the user on stays behind (the "Noa needs you" pill on their tab opens the chat).
    * Full autonomy (automationLevel) never asks, so it switches whatever this says.
    */
   autoTabSwitching: z.boolean().default(true),
@@ -164,6 +172,12 @@ export const ExtensionSettings = z.object({
   imageGeneration: z.boolean().default(true),
   /** The model generate_image uses (images.ts IMAGE_MODELS). */
   imageModel: ImageModelId.default(DEFAULT_IMAGE_MODEL),
+  /**
+   * Where Noa keeps the files it saves and the pictures it makes (Settings > Storage, cloud-files.ts FileStorage).
+   * null (not chosen): the cloud when signed in on a plan with cloud files, else this computer (fileStorageFor).
+   * Settings that turned off the earlier "Keep copies in the cloud" (cloudCopies false) read as "local".
+   */
+  fileStorage: FileStorage.nullable().default(null),
   /** Memory is paused: the agent is given none and saves none (Settings > Memory). What is kept stays. */
   memoryPaused: z.boolean().default(false),
   /** Kinds of memory turned off: not given to the agent, not saved (memory.ts). */
@@ -187,6 +201,8 @@ export function parseSettings(raw: unknown): ExtensionSettings {
   const s = out as ExtensionSettings;
   // "Read notifications aloud" turned off, before notificationVoice.
   if (obj.notificationVoice === undefined && obj.speakNotifications === false) s.notificationVoice = "off";
+  // "Keep copies in the cloud" turned off, before fileStorage: this computer only, never the cloud default.
+  if (obj.fileStorage === undefined && obj.cloudCopies === false) s.fileStorage = "local";
   if (s.delayMaxSec < s.delayMinSec) s.delayMaxSec = s.delayMinSec;
   // Installs saved with an earlier default follow the default to its new address.
   s.accountApiBase = currentAccountApiBase(s.accountApiBase);

@@ -20,7 +20,7 @@ import {
   SCHEDULE_PLAN_REQUIRED,
   SCHEDULE_SIGN_IN,
 } from "@noa/shared";
-import { CLAUDE_CODE_GONE, HOSTED_LABEL, HOSTED_NO_CREDIT, HOSTED_SIGN_IN, NO_AI } from "../engine/brain-resolver.js";
+import { HOSTED_LABEL, HOSTED_NO_CREDIT, HOSTED_SIGN_IN, NO_AI } from "../engine/brain-resolver.js";
 import { HELPER_NOT_INSTALLED } from "../helper-link.js";
 
 /** What a fix button does (the side panel binds each kind to its action, see error-view.ts). */
@@ -82,8 +82,14 @@ function waitHint(text: string): string {
 /** First match wins: the specific before the general. */
 const RULES: Rule[] = [
   {
-    test: (t) => t.startsWith(HOSTED_AI_UNAVAILABLE) || t.includes(HOSTED_AI_UNAVAILABLE_CODE) || t.includes(NOT_SET_UP.hostedAi),
-    help: () => ({ message: `${HOSTED_LABEL} is unavailable right now.`, hint: "Try again later, or use your own Claude.", fixes: [FIXES.ownClaude], retry: true }),
+    test: (t) => t.includes(HOSTED_AI_UNAVAILABLE) || t.includes(HOSTED_AI_UNAVAILABLE_CODE) || t.includes(NOT_SET_UP.hostedAi),
+    help: (t) => {
+      // The server's reason, after "Noa AI is unavailable right now: " (also inside e.g. "Jev HTTP 502: …"): its
+      // plain part is the hint ("Anthropic refused Noa's requests."), the status and upstream words go to Details.
+      const at = t.indexOf(`${HOSTED_AI_UNAVAILABLE}: `);
+      const why = at < 0 ? "" : t.slice(at + HOSTED_AI_UNAVAILABLE.length + 2).split("\n")[0]!.replace(/\s*\(HTTP\b.*$/, "").trim().replace(/\.$/, "");
+      return { message: `${HOSTED_LABEL} is unavailable right now.`, hint: why ? `${why}.` : "Try again later, or use your own Claude.", fixes: [FIXES.ownClaude], retry: true };
+    },
   },
   {
     // Credit left, but too little for the request: "Not enough usage credit for this request ($0.67 left; about $0.80 needed)".
@@ -114,15 +120,6 @@ const RULES: Rule[] = [
     help: () => ({ message: "You're not logged in.", hint: "Log in to schedule tasks.", fixes: [FIXES.login], retry: false }),
   },
   {
-    test: startsWith(CLAUDE_CODE_GONE),
-    help: () => ({
-      message: "Local Claude Code isn't connected.",
-      hint: `Noa won't switch this chat to paid ${HOSTED_LABEL} on its own.`,
-      fixes: [FIXES.claudeCode, FIXES.useHosted],
-      retry: true,
-    }),
-  },
-  {
     test: (t) => t === HOSTED_SIGN_IN || /\bnot signed in\b|rejected the sign-in|session (has )?expired|sign in again/i.test(t),
     help: () => ({ message: "You're not logged in.", hint: `Log in to use ${HOSTED_LABEL}.`, fixes: [FIXES.login], retry: true }),
   },
@@ -138,7 +135,11 @@ const RULES: Rule[] = [
     test: has(/^claude code (not found|self-test)/i),
     help: (t) => ({
       message: /not found/i.test(t) ? "Claude Code isn't installed on this computer." : "Claude Code isn't ready.",
-      ...(/not logged in|login|log in/i.test(t) ? { hint: "Log in to Claude Code, then test it again." } : {}),
+      ...(/not found/i.test(t)
+        ? { hint: "Install it and sign in to it once, then click Re-check in Settings." }
+        : /not logged in|login|log in/i.test(t)
+          ? { hint: "Log in to Claude Code, then test it again." }
+          : {}),
       fixes: [FIXES.claudeCode],
       retry: false,
     }),

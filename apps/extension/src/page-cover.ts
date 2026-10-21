@@ -23,6 +23,8 @@ import type { PageResult } from "./scroll-probe.js";
  * - { over, lands, list }: something else covers every point tried. What it is (`the list "Address suggestions"`),
  *   what a click at the element's center lands on instead (`option "41 Harbor Rd"`), and whether it is a list or
  *   menu (a pick or Escape closes those). The element is scrolled back to the center.
+ * `moved`: scrolling it into view moved it. The page may still move it in answer to that scroll (a dropdown's list put
+ * back where it belongs), after this script: the caller aims again once that is done (aimAt).
  */
 export function coverInPage(marks: PageMarks, index: number, act: AimFor, probe?: InputProbe | null): PageResult<Aim> {
   var el = (document.querySelector("[" + marks.attr + '="' + Math.trunc(index) + '"]') ||
@@ -37,7 +39,10 @@ export function coverInPage(marks: PageMarks, index: number, act: AimFor, probe?
     aim.state = state;
     if (act !== "click" && (!state.checkable || state.checked === (act === "check") || (act === "uncheck" && state.radio))) return { ok: true, value: aim };
   }
+  var was = el.getBoundingClientRect();
   aim.cover = coverOf(el);
+  var now = el.getBoundingClientRect();
+  if (now.left !== was.left || now.top !== was.top) aim.moved = true;
   if (act === "type" && typeof aim.cover !== "string") {
     var target = typeTarget(el);
     if (!target.ok) return target;
@@ -211,13 +216,26 @@ export function coverInPage(marks: PageMarks, index: number, act: AimFor, probe?
     }
     /** The element's part in the window after scrolling it there (block: where); null when none of it is. */
     function inView(block: ScrollLogicalPosition): { left: number; top: number; width: number; height: number } | null {
-      el.scrollIntoView({ block: block, inline: "center", behavior: "instant" as ScrollBehavior });
+      // Already wholly shown: not scrolled to the center, a scroll the page may answer by moving it.
+      if (block !== "center" || !shown(el)) el.scrollIntoView({ block: block, inline: "center", behavior: "instant" as ScrollBehavior });
       var b = el.getBoundingClientRect();
       var left = Math.max(b.left, 0);
       var top = Math.max(b.top, 0);
       var width = Math.min(b.right, window.innerWidth) - left;
       var height = Math.min(b.bottom, window.innerHeight) - top;
       return width > 0 && height > 0 ? { left: left, top: top, width: width, height: height } : null;
+    }
+    /** Whether all of `e` is in the window and inside the box of every element around it that scrolls or clips. */
+    function shown(e: Element): boolean {
+      var b = e.getBoundingClientRect();
+      if (b.width === 0 || b.height === 0 || b.left < 0 || b.top < 0 || b.right > window.innerWidth || b.bottom > window.innerHeight) return false;
+      for (var up: Element | null = e.parentElement || ((e.parentNode as ShadowRoot | null)?.host ?? null); up && up !== document.documentElement && up !== document.body; up = up.parentElement || ((up.parentNode as ShadowRoot | null)?.host ?? null)) {
+        var st = getComputedStyle(up);
+        if (st.overflowX === "visible" && st.overflowY === "visible") continue;
+        var ub = up.getBoundingClientRect();
+        if (b.left < ub.left || b.top < ub.top || b.right > ub.right || b.bottom > ub.bottom) return false;
+      }
+      return true;
     }
     var r = inView("center");
     if (!r) {

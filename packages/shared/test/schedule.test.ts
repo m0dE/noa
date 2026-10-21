@@ -3,6 +3,7 @@ import {
   CreateTaskInput,
   cronProblem,
   defaultRepeatForm,
+  cadenceText,
   describeCron,
   describeRepeat,
   formToRepeat,
@@ -23,6 +24,7 @@ import {
   toZonedInputs,
   tzOffsetMs,
   UpdateTaskInput,
+  whenParts,
   whenText,
   zonedTimeToUtc,
   openSchedule,
@@ -528,6 +530,34 @@ describe("task rows: due now and schedule labels", () => {
     expect(whenText("2026-10-12T09:00:00Z", NOW, o)).toBe("Oct 12, 9:00 AM");
     expect(whenText("2027-01-02T09:00:00Z", NOW, { hour12: false, tz: "UTC" })).toBe("Jan 2, 2027, 09:00");
     expect(whenText("2026-09-27T00:30:00Z", NOW, { hour12: false, tz: "Asia/Seoul" })).toBe("Tomorrow 09:30"); // 21:00 on the 26th in Seoul now
+  });
+
+  it("whenParts: the day and the time apart, as a row's clock shows them", () => {
+    expect(whenParts(iso(180), NOW, o)).toEqual({ day: "Today", time: "3:00 PM" });
+    expect(whenParts(iso(24 * 60 - 180), NOW, o)).toEqual({ day: "Tomorrow", time: "9:00 AM" });
+    expect(whenParts(iso(3 * 24 * 60), NOW, o)).toEqual({ day: "Tue", time: "12:00 PM" });
+    expect(whenParts("2026-10-12T09:00:00Z", NOW, o)).toEqual({ day: "Oct 12", time: "9:00 AM" });
+    expect(whenParts("2027-01-02T09:00:00Z", NOW, { hour12: false, tz: "UTC" })).toEqual({ day: "Jan 2, 2027", time: "09:00" });
+  });
+
+  it("cadenceText: how often, without the times (a list row's pill)", () => {
+    const c = (cron: string, interval?: RepeatSchedule["interval"]) => cadenceText(rule(cron, "UTC", { interval }), o);
+    expect(c("0 9 * * *")).toBe("Daily");
+    expect(c("0 9,18 * * *")).toBe("Daily");
+    expect(c("0 9 * * 1-5\n30 18 * * 1-5")).toBe("Every weekday");
+    expect(c("0 9 * * 1")).toBe("Every Monday");
+    expect(c("30 18 * * 1,4", { every: 2, unit: "week" })).toBe("Every 2 weeks on Mon and Thu");
+    expect(c("0 8 1 * *")).toBe("Monthly on the 1st");
+    expect(c("0 9 * * *", { every: 3, unit: "day" })).toBe("Every 3 days");
+    // Times that are not a list of clock times are the cadence.
+    expect(c("0 */4 * * *")).toBe("Every 4 hours");
+    expect(c("0 * * * *")).toBe("Every hour");
+    expect(c("0 9-17 * * 1-5")).toBe("Every weekday, every hour from 9:00 AM to 5:00 PM");
+    // Lines on different days, each its own phrase; the start, end and count are left out.
+    expect(c("0 9 * * 1-5\n0 10 * * 6")).toBe("Every weekday; every Saturday");
+    expect(cadenceText(rule("0 9 * * *", "UTC", { end: "2026-12-31", count: 3 }), o)).toBe("Daily");
+    expect(cadenceText({ dailyAt: ["09:00", "18:30"] }, o)).toBe("Daily");
+    expect(cadenceText({ cron: "nope", tz: "UTC" }, o)).toBe("Repeats");
   });
 
   it("scheduleLabel: the rule in words, else once at a time, due now, or once", () => {

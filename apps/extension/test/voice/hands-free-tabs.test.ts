@@ -107,6 +107,9 @@ function panel(shownTab: number, opts: { id?: string; engine?: VoiceEngineId; be
     tabPage: async (id) => PAGES[id] ?? null,
     goToTab: vi.fn(),
     onSpeaking: () => {},
+    openChat: async () => null,
+    dropChat: () => {},
+    onHearing: () => {},
     keepSpoken: () => {},
     keepHeard: () => {},
     settings: () => ({ voiceEngine: opts.engine ?? "realtime" }) as ExtensionSettings,
@@ -165,7 +168,7 @@ describe("hands-free voice in the panel that runs it, while the user looks at an
     expect(rt.notes).toEqual(["The user is looking at another tab: Recipes (recipes.example). You work in Inbox (mail.example.com)."]);
     // Still listening (it belongs to tab 1), and the box there is not written into.
     expect(t.hf.active).toBe(true);
-    expect(t.looks.at(-1)).toMatchObject({ elsewhere: true, orb: false });
+    expect(t.looks.at(-1)).toMatchObject({ elsewhere: true });
 
     rt.events.forward("What is on this page?");
     await settle();
@@ -339,6 +342,77 @@ describe("hands-free voice seen from another window's panel", () => {
     await settle();
     expect(t.deps.stopRemote).not.toHaveBeenCalled();
     expect(t.engines).toHaveLength(1);
+  });
+});
+
+describe("voice opens a chat at once where its tab has none (ticket 1bba1841): the whole conversation is in a chat, nothing in the box", () => {
+  beforeAll(installMiniDom);
+
+  function opening() {
+    const t = panel(1);
+    const log = { opened: [] as (number | null)[], hearing: [] as unknown[], speaking: [] as unknown[], kept: [] as [string, string][], heard: [] as [string, string][], dropped: [] as string[] };
+    t.deps.openChat = async (tab) => (log.opened.push(tab), "s-open");
+    t.deps.onHearing = (l) => void log.hearing.push(l);
+    t.deps.onSpeaking = (l) => void log.speaking.push(l);
+    t.deps.keepSpoken = (id, text) => void log.kept.push([id, text]);
+    t.deps.keepHeard = (id, text) => void log.heard.push([id, text]);
+    t.deps.dropChat = (id) => void log.dropped.push(id);
+    return { t, log };
+  }
+
+  it("the chat opens as voice starts; the user's words show in it as they speak, Noa's lines are said and kept in it, a request goes to it", async () => {
+    const { t, log } = opening();
+    t.hf.toggle("button");
+    await settle();
+    expect(log.opened).toEqual([1]);
+    const rt = t.engines[0]!;
+    rt.events.partial("Hi, can", false);
+    expect(log.hearing.at(-1)).toEqual({ sessionId: "s-open", text: "Hi, can" });
+    rt.events.partial("Hi, can you hear me?", true);
+    expect(log.hearing.at(-1)).toEqual({ sessionId: "s-open", text: "Hi, can you hear me?" });
+    rt.events.narratorText("I can hear you.");
+    expect(log.speaking.at(-1)).toEqual({ sessionId: "s-open", text: "I can hear you." });
+    rt.events.said();
+    expect(log.kept).toEqual([["s-open", "I can hear you."]]);
+    rt.events.userWords(["Hi, can you hear me?"]);
+    await settle();
+    expect(log.heard).toEqual([["s-open", "Hi, can you hear me?"]]);
+    rt.events.forward("Open my inbox", ["Open my inbox."]);
+    await settle();
+    expect((t.deps.send as ReturnType<typeof vi.fn>).mock.calls[0]![1]).toEqual({ tabId: 1, sessionId: "s-open" });
+    // Noise heard (no words): nothing of it shows.
+    rt.events.partial("", true);
+    expect(log.hearing.at(-1)).toBeNull();
+    // Nothing of the conversation is drawn by the box or over the panel.
+    expect(t.looks.every((l) => !l || !("words" in l || "reply" in l || "orb" in l || "caption" in l))).toBe(true);
+    t.hf.toggle("button");
+    await settle();
+    expect(log.dropped).toEqual([]);
+  });
+
+  it("a chat it opened that nothing went into is removed when voice ends; one with something in it stays", async () => {
+    const a = opening();
+    a.t.hf.toggle("button");
+    await settle();
+    a.t.hf.toggle("button");
+    await settle();
+    expect(a.log.dropped).toEqual(["s-open"]);
+    const b = opening();
+    b.t.hf.toggle("button");
+    await settle();
+    b.t.engines[0]!.events.narratorText("Hello!");
+    b.t.engines[0]!.events.said();
+    b.t.hf.toggle("button");
+    await settle();
+    expect(b.log.dropped).toEqual([]);
+  });
+
+  it("a tab that has a chat keeps it: none is opened", async () => {
+    const { t, log } = opening();
+    t.deps.chatOf = () => "s-existing";
+    t.hf.toggle("button");
+    await settle();
+    expect(log.opened).toEqual([]);
   });
 });
 
@@ -601,20 +675,20 @@ describe("hands-free voice says it listens only once it does (the owner's report
     const t = panel(1, { audio: false, begin: () => new Promise<void>((r) => (connected = r)) });
     t.hf.toggle("button");
     await settle();
-    // Not listening yet: the strip, the orb and the box all say so; no sound.
+    // Not listening yet: the strip and the box both say so; no sound.
     expect([t.bar.dataset.state, status(t)]).toEqual(["starting", "Connecting…"]);
-    expect(t.looks.at(-1)).toMatchObject({ orb: true, phase: "opening", listening: false, caption: "Not listening yet · connecting…" });
+    expect(t.looks.at(-1)).toMatchObject({ listening: false });
     expect(t.sounds).toEqual([]);
     // The connection is up and the microphone open, but no audio has reached the engine.
     connected();
     await settle();
     expect([t.bar.dataset.state, status(t)]).toEqual(["starting", "Opening the mic…"]);
-    expect(t.looks.at(-1)).toMatchObject({ phase: "opening", listening: false, caption: "Not listening yet · opening the mic…" });
+    expect(t.looks.at(-1)).toMatchObject({ listening: false });
     expect(t.sounds).toEqual([]);
     // Its first audio: now it listens, and says so everywhere at once.
     t.engines[0]!.events.capturing();
     expect([t.bar.dataset.state, status(t)]).toEqual(["listening", "Listening"]);
-    expect(t.looks.at(-1)).toMatchObject({ phase: "listening", listening: true, caption: "Listening · go ahead · say “stop” to end" });
+    expect(t.looks.at(-1)).toMatchObject({ listening: true });
     expect(t.sounds).toEqual(["start"]);
     t.engines[0]!.events.capturing();
     expect(t.sounds).toEqual(["start"]);

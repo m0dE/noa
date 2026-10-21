@@ -38,7 +38,7 @@ export const MAX_RAISES_PER_TURN = 2;
  * failures are no sign of a stuck plan (a slow page, a long wait_for), and they do not end a run of
  * failures or count as the same action again.
  */
-export const OBSERVING_TOOLS: ReadonlySet<string> = new Set<ToolName>(["read_page", "find_text", "screenshot", "list_tabs", "list_files", "wait_for", "recall", "search_history", "check_similar", "get_credential"]);
+export const OBSERVING_TOOLS: ReadonlySet<string> = new Set<ToolName>(["read_page", "find_text", "screenshot", "list_tabs", "list_files", "view_file", "wait_for", "recall", "search_history", "check_similar", "get_credential"]);
 
 /** Tools repeated on purpose (scrolling loads more): never "the same action again". */
 const REPEATED_ON_PURPOSE: ReadonlySet<string> = new Set<ToolName>(["scroll"]);
@@ -110,7 +110,7 @@ export class StuckDetector {
 }
 
 /** JSON with object keys sorted, so the same arguments compare equal whatever their order. */
-function stableJson(v: unknown): string {
+export function stableJson(v: unknown): string {
   if (Array.isArray(v)) return `[${v.map(stableJson).join(",")}]`;
   if (v && typeof v === "object") {
     const o = v as Record<string, unknown>;
@@ -236,7 +236,13 @@ export const THINKING_MAX_TOKENS = 16_000;
 /** Thinking budget where a model takes a fixed one (Haiku 4.5; min 1,024, under THINKING_MAX_TOKENS), and Claude Code's when raised. */
 export const THINKING_BUDGET_TOKENS = 8_192;
 
-export type ThinkingParam = { type: "adaptive" } | { type: "disabled" } | { type: "enabled"; budget_tokens: number };
+/**
+ * display "summarized": the thinking comes back as a readable summary (streamed as thinking_delta), which the chat
+ * shows live. Adaptive models return it empty by default ("omitted"), and Opus 5.5 and Fable 5.1 also put their notes
+ * between tool calls there, so a run looked idle for as long as the model thought. Billed the same either way.
+ */
+export const THINKING_DISPLAY = "summarized";
+export type ThinkingParam = { type: "adaptive"; display?: typeof THINKING_DISPLAY } | { type: "disabled" } | { type: "enabled"; budget_tokens: number };
 
 /** The thinking fields of a Messages request; max_tokens only when it must be larger than the usual. */
 export interface ReasoningParams {
@@ -248,16 +254,18 @@ export interface ReasoningParams {
 /**
  * A request's thinking settings for this model (shared/models.ts says how
  * each model's thinking is controlled). `when`: "fast", "raised" (a Fast run
- * that is stuck, mid-turn) or "thorough". Unknown models get nothing: they
- * run as their own default.
+ * that is stuck, mid-turn) or "thorough". `summary: false` leaves out the thinking
+ * summary (THINKING_DISPLAY), for a hosted AI server from before it forwarded it.
+ * Unknown models get nothing: they run as their own default.
  */
-export function reasoningParams(model: string, when: "fast" | "raised" | "thorough"): ReasoningParams {
-  const think: ReasoningParams = { thinking: { type: "adaptive" }, max_tokens: THINKING_MAX_TOKENS };
+export function reasoningParams(model: string, when: "fast" | "raised" | "thorough", opts: { summary?: boolean } = {}): ReasoningParams {
+  const adaptive: ThinkingParam = opts.summary === false ? { type: "adaptive" } : { type: "adaptive", display: THINKING_DISPLAY };
+  const think: ReasoningParams = { thinking: adaptive, max_tokens: THINKING_MAX_TOKENS };
   switch (modelThinking(model)) {
     case "switchable":
       return when === "fast" ? { thinking: { type: "disabled" } } : think;
     case "always":
-      return when === "fast" ? { thinking: { type: "adaptive" }, output_config: { effort: FAST_EFFORT } } : think;
+      return when === "fast" ? { thinking: adaptive, output_config: { effort: FAST_EFFORT } } : think;
     case "budget":
       // Turned on mid-turn it is ignored (measured): only a Thorough turn thinks from its start.
       return when === "thorough" ? { thinking: { type: "enabled", budget_tokens: THINKING_BUDGET_TOKENS }, max_tokens: THINKING_MAX_TOKENS } : {};

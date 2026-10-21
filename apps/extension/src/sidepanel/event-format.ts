@@ -265,8 +265,8 @@ export function describeEvent(ev: AgentEvent, turn: TurnContext = {}): EventView
     case "spoken":
       return turn.echo ? { kind: "spoken", text: ev.text, echo: true } : { kind: "spoken", text: ev.text };
     case "heard":
-      // Words that led to no request are kept for the record (Raw), not shown in the chat.
-      return { kind: "status", text: "" };
+      // What the user said that Noa answered itself (small talk): their message, like anything they say.
+      return { kind: "user", text: ev.text, voice: true };
     case "task_end":
       return describeEnd(ev, turn);
     case "error":
@@ -347,8 +347,9 @@ export const TAB_SWITCHING_SETTING = "tab-switching";
 export const PERMISSION_SETTING = "permission";
 
 /**
- * Auto tab switching, or full autonomy (ev.full), brought a tab forward (agent-slots.ts showForShot): why, and how to
- * turn it off (the toggle, or the permission level: with full autonomy the toggle makes no difference).
+ * Auto tab switching, or full autonomy (ev.full), brought a tab forward (agent-slots.ts showForShot, or showForUser
+ * when the run ended needing the user there: ev.why): why, and how to turn it off (the toggle, or the permission
+ * level: with full autonomy the toggle makes no difference).
  */
 export function tabSwitchView(ev: Extract<AgentEvent, { type: "auto_tab_switching" }>): EventView {
   let site = "";
@@ -358,7 +359,10 @@ export function tabSwitchView(ev: Extract<AgentEvent, { type: "auto_tab_switchin
     /* no page address */
   }
   const which = [ev.tab && `tab ${ev.tab}`, site && `on ${site}`].filter(Boolean).join(" ");
-  const why = `Noa switched to its tab${which ? ` (${which})` : ""} because it needs the tab visible to see the page (to take a screenshot). Please don't type while it works. `;
+  const why =
+    ev.why === "needs_you"
+      ? `Noa switched to its tab${which ? ` (${which})` : ""} because it needs you there. `
+      : `Noa switched to its tab${which ? ` (${which})` : ""} because it needs the tab visible to see the page (to take a screenshot). Please don't type while it works. `;
   if (ev.full) {
     return {
       kind: "tabswitch",
@@ -370,7 +374,7 @@ export function tabSwitchView(ev: Extract<AgentEvent, { type: "auto_tab_switchin
   return {
     kind: "tabswitch",
     text: "Auto tab switching on",
-    hint: `${why}You can turn Auto tab switching off in Settings, but then Noa can't see tabs you're not looking at, which limits what it can do.`,
+    hint: `${why}You can turn Auto tab switching off in Settings (Permission), but then Noa can't see tabs you're not looking at, which limits what it can do${ev.why === "needs_you" ? ", and when it needs you, you find its tab from the \"Noa needs you\" pill on yours" : ""}.`,
     settings: TAB_SWITCHING_SETTING,
   };
 }

@@ -7,12 +7,13 @@ import { isLongSummary, toolArgsSummary } from "../../src/text.js";
 const at = (sessionId: string) => (e: Record<string, unknown>) => ({ ts: "2026-09-25T00:00:00Z", sessionId, ...e }) as StampedAgentEvent;
 const s1 = at("s1");
 const delta = (id: string, text: string, ev = s1) => ev({ type: "assistant_text_delta", id, text }) as Extract<StampedAgentEvent, { type: "assistant_text_delta" }>;
+const thought = (id: string, text: string, ev = s1) => ev({ type: "assistant_text_delta", id, text, thinking: true }) as Extract<StampedAgentEvent, { type: "assistant_text_delta" }>;
 
 describe("LiveTexts (chat append / replace)", () => {
   it("deltas append to their block; the final text replaces the live one, once", () => {
     const l = new LiveTexts();
-    expect(l.add(delta("m1:0", "You have **4"))).toBe("You have **4");
-    expect(l.add(delta("m1:0", " unread**"))).toBe("You have **4 unread**");
+    expect(l.add(delta("m1:0", "You have **4")).text).toBe("You have **4");
+    expect(l.add(delta("m1:0", " unread**")).text).toBe("You have **4 unread**");
     expect(l.of("s1")).toEqual([["m1:0", "You have **4 unread**"]]);
     expect(l.settle(s1({ type: "assistant_text", text: "You have **4 unread** emails.", id: "m1:0" }))).toEqual({ replaces: "m1:0", drop: [], freeze: [] });
     expect(l.of("s1")).toEqual([]);
@@ -51,6 +52,33 @@ describe("LiveTexts (chat append / replace)", () => {
     expect(l.of("s2")).toEqual([["x1:0", "other chat"]]);
     // Tool calls and other events change nothing.
     expect(l.settle(at("s2")({ type: "tool_call", id: "1", name: "navigate", args: {} }))).toEqual({ replaces: null, drop: [], freeze: [] });
+  });
+
+  it("thinking: only the conversation's latest shows, until the answer's text starts; tool calls leave it", () => {
+    const l = new LiveTexts();
+    expect(l.add(thought("m1:0", "Sizing the market"))).toEqual({ text: "Sizing the market", drop: [] });
+    expect(l.isThinking("m1:0")).toBe(true);
+    expect(l.settle(s1({ type: "tool_call", id: "1", name: "navigate", args: {} }))).toEqual({ replaces: null, drop: [], freeze: [] });
+    expect(l.of("s1")).toEqual([["m1:0", "Sizing the market"]]);
+    // The next request's thinking takes the place of the last one; another conversation's stays.
+    l.add(thought("x1:0", "other chat", at("s2")));
+    expect(l.add(thought("m2:0", "Comparing channels")).drop).toEqual(["m1:0"]);
+    // The answer's text starts: the thinking goes; the text is not thinking.
+    expect(l.add(delta("m2:1", "Start with"))).toEqual({ text: "Start with", drop: ["m2:0"] });
+    expect(l.isThinking("m2:1")).toBe(false);
+    expect(l.of("s1")).toEqual([["m2:1", "Start with"]]);
+    expect(l.of("s2")).toEqual([["x1:0", "other chat"]]);
+  });
+
+  it("thinking goes when a final text arrives (streamed or not) and at task_end, where text is frozen instead", () => {
+    const l = new LiveTexts();
+    l.add(thought("m1:0", "Thinking it over"));
+    expect(l.settle(s1({ type: "assistant_text", text: "Whole reply" }))).toEqual({ replaces: null, drop: ["m1:0"], freeze: [] });
+    l.add(thought("m2:0", "More thought"));
+    l.add(delta("m2:1", "Cut off"));
+    l.add(thought("m3:0", "Last thought"));
+    expect(l.settle(s1({ type: "task_end", outcome: "paused", reason: "stopped by user" }))).toEqual({ replaces: null, drop: ["m3:0"], freeze: ["m2:1"] });
+    expect(l.of("s1")).toEqual([]);
   });
 
   it("keeps at most MAX_LIVE texts, forgetting other conversations' first", () => {

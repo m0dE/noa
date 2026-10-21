@@ -81,7 +81,7 @@ const VOICE_LOOK = `(() => {
     mic: { state: mic?.dataset.state ?? null, pressed: mic?.getAttribute("aria-pressed") ?? null, title: mic?.title ?? "" },
     box: { placeholder: box?.placeholder ?? "", classes: box?.className ?? "" },
     voiceLive: document.body.classList.contains("voice-live"),
-    orb: vis(document.querySelector(".voice-orb")),
+    orb: !!document.querySelector(".voice-orb"),
   };
 })()`;
 

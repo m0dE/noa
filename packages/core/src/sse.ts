@@ -89,10 +89,11 @@ type OpenBlock = { type: string; [k: string]: unknown };
 
 /**
  * Rebuilds a MessagesResponse from stream events. Text deltas are passed to
- * onText as they come; tool_use input is the joined input_json_delta parts,
- * parsed when the block stops; thinking text and signatures are kept so the
- * block can be sent back. onToolStart: a tool_use block started (from then on
- * the reply is an action, not only words).
+ * onText as they come, thinking deltas (its summary) to onThinking; tool_use
+ * input is the joined input_json_delta parts, parsed when the block stops;
+ * thinking text and signatures are kept so the block can be sent back.
+ * onToolStart: a tool_use block started (from then on the reply is an action,
+ * not only words).
  */
 export class MessageAccumulator {
   private msg: MessagesResponse | null = null;
@@ -102,6 +103,7 @@ export class MessageAccumulator {
   constructor(
     private readonly onText?: (messageId: string, index: number, text: string) => void,
     private readonly onToolStart?: () => void,
+    private readonly onThinking?: (messageId: string, index: number, text: string) => void,
   ) {}
 
   /** True once message_stop came. */
@@ -163,6 +165,7 @@ export class MessageAccumulator {
           this.json.set(index, (this.json.get(index) ?? "") + delta.partial_json);
         } else if (delta.type === "thinking_delta" && typeof delta.thinking === "string") {
           block.thinking = String(block.thinking ?? "") + delta.thinking;
+          if (delta.thinking) this.onThinking?.(msg.id, index, delta.thinking);
         } else if (delta.type === "signature_delta" && typeof delta.signature === "string") {
           block.signature = delta.signature;
         } else if (delta.type === "citations_delta" && delta.citation) {

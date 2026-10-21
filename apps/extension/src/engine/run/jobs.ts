@@ -45,6 +45,8 @@ export interface AdhocInput {
   memoryOff?: boolean;
   /** A chat about a scheduled job (SessionInfo.about). */
   about?: TaskAbout;
+  /** The chat it starts in: one hands-free voice opened empty (SessionInfo.empty); absent: a new one. */
+  sessionId?: string;
 }
 
 export type LocalJob = { source: "local"; task: StoredLocalTask };

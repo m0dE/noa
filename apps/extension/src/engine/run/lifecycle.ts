@@ -102,7 +102,7 @@ export class Lifecycle {
           jev: status.jevActive,
           startedAt: this.deps.now().toISOString(),
         };
-        const model = modelOf(settings);
+        const model = modelOf(settings, brain.kind);
         if (model) info.model = model;
         if (taskId) info.taskId = taskId;
         // Its memory is kept under its series: a later turn of this conversation finds it there.
@@ -155,7 +155,7 @@ export class Lifecycle {
           turns: (from.turns ?? 1) + 1,
           firstStartedAt: from.firstStartedAt ?? from.startedAt,
         };
-        const model = modelOf(settings);
+        const model = modelOf(settings, brain.kind);
         if (model) patch.model = model;
         const info = (await this.deps.sessions.reopen(sessionId, patch)) ?? { ...from, ...patch };
         const x = isXTask(job.first) || isXTask({ instructions: text });
@@ -235,6 +235,9 @@ export class Lifecycle {
     let keepTabs = true;
     try {
       result = await this.deps.turns.check(active, result);
+      // Ended needing the user on its page: the tab comes forward (Auto tab switching) before the end is recorded,
+      // so the chat's notice precedes the end card.
+      if (needsUserInTab(result, stop)) await this.showForUser(active, job, stop?.tabId);
       await this.deps.recorder.recordTask(active, job, result, settings);
       await runCleanups(cleanups);
       await this.deps.recorder.endSession(sessionId, result);
@@ -250,6 +253,18 @@ export class Lifecycle {
     if (!keepTabs && active.session.taskId) await this.endEarlierRuns(active.session.taskId, sessionId);
     this.deps.log(`session ${sessionId} ${result.outcome}${result.reason ? `: ${result.reason}` : ""}`);
     return { result, stop, ...(active.verifiedPost ? { verifiedPost: active.verifiedPost } : {}) };
+  }
+
+  /**
+   * The turn ended needing the user in a tab of the run (`tabId`: the one that reached a login page): the slot brings
+   * it forward when the setting allows (AgentSlot.showForUser).
+   */
+  private async showForUser(active: ActiveSession, job: Job, tabId?: number): Promise<void> {
+    try {
+      await active.slot.showForUser?.({ chat: isChat(job), ...(tabId === undefined ? {} : { tabId }) });
+    } catch (err) {
+      this.deps.log(`bringing the tab of ${active.session.sessionId} forward for the user failed: ${errorMessage(err)}`);
+    }
   }
 
   /**
@@ -294,8 +309,21 @@ export class Lifecycle {
  * paused for the user (not stopped by them).
  */
 function keepsTabs(job: Job, outcome: TaskOutcome, stop: ForcedStop | null): boolean {
-  if (job.source === "adhoc" || job.source === "turn") return true;
+  if (isChat(job)) return true;
   return outcome === "paused" && (stop === null || stop.kind === "pause-url" || stop.kind === "needs-approval");
+}
+
+/** The user is talking with this run: a chat's first turn or a message in it (not a TODO run). */
+const isChat = (job: Job) => job.source === "adhoc" || job.source === "turn";
+
+/**
+ * The turn ended needing the user on the page its tab shows: the agent's own pause (a sign-in it has no login for, a
+ * code; TaskRunResult.byAgent), or its tab reaching a login page (pause-url). Not Stop, a closed tab or an unattended
+ * run's card (needs-approval: answered in the chat), and not a pause the runner's limits made.
+ */
+function needsUserInTab(result: TaskRunResult, stop: ForcedStop | null): boolean {
+  if (result.outcome !== "paused") return false;
+  return stop === null ? !!result.byAgent : stop.kind === "pause-url";
 }
 
 function titleOf(instructions: string): string {

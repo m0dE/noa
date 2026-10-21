@@ -3,7 +3,7 @@
  * one way for Messages requests and for Jev.
  */
 import { z } from "zod";
-import { HOSTED_AI_UNAVAILABLE_CODE, isApiErrorCode, LOW_CREDIT, lowCreditText, OUT_OF_CREDIT, OutOfCreditError as OutOfCreditBody } from "@noa/shared";
+import { HOSTED_AI_UNAVAILABLE_CODE, hostedAiUnavailableText, isApiErrorCode, LOW_CREDIT, lowCreditText, OUT_OF_CREDIT, OutOfCreditError as OutOfCreditBody } from "@noa/shared";
 
 /** Credit left, but too little for the request (a 402 with both amounts), in whole cents. */
 export interface CreditShortfall {
@@ -55,10 +55,16 @@ export function outOfCreditError(body: string): OutOfCreditError {
   return new OutOfCreditError(message ? `${OUT_OF_CREDIT}: ${message}` : OUT_OF_CREDIT, topup);
 }
 
-/** Whether an error answer is the hosted AI's HOSTED_AI_UNAVAILABLE_CODE (the server's own AI credentials were refused). */
-export function isHostedAiUnavailable(body: string): boolean {
+/**
+ * For the hosted AI's HOSTED_AI_UNAVAILABLE_CODE (the server's own AI credentials or account were refused): what
+ * the user reads, with why (hostedAiUnavailableText). Undefined for any other answer.
+ */
+export function hostedAiUnavailable(body: string): string | undefined {
   const json = parseJsonBody(body);
-  return !!json && typeof json === "object" && (json as { error?: unknown }).error === HOSTED_AI_UNAVAILABLE_CODE;
+  if (!json || typeof json !== "object") return undefined;
+  const { error, reason } = json as { error?: unknown; reason?: unknown };
+  if (error !== HOSTED_AI_UNAVAILABLE_CODE) return undefined;
+  return hostedAiUnavailableText(typeof reason === "string" && reason.trim() ? reason.trim() : undefined);
 }
 
 /**
@@ -78,6 +84,8 @@ const ErrorBody = z.object({
  * a user can read: "" (callers then show just the status).
  */
 export function errorDetail(body: string, maxChars = 300): string {
+  const unavailable = hostedAiUnavailable(body);
+  if (unavailable) return unavailable;
   const json = parseJsonBody(body);
   const parsed = ErrorBody.safeParse(json);
   if (parsed.success) {

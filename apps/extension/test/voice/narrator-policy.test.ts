@@ -176,7 +176,7 @@ async function started() {
     failed: noop,
   } as unknown as EngineEvents;
   const player = fakePlayer();
-  const engine = new RealtimeEngine({ ticket: async () => ({ url: "wss://x", token: "t" }), createSource: () => mic, events, openSocket: () => socket, player });
+  const engine = new RealtimeEngine({ passOnEverything: false,  ticket: async () => ({ url: "wss://x", token: "t" }), createSource: () => mic, events, openSocket: () => socket, player });
   const start = engine.start();
   await settle();
   socket.readyState = 1;
@@ -574,7 +574,8 @@ describe("the owner's report of 2026-09-27: 'can you speak Korean?' while the ag
     const t = await started();
     t.engine.setAgentWorking(working);
     userTurn(t.s, input, `r_${input}`);
-    transcribed(t.s, input, said);
+    // A finished utterance, as the transcription punctuates one (a turn trailing off waits: realtime-unfinished.test.ts).
+    transcribed(t.s, input, /[.?!]$/.test(said) ? said : `${said}.`);
     t.s.event({ type: "response.output_item.added", response_id: `r_${input}`, item: { type: "function_call", name: "send_to_agent" } });
     t.s.event({ type: "response.function_call_arguments.done", response_id: `r_${input}`, call_id: `c_${input}`, name: "send_to_agent", arguments: JSON.stringify({ text: said, kind }) });
     await settle();

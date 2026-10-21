@@ -6,12 +6,14 @@
  *   SESSION_HEADER naming the conversation), metered to the account's credit like every hosted call.
  * - Claude API: Anthropic's Messages API with the user's own key.
  * - Claude Code: the helper's memory.summarize (one headless `claude -p` on the user's own login).
+ * - Local model: the user's own server, with the model the conversation ran on, asked by the helper (memory.summarize).
  *
- * All run the writer's model (MEMORY_WRITER_MODEL, or Claude Code's alias for it). Other brains (the scripted
+ * The others run the writer's model (MEMORY_WRITER_MODEL, or Claude Code's alias for it). Other brains (the scripted
  * test brain) have no writer.
  */
 import { postMessages, type MessagesRequest, type MessagesTransport } from "@noa/core";
 import {
+  localServerUrl,
   MEMORY_SUMMARIZE_TIMEOUT_MS,
   MEMORY_WRITER_MAX_TOKENS,
   MEMORY_WRITER_MODEL,
@@ -33,7 +35,7 @@ export type Summarize = (req: { system: string; prompt: string; sessionId: strin
 const HELPER_ANSWER_MARGIN_MS = 15_000;
 
 export interface SummarizerDeps {
-  settings(): Promise<Pick<ExtensionSettings, "anthropicApiKey">>;
+  settings(): Promise<Pick<ExtensionSettings, "anthropicApiKey" | "localModelUrl" | "localModel">>;
   /** The signed-in account's session (null: signed out). */
   hosted(): { token: string; apiBase: string } | null;
   helper: {
@@ -60,6 +62,16 @@ export function memorySummarizer(brain: BrainKind, deps: SummarizerDeps): Summar
         if (!key) throw new Error("No Anthropic API key in Settings");
         return messagesCall(deps, key, system, prompt, {}, maxTokens);
       };
+    case "local":
+      // The conversation stayed on the computer: so does what is remembered from it. The helper asks the model
+      // (Ollama turns away an extension's posts).
+      return async ({ system, prompt }) => {
+        const s = await deps.settings();
+        const model = s.localModel.trim();
+        if (!localServerUrl(s.localModelUrl) || !model) throw new Error("No local model set up in Settings");
+        if (!deps.helper.connected) await deps.helper.connect();
+        return deps.helper.call("memory.summarize", { system, prompt, local: { serverUrl: s.localModelUrl, model } }, { timeoutMs: MEMORY_SUMMARIZE_TIMEOUT_MS + HELPER_ANSWER_MARGIN_MS });
+      };
     case "claude-code":
       return async ({ system, prompt }) => {
         if (!deps.helper.connected) await deps.helper.connect();
@@ -70,9 +82,9 @@ export function memorySummarizer(brain: BrainKind, deps: SummarizerDeps): Summar
   }
 }
 
-async function messagesCall(deps: SummarizerDeps, key: string, system: string, prompt: string, transport: MessagesTransport, maxTokens = MEMORY_WRITER_MAX_TOKENS): Promise<{ text: string }> {
+async function messagesCall(deps: SummarizerDeps, key: string, system: string, prompt: string, transport: MessagesTransport, maxTokens = MEMORY_WRITER_MAX_TOKENS, model: string = MEMORY_WRITER_MODEL): Promise<{ text: string }> {
   const body: MessagesRequest = {
-    model: MEMORY_WRITER_MODEL,
+    model,
     max_tokens: maxTokens,
     system: [{ type: "text", text: system }],
     tools: [],

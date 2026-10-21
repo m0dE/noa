@@ -7,6 +7,22 @@ import { installChromeStub, installVoiceFakes } from "./chrome-stub.mjs";
 import { EMAIL_ANSWER, scenario, SHORTCUT_LABEL, SUGGESTION, thumbnail, VOICE_SHORTCUT_LABEL } from "./scenarios.mjs";
 import { RAW_SECRET } from "./raw-scenario.mjs";
 
+// Nothing covers the panel while voice is on (the owner's report: "all I see is a red dot"): no orb, no veil.
+const coverCheck = (p) =>
+  p.evaluate(() => {
+    const out = [];
+    if (document.querySelector(".voice-orb, .voice-caption")) out.push("an orb or its caption is drawn");
+    const covering = [...document.body.querySelectorAll("*")].filter((e) => {
+      const cs = getComputedStyle(e);
+      const r = e.getBoundingClientRect();
+      return cs.position === "fixed" && !e.hidden && cs.display !== "none" && r.width >= window.innerWidth - 1 && r.height >= window.innerHeight - 1 && (cs.backdropFilter !== "none" || cs.backgroundColor !== "rgba(0, 0, 0, 0)");
+    });
+    if (covering.length) out.push(`a veil covers the panel: ${covering.map((e) => e.className || e.tagName).join(", ")}`);
+    const box = document.getElementById("now-text").getBoundingClientRect();
+    if (document.elementFromPoint(box.left + 10, box.top + box.height / 2)?.id !== "now-text") out.push("something covers the input");
+    return out;
+  });
+
 export const SIZES = [
   { w: 360, h: 800 },
   { w: 480, h: 900 },
@@ -323,17 +339,27 @@ export const PANEL_CASES = [
           key: r.dataset.key,
           title: r.querySelector(".job-title").textContent,
           meta: r.querySelector(".job-meta")?.textContent ?? "",
-          when: r.querySelector(".job-when").textContent,
+          when: r.querySelector(".job-when")?.textContent ?? "",
+          clock: r.querySelector(".job-clock") ? [r.querySelector(".clock-time").textContent, r.querySelector(".clock-day").textContent] : null,
+          clockTitle: r.querySelector(".job-clock")?.title ?? "",
+          pill: r.querySelector(".job-pill")?.textContent ?? "",
           aria: r.getAttribute("aria-label"),
-          icon: r.querySelector(".job-icon").title,
+          icon: r.querySelector(".job-icon")?.title ?? null,
           oneLine: r.querySelector(".job-title").scrollHeight <= r.querySelector(".job-title").clientHeight + 1,
         })),
       );
       const row = (key) => rows.find((r) => r.key === key);
-      if (row("task:t5")?.meta !== "Needs a one-time code sent by SMS" || row("chat:s-3")?.meta !== "Needs you to pick dates") fail(`needs-you rows ${JSON.stringify(rows.slice(0, 2))}`);
-      if (row("task:t2")?.when !== "now" || row("task:t3")?.when !== "Due now" || !/^Retries /.test(row("task:t4")?.when ?? "") || !/^Daily at 9:00 AM and 6:00 PM$/.test(row("task:t1")?.meta ?? "")) fail(`scheduled rows ${JSON.stringify(rows)}`);
+      // Needs you: the title alone, no line under it; a screen reader still hears why.
+      if (row("task:t5")?.meta !== "" || row("chat:s-3")?.meta !== "" || !row("task:t5")?.aria?.includes("Needs a one-time code sent by SMS")) fail(`needs-you rows ${JSON.stringify(rows.slice(0, 2))}`);
+      // Upcoming: the next run's clock on the left (due now: "Now" over "Due"; a retry keeps its time), the account under
+      // the title, the cadence as a pill; nothing on the right but the pill.
+      if (row("task:t2")?.when !== "now" || row("task:t2")?.clock !== null) fail(`running row ${JSON.stringify(row("task:t2"))}`);
+      if (JSON.stringify(row("task:t3")?.clock) !== '["Now","Due"]' || row("task:t3")?.when !== "" || row("task:t3")?.pill !== "") fail(`due row ${JSON.stringify(row("task:t3"))}`);
+      if (!/^\d{1,2}:\d\d/.test(row("task:t4")?.clock?.[0] ?? "") || row("task:t4")?.clock?.[1] !== "Today" || !/^Retries today /.test(row("task:t4")?.clockTitle ?? "")) fail(`retry row ${JSON.stringify(row("task:t4"))}`);
+      if (!/^\d{1,2}:\d\d/.test(row("task:t1")?.clock?.[0] ?? "") || !/^(Today|Tmrw)$/.test(row("task:t1")?.clock?.[1] ?? "") || row("task:t1")?.meta !== "@noa" || row("task:t1")?.pill !== "Daily" || row("task:t1")?.when !== "") fail(`repeating row ${JSON.stringify(row("task:t1"))}`);
+      if (!/Daily at 9:00 AM and 6:00 PM, next /.test(row("task:t1")?.aria ?? "") || !/@noa$/.test(row("task:t1")?.aria ?? "")) fail(`repeating row name ${JSON.stringify(row("task:t1"))}`);
       if (row("task:t6")?.meta !== "x.com" || !/ago$/.test(row("task:t6")?.when ?? "")) fail(`recent row ${JSON.stringify(row("task:t6"))}`);
-      if (!rows.every((r) => r.aria?.startsWith(r.title) && r.icon && r.oneLine)) fail(`row names, icons or lines ${JSON.stringify(rows)}`);
+      if (!rows.every((r) => r.aria?.startsWith(r.title) && (r.icon || r.clock) && r.oneLine)) fail(`row names, icons or lines ${JSON.stringify(rows)}`);
       if (rows.some((r) => /\d \d|\*/.test(r.meta))) fail(`raw cron in a row: ${JSON.stringify(rows)}`);
       await checkLayout(page, `list ${label}`);
       await shoot(page, "panel-list", size, scheme);
@@ -1017,14 +1043,27 @@ export const PANEL_CASES = [
       await p.close();
     },
   },
-  // Streaming: the answer arrives as text deltas and grows in place (no raw ** while a bold is half written);
+  // Streaming: first the model's thinking, live under a "Thinking" label (a step leaves it; the answer's text takes
+  // it away); then the answer arrives as text deltas and grows in place (no raw ** while a bold is half written);
   // its final text replaces it without a second copy; the turn then ends with a one-line summary.
   {
-    names: ["panel-chat-streaming", "panel-chat-streamed"],
+    names: ["panel-chat-thinking", "panel-chat-streaming", "panel-chat-streamed"],
     async run({ ctx, size, scheme, label, fail, openPanel, shoot, checkLayout, reportErrors }) {
       const p = await openPanel(ctx, "streaming", "#chat-log .ev-user");
       const push = (e) => p.evaluate((ev) => window.__push({ type: "event", event: { ...ev, ts: new Date().toISOString(), sessionId: "s-ans" } }), e);
       const id = "msg_live01:1";
+      const thought = "**Sorting the inbox**\n\nFour unread: two need a reply today, one is a receipt, one a newsletter. Checking who is waiting longest.";
+      for (const t of thought.match(/.{1,12}/gs)) await push({ type: "assistant_text_delta", id: "msg_live00:0", text: t, thinking: true });
+      await p.waitForFunction(() => document.querySelector("#chat-log .ev-thinking")?.textContent.includes("waiting longest."));
+      await push({ type: "tool_call", id: "6", name: "read_page", args: {} });
+      const thinking = await p.evaluate(() => {
+        const el = document.querySelector("#chat-log .ev-thinking");
+        return { label: el?.querySelector(".ev-thinking-label")?.textContent, bold: el?.querySelector("strong")?.textContent, count: document.querySelectorAll("#chat-log .ev-thinking").length };
+      });
+      if (thinking.label !== "Thinking" || thinking.bold !== "Sorting the inbox" || thinking.count !== 1) fail(`thinking: shown as ${JSON.stringify(thinking)}`);
+      await checkLayout(p, `thinking ${label}`);
+      await shoot(p, "panel-chat-thinking", size, scheme);
+      await push({ type: "tool_result", id: "6", name: "read_page", text: "4 unread" });
       const cut = EMAIL_ANSWER.indexOf("Jordan Lee") + "Jordan Le".length;
       const pieces = (from, to, n) => Array.from({ length: n }, (_, k) => EMAIL_ANSWER.slice(from + Math.floor(((to - from) * k) / n), from + Math.floor(((to - from) * (k + 1)) / n)));
       for (const t of pieces(0, cut, 8)) {
@@ -1037,6 +1076,7 @@ export const PANEL_CASES = [
         return { raw: el.textContent.includes("**"), strong: [...el.querySelectorAll("strong")].map((s) => s.textContent), heading: el.querySelector("h3")?.textContent };
       });
       if (mid.raw || !mid.strong.includes("Jordan Le") || mid.heading !== "Needs a reply") fail(`streaming: half-written Markdown ${JSON.stringify(mid)}`);
+      if (await p.evaluate(() => document.querySelector("#chat-log .ev-thinking"))) fail("streaming: the thinking is still shown once the answer is being written");
       await checkLayout(p, `streaming ${label}`);
       await shoot(p, "panel-chat-streaming", size, scheme);
       for (const t of pieces(cut, EMAIL_ANSWER.length, 6)) await push({ type: "assistant_text_delta", id, text: t });
@@ -1567,7 +1607,7 @@ export const PANEL_CASES = [
     names: ["panel-error-hosted", "panel-error-helper", "panel-error-ratelimit", "panel-error-unknown"],
     async run({ ctx, size, scheme, label, fail, want, openPanel, shoot, checkLayout, reportErrors }) {
       const expected = {
-        "err-hosted": { msg: "Noa AI is unavailable right now.", fixes: ["Use your own Claude"], retry: "Retry" },
+        "err-hosted": { msg: "Noa AI is unavailable right now.", hint: "Anthropic refused Noa's requests.", fixes: ["Use your own Claude"], retry: "Retry" },
         "err-helper": { msg: "Local Claude Code isn't connected.", fixes: ["Set up Claude Code", "Use Noa AI"], retry: "Retry" },
         "err-ratelimit": { msg: "Too many requests right now.", fixes: [], retry: "Retry" },
         "err-unknown": { msg: "Something went wrong.", fixes: [], retry: "Retry" },
@@ -1582,6 +1622,7 @@ export const PANEL_CASES = [
           return {
             cards: cards.length,
             msg: cards[0]?.querySelector(".err-msg")?.textContent,
+            hint: cards[0]?.querySelector(".err-hint")?.textContent,
             fixes: [...log.querySelectorAll(".err-fix")].map((b) => b.textContent),
             retry: log.querySelector(".ev-continue")?.textContent,
             summary: log.querySelector(".ev-end .ev-summary")?.textContent ?? null,
@@ -1590,6 +1631,7 @@ export const PANEL_CASES = [
         });
         if (got.cards !== 1) fail(`${kind}: ${got.cards} error cards`);
         if (got.msg !== want1.msg) fail(`${kind}: message "${got.msg}"`);
+        if (want1.hint && got.hint !== want1.hint) fail(`${kind}: hint "${got.hint}"`);
         if (got.fixes.join(" | ") !== want1.fixes.join(" | ")) fail(`${kind}: fixes ${got.fixes.join(" | ")}`);
         if (got.retry !== want1.retry) fail(`${kind}: continue button "${got.retry}"`);
         if (got.summary !== null) fail(`${kind}: the end card repeats the error: "${got.summary}"`);
@@ -1770,21 +1812,6 @@ export const PANEL_CASES = [
         });
       const waitPill = (p, phase) =>
         p.waitForFunction((w) => document.querySelector("#voice-bar:not([hidden])")?.dataset.phase === w, phase, { timeout: 15_000 });
-      const orbCheck = (p) =>
-        p.evaluate(() => {
-          const orb = document.querySelector(".voice-orb");
-          const comp = document.getElementById("composer").getBoundingClientRect();
-          const r = orb.querySelector(".voice-orb-stack").getBoundingClientRect();
-          const box = document.getElementById("now-text").getBoundingClientRect();
-          const out = [];
-          if (orb.hidden) out.push("orb hidden");
-          if (r.bottom > comp.top) out.push(`orb reaches the input (${Math.round(r.bottom)} > ${Math.round(comp.top)})`);
-          if (Math.abs(r.left + r.width / 2 - window.innerWidth / 2) > 1) out.push("orb not centred");
-          if (getComputedStyle(orb).pointerEvents !== "none") out.push("orb takes clicks");
-          // The input stays above the veil.
-          if (document.elementFromPoint(box.left + 10, box.top + box.height / 2)?.id !== "now-text") out.push("the veil covers the input");
-          return out;
-        });
       const listeningReported = (p) => p.evaluate(() => window.__portSent.filter((m) => m.type === "panel.listening").at(-1)?.listening);
 
       // Free plan: a lock; the tooltip and a click explain, "Choose a plan" opens the dashboard's Billing page.
@@ -1820,7 +1847,7 @@ export const PANEL_CASES = [
         await p.close();
       }
 
-      // Standard picked in Settings: the mic starts hands-free on Standard (the orb, the words streaming into the box),
+      // Standard picked in Settings: the mic starts hands-free on Standard (nothing covers the panel, the words stream into the box),
       // never the old one-shot dictation; pressed again it ends the session and the box is as it was.
       if (want("panel-voice-mic-standard", size, scheme)) {
         const p = await openPanel(ctx, "account", undefined, { edit: (d) => (d.state.settings.voiceEngine = "standard"), init: [installVoiceFakes] });
@@ -1830,9 +1857,8 @@ export const PANEL_CASES = [
         if ((await p.getAttribute(mic, "title")) !== `Turn voice off · the task keeps running · ${VOICE_SHORTCUT_LABEL}`) fail(`mic tooltip while on "${await p.getAttribute(mic, "title")}"`);
         if ((await listeningReported(p)) !== true) fail("the mic's hands-free not reported to the background");
         if (await p.evaluate(() => window.__requests.some((r) => r.type === "voice.realtime"))) fail("Standard asked for the realtime relay");
-        const problems = await orbCheck(p);
-        if (problems.length) fail(`hands-free orb: ${problems.join("; ")}`);
-        if ((await p.textContent(".voice-caption")) !== "Listening · go ahead · say “stop” to end") fail(`orb caption "${await p.textContent(".voice-caption")}"`);
+        const problems = await coverCheck(p);
+        if (problems.length) fail(`hands-free: ${problems.join("; ")}`);
         await p.waitForFunction(() => document.getElementById("now-text").value.length > 0, null, { timeout: 15_000 });
         if (!(await p.evaluate(() => document.activeElement === document.getElementById("now-text")))) fail("the box lost the cursor");
         await checkLayout(p, `voice-mic-standard ${label}`);
@@ -1840,7 +1866,6 @@ export const PANEL_CASES = [
         await p.click(mic);
         await waitVoice(p, "idle");
         if (await p.evaluate(() => !document.querySelector("#voice-bar").hidden)) fail("the mic did not end hands-free");
-        if (!(await p.evaluate(() => document.querySelector(".voice-orb").hidden))) fail("orb still shown after stopping");
         if ((await listeningReported(p)) !== false) fail("the end not reported to the background");
         if (await p.evaluate(() => window.__requests.some((r) => r.type === "run.message" || r.type === "run.adhoc"))) fail("ending hands-free sent the words");
         if ((await p.inputValue("#now-text")) !== "") fail(`the box kept "${await p.inputValue("#now-text")}"`);
@@ -1942,7 +1967,7 @@ export const PANEL_CASES = [
         const want2 = (ok, what) => ok || fail(`${name} ${label}: ${what} ${JSON.stringify(look)}`);
         want2(look.label === "Voice on · Inbox (1) - ada.lovelace@ex…" && look.status === "Hearing you" && look.live === "Voice on: Listening", "state word / announcement");
         want2(/^0:0\d$/.test(look.time), "time on");
-        want2(look.hint === "Browser voice · Just talk · say “stop” to end", "tooltip");
+        want2(look.hint === "Browser voice · Just talk · it goes out when you finish", "tooltip");
         want2(look.region[0] === "region" && look.region[1] === "Voice status", "strip region");
         want2(look.buttons === 0 && look.height <= 30, "a slim strip without buttons");
         want2(look.meter, "meter");
@@ -1973,7 +1998,7 @@ export const PANEL_CASES = [
       }
     },
   },
-  // Hands-free voice (the voice shortcut): the orb and the status strip while listening, "Sending…" with the utterance
+  // Hands-free voice (the voice shortcut): the status strip while listening (nothing covers the panel), "Sending…" with the utterance
   // in the box (Standard), the strip while the agent works (the task's Stop and the voice controls apart in the
   // composer row), a spoken line (no button of its own: Esc or talking cuts it off); Realtime's one-time cost notice, the narrator
   // speaking, its send_to_agent starting a task with one acknowledgement, and one message per request: what the
@@ -2011,7 +2036,7 @@ export const PANEL_CASES = [
       /** The state word, allowing for the fake microphone's voice ("Hearing you" while listening or working). */
       const barSays = async (p, ...words) => words.includes(await barTitle(p));
       /**
-       * The strip: full width right under the tabs, above the orb's veil, one slim line, its words not cut, no buttons
+       * The strip: full width right under the tabs, one slim line, its words not cut, no buttons
        * (on its own tab); a polite live line saying the state. The composer row: every voice control and the task's
        * Stop in view, none overlapping, none cut, each with a name.
        */
@@ -2056,7 +2081,8 @@ export const PANEL_CASES = [
         await p.evaluate(() => window.__push({ type: "panel.voice" }));
         await waitPhase(p, "listening");
         if (!(await barSays(p, "Listening", "Hearing you"))) fail(`listening bar "${await barTitle(p)}"`);
-        if (!(await p.evaluate(() => !document.querySelector(".voice-orb").hidden))) fail("no orb while hands-free listens");
+        const covered = await coverCheck(p);
+        if (covered.length) fail(`listening: ${covered.join("; ")}`);
         if ((await p.getAttribute("#now-actions .voice-mic", "data-state")) !== "handsfree") fail("the mic does not show hands-free");
         if (!(await p.evaluate(() => window.__portSent.some((m) => m.type === "panel.listening" && m.listening === true)))) fail("hands-free not reported to the background");
         if (await p.evaluate(() => window.__requests.some((r) => r.type === "voice.realtime"))) fail("Standard asked for the realtime relay");
@@ -2091,7 +2117,6 @@ export const PANEL_CASES = [
         if (await p.evaluate(() => document.querySelector("#now-actions .voice-interrupt"))) fail("an Interrupt button in the composer while speaking");
         const sl = await barCheck(p);
         if (sl.length) fail(`speaking: ${sl.join("; ")}`);
-        if (!(await p.evaluate(() => document.querySelector(".voice-orb").hidden))) fail("the orb still covers the chat after sending");
         await checkLayout(p, `handsfree-speaking ${label}`);
         await shoot(p, "panel-handsfree-speaking", size, scheme);
         await p.evaluate(() => window.__ttsRelease());
@@ -2161,7 +2186,8 @@ export const PANEL_CASES = [
         if (JSON.stringify(rt.protocols) !== JSON.stringify(["noa", "bt.tok"])) fail(`subprotocols ${JSON.stringify(rt.protocols)}`);
         if (rt.first?.type !== "session.update" || rt.first.session.model !== undefined) fail(`first event ${JSON.stringify(rt.first)?.slice(0, 120)}; sent ${rt.sent.slice(0, 5)}`);
 
-        // The narrator says hello: its words under the orb while its audio plays.
+        // The narrator says hello: in the chat voice opened as it started (the tab had none), playing while its audio
+        // plays; nothing in the box or over the panel.
         await p.evaluate(() => {
           const pcm = btoa(String.fromCharCode(...new Uint8Array(24_000 * 2 * 1.5)));
           window.__rt.emit({ type: "response.created", response: { id: "r1" } });
@@ -2169,7 +2195,12 @@ export const PANEL_CASES = [
           window.__rt.emit({ type: "response.output_audio.delta", item_id: "a1", response_id: "r1", delta: pcm });
         });
         await waitPhase(p, "speaking");
-        if ((await p.textContent(".voice-caption")) !== "Hi! What should I do?") fail(`narrator caption "${await p.textContent(".voice-caption")}"`);
+        if (!(await p.evaluate(() => window.__requests.some((r) => r.type === "chat.open")))) fail("voice started without opening a chat");
+        await p.waitForFunction(() => document.querySelector("#chat-log .ev-spoken.playing")?.textContent.includes("Hi! What should I do?"), null, { timeout: 5000 }).catch(async () =>
+          fail(`narrator hello not playing in the chat: ${await p.evaluate(() => document.getElementById("chat-log")?.innerText.slice(0, 200))}`),
+        );
+        if (await p.evaluate(() => document.getElementById("now-heard"))) fail("a voice line is drawn by the box");
+        if (await p.evaluate(() => document.querySelector(".voice-orb, .voice-caption"))) fail("an orb is drawn while the narrator speaks");
         await shoot(p, "panel-handsfree-narrator", size, scheme);
 
         /**
@@ -2213,7 +2244,8 @@ export const PANEL_CASES = [
         }, heardText);
         await p.waitForFunction(() => window.__requests.some((r) => r.type === "run.message"), null, { timeout: 500 }).catch(() => fail("send_to_agent was not sent at once"));
         const req = await p.evaluate(() => window.__requests.find((r) => r.type === "run.message"));
-        if (req.text !== "Open Gmail and read my newest email" || req.voice !== true || req.tabId !== 1 || JSON.stringify(req.heard) !== JSON.stringify([early, heardText]))
+        // Into the chat voice opened for the tab as it started (the tab had none): no second chat for the request.
+        if (req.text !== "Open Gmail and read my newest email" || req.voice !== true || req.sessionId !== "s-new" || JSON.stringify(req.heard) !== JSON.stringify([early, heardText]))
           fail(`send_to_agent sent ${JSON.stringify(req)}`);
         if ((await phase(p)) === "sending") fail("a Realtime request waited in a sending window");
         const sent = req.text;
@@ -2253,8 +2285,8 @@ export const PANEL_CASES = [
         await shoot(p, "panel-handsfree-heard", size, scheme);
         if ((await replies()).length !== 1) fail(`more than one reply for the turn: ${JSON.stringify(await replies())}`);
 
-        // Small talk while the agent works, answered aloud (short, capped) and passed on to no one: kept for the record
-        // (voice.heard), never shown in the chat, no message.
+        // Small talk while the agent works, answered aloud (short, capped) and passed on to no one: kept (voice.heard)
+        // and shown in the chat as the user's message, no request.
         await turn("in2", "Okay, thanks.", "Sure! I'm here whenever you need me, just tell me what else to do.");
         // While the agent works, that long reply is never heard: it is made again, capped, and that one is said.
         await p.waitForFunction(() => window.__rt.sent.some((e) => e.type === "response.create" && e.response?.max_output_tokens === 80), null, { timeout: 5000 }).catch(() => fail("small talk while working was not made short"));
@@ -2268,10 +2300,12 @@ export const PANEL_CASES = [
         const aside = await p.evaluate(() => ({
           kept: window.__requests.filter((r) => r.type === "voice.heard").map((r) => [r.sessionId, r.text]),
           users: document.querySelectorAll("#chat-log .ev-user").length,
+          marked: document.body.innerText.includes("not sent"),
           heardLines: document.querySelectorAll("#chat-log .ev-heard").length,
           sent: window.__requests.filter((r) => r.type === "run.message").length,
         }));
-        if (JSON.stringify(aside.kept) !== JSON.stringify([["s-new", "Okay, thanks."]]) || aside.users !== 1 || aside.heardLines || aside.sent !== 1) fail(`small talk ${JSON.stringify(aside)}`);
+        if (JSON.stringify(aside.kept) !== JSON.stringify([["s-new", "Okay, thanks."]]) || aside.users !== 2 || aside.marked || aside.heardLines || aside.sent !== 1)
+          fail(`small talk ${JSON.stringify(aside)}`);
 
         // The user looks at another tab and asks (the report on 81df820): the request goes out with the note naming
         // both tabs as its context; the chat shows their words once with the request under them, never the note, and
@@ -2301,10 +2335,11 @@ export const PANEL_CASES = [
         await p.evaluate((r) => window.__push({ type: "event", event: { type: "user_message", text: r.text, voice: true, heard: r.heard, ts: new Date().toISOString(), sessionId: "s-new" } }), awayReq);
         await p.waitForFunction((t) => [...document.querySelectorAll("#chat-log .ev-said .ev-user-text")].some((e) => e.textContent === t), away.request, { timeout: 5000 }).catch(() => undefined);
         const awayChat = await p.evaluate(() => ({
+          // Requests (sent); words that led to none show apart, as not sent.
           bubbles: [...document.querySelectorAll("#chat-log .ev-user")].map((e) => e.textContent),
           words: [...document.querySelectorAll("#chat-log .ev-said .ev-words-text")].map((e) => e.textContent),
         }));
-        const awayBubbles = awayChat.bubbles.filter((t) => t !== sent);
+        const awayBubbles = awayChat.bubbles.filter((t) => t !== sent && t !== "Okay, thanks.");
         if (JSON.stringify(awayBubbles) !== JSON.stringify([away.request]) || JSON.stringify(awayChat.words) !== JSON.stringify([away.words]) || awayChat.bubbles.some((t) => t.includes("looking at another tab")))
           fail(`asked on another tab, the chat shows ${JSON.stringify(awayChat)}`);
         const acks = (await replies()).filter((r) => /acknowledgement/.test(r.response?.instructions ?? ""));
@@ -2366,7 +2401,7 @@ export const PANEL_CASES = [
           mute: !document.querySelector("#now-actions .voice-mute").hidden,
           go: !!document.querySelector("#voice-bar .vb-go").offsetParent,
           use: !!document.querySelector("#voice-bar .vb-use").offsetParent,
-          orb: !document.querySelector(".voice-orb").hidden,
+          orb: !!document.querySelector(".voice-orb"),
           live: document.body.classList.contains("voice-live"),
         }));
         if (away.label !== "Voice on · Inbox (1) - ada.lovelace@ex…" || !away.go || !away.use || away.off || !away.mute || away.orb || away.live) fail(`bar on another tab ${JSON.stringify(away)}`);
@@ -2511,7 +2546,7 @@ export const PANEL_CASES = [
   },
   // Hands-free starting (the owner's report: voice looked on while it was not listening, and "starting…" never
   // changed). Until the microphone's audio reaches the engine nothing looks live: the strip grey, "Voice starting" and
-  // what it waits on ("Connecting…", "Opening the mic…"), the orb grey and pulsing with "Not listening yet · …", the
+  // what it waits on ("Connecting…", "Opening the mic…"), nothing over the panel, the
   // box without its glow ("Not listening yet · wait for the sound"), the Voice button an outline. Then, at once, all of
   // it goes live ("Listening"). A start that never gets there ends after START_TIMEOUT_MS with what went wrong and
   // Try again.
@@ -2522,7 +2557,6 @@ export const PANEL_CASES = [
       const look = (p) =>
         p.evaluate(() => {
           const bar = document.getElementById("voice-bar");
-          const orb = document.querySelector(".voice-orb");
           const mic = document.querySelector("#now-actions .voice-mic");
           return {
             hidden: bar.hidden,
@@ -2531,8 +2565,7 @@ export const PANEL_CASES = [
             status: bar.querySelector(".vb-status").textContent,
             live: bar.querySelector("[aria-live=polite]").textContent,
             barBg: getComputedStyle(bar).backgroundColor,
-            orb: orb.hidden ? null : orb.dataset.state,
-            caption: document.querySelector(".voice-caption").textContent,
+            orb: !!document.querySelector(".voice-orb, .voice-caption"),
             placeholder: document.getElementById("now-text").placeholder,
             glow: document.body.classList.contains("voice-live"),
             micState: mic.dataset.state,
@@ -2559,7 +2592,7 @@ export const PANEL_CASES = [
         const c = await look(p);
         check(c, c.state === "starting" && c.label.startsWith("Voice starting") && c.status === "Connecting…" && c.live === "Voice starting: Connecting…", "connecting strip");
         check(c, !red(c.barBg), "connecting strip is not live red");
-        check(c, c.orb === "opening" && c.caption === "Not listening yet · connecting…", "connecting orb");
+        check(c, !c.orb, "nothing over the panel while connecting");
         check(c, c.placeholder === "Not listening yet · wait for the sound" && !c.glow, "connecting box");
         check(c, c.micState === "handsfree" && c.micWaiting === "true" && !red(c.micFill) && !c.mute, "connecting Voice button");
         await checkLayout(p, `handsfree-connecting ${label}`);
@@ -2571,7 +2604,7 @@ export const PANEL_CASES = [
         const appended = await p.evaluate(() => window.__rt.sent.some((e) => e.type === "input_audio_buffer.append"));
         check(l, appended, "listening before any audio went to the narrator");
         check(l, ["Listening", "Hearing you"].includes(l.status) && l.label.startsWith("Voice on") && red(l.barBg), "listening strip");
-        check(l, l.orb === "listening" && l.caption === "Listening · go ahead · say “stop” to end", "listening orb");
+        check(l, !l.orb, "nothing over the panel while listening");
         check(l, l.placeholder === "Listening · go ahead" && l.glow && l.micWaiting === null && red(l.micFill) && l.mute, "listening box and buttons");
         await p.evaluate(() => window.__push({ type: "panel.voice" }));
         await p.waitForFunction(() => document.querySelector("#voice-bar").hidden);
@@ -2585,7 +2618,7 @@ export const PANEL_CASES = [
         await p.evaluate(() => window.__push({ type: "panel.voice" }));
         await p.waitForFunction(() => !document.getElementById("voice-bar").hidden, null, { timeout: 5000 });
         const m = await look(p);
-        check(m, m.state === "starting" && m.status === "Opening the mic…" && m.caption === "Not listening yet · opening the mic…" && !m.glow && m.micWaiting === "true", "opening the mic");
+        check(m, m.state === "starting" && m.status === "Opening the mic…" && !m.orb && !m.glow && m.micWaiting === "true", "opening the mic");
         await checkLayout(p, `handsfree-opening-mic ${label}`);
         await shoot(p, "panel-handsfree-opening-mic", size, scheme);
         await p.evaluate(() => window.__push({ type: "panel.voice" }));
@@ -2611,7 +2644,7 @@ export const PANEL_CASES = [
       if (stuck) {
         await stuck.waitForFunction(() => document.querySelector("#now-notice:not([hidden])"), null, { timeout: 40_000 }).catch(() => fail(`still starting after the limit ${label}`));
         const f = await look(stuck);
-        check(f, f.hidden && f.orb === null && f.micState === "idle" && /The mic didn't start, so voice isn't listening/.test(f.notice ?? "") && /Try again/.test(f.notice ?? ""), "start failed");
+        check(f, f.hidden && !f.orb && f.micState === "idle" && /The mic didn't start, so voice isn't listening/.test(f.notice ?? "") && /Try again/.test(f.notice ?? ""), "start failed");
         await checkLayout(stuck, `handsfree-start-failed ${label}`);
         await shoot(stuck, "panel-handsfree-start-failed", size, scheme);
         reportErrors(stuck, `handsfree-start-failed ${label}`);
@@ -2665,7 +2698,7 @@ export const PANEL_CASES = [
             glow: document.body.classList.contains("voice-live"),
             micMuted: mic.dataset.muted ?? null,
             micRing: getComputedStyle(mic, "::before").animationName,
-            orb: document.querySelector(".voice-orb").hidden ? null : { muted: document.querySelector(".voice-orb").dataset.muted ?? null, caption: document.querySelector(".voice-caption").textContent, halo: getComputedStyle(document.querySelector(".voice-orb-halo")).animationName },
+            orb: !!document.querySelector(".voice-orb, .voice-caption"),
             reported: window.__portSent.filter((x) => x.type === "panel.listening").at(-1),
             layout: out,
           };
@@ -2679,7 +2712,7 @@ export const PANEL_CASES = [
       want(!/200, 35, 63|196, 42, 68/.test(muted.barBg), "the bar is still red", muted);
       want(/muted/i.test(muted.placeholder) && !muted.glow, "box", muted);
       want(muted.micMuted === "true" && muted.micRing === "none", "mic button", muted);
-      want(muted.orb?.muted === "true" && muted.orb.caption === "Microphone muted · Unmute to talk" && muted.orb.halo === "none", "orb", muted);
+      want(!muted.orb, "nothing over the panel", muted);
       want(muted.reported?.listening === true && muted.reported?.muted === true, "reported (badge)", muted);
       want(!muted.layout.length, "layout", muted);
       // Nothing more goes out, the server's buffer was cleared, and the narrator knows.

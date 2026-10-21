@@ -60,7 +60,7 @@ export function initModelPicker(opts: {
   const renderChip = () => {
     if (!info) return;
     label.textContent = info.label;
-    const what = `${info.hosted ? "Noa AI · " : ""}${info.model}${info.jevActive ? " with Jev" : ""}`;
+    const what = `${info.hosted ? "Noa AI · " : info.local ? "your computer · " : ""}${info.model || "no model picked"}${info.jevActive ? " with Jev" : ""}`;
     chip.title = info.outOfCredit
       ? `${OUT_OF_CREDIT}: top up or subscribe to keep using Noa AI`
       : running
@@ -83,9 +83,16 @@ export function initModelPicker(opts: {
     if (!info) return;
     const current = info.model;
     // The hosted AI runs only the models it prices; your own key or Claude Code can run any id.
-    const models =
-      info.hosted || isClaudeModel(current) || !current ? CLAUDE_MODELS : [...CLAUDE_MODELS, { id: current, label: modelLabel(current) }];
-    const rows: Node[] = [h("div.mm-head", { role: "presentation" }, info.hosted ? "Noa AI model" : "Model")];
+    // The local model is whichever one Settings picked from its server.
+    const models = info.local
+      ? current
+        ? [{ id: current, label: current }]
+        : []
+      : info.hosted || isClaudeModel(current) || !current
+        ? CLAUDE_MODELS
+        : [...CLAUDE_MODELS, { id: current, label: modelLabel(current) }];
+    const rows: Node[] = [h("div.mm-head", { role: "presentation" }, info.hosted ? "Noa AI model" : info.local ? "Local model" : "Model")];
+    if (info.local && !current) rows.push(h("div.mm-credit", { role: "presentation", "data-tone": "warn" }, "None picked: choose one in Settings"));
     for (const m of models) {
       const on = m.id === current;
       // How fast and how costly, from the model catalog (none for an id it does not offer).

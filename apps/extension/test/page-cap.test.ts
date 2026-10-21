@@ -66,6 +66,31 @@ describe("snapshotPage: more controls than the cap", () => {
     expect(snap.elements.filter((e) => e.inViewport).length).toBeGreaterThan(20);
   });
 
+  it("keeps the options of a dropdown open from the dialog, mounted after it, those scrolled out of its list too", async () => {
+    // Live (Oct 19): Cloudflare's record Type list (Base UI) is mounted at the end of <body>, outside the dialog, and
+    // its last options were scrolled out of the list and the window: the cut dropped TXT and URI, and the agent could
+    // not pick TXT by number. The table's rows in view took their place.
+    const types = ["A", "AAAA", "CAA", "CERT", "CNAME", "DNSKEY", "DS", "HTTPS", "LOC", "MX", "NAPTR", "NS", "OPENPGPKEY", "PTR", "SMIMEA", "SRV", "SSHFP", "SVCB", "TLSA", "TXT", "URI"];
+    const listbox = `<div role="listbox" id="types" style="position: fixed; top: 120px; left: 20px; height: 700px; overflow-y: auto; background: white">${types.map((t) => `<div role="option" style="height: 40px">${t}</div>`).join("")}</div>`;
+    await tab.setContent(
+      page(true).replace("<label>Type <select><option>A</option><option>CNAME</option></select></label>", '<span id="tl">Type</span><button role="combobox" aria-labelledby="tl" aria-haspopup="listbox" aria-expanded="true" aria-controls="types">A</button>') +
+        listbox,
+    );
+    const snap = await snapshot();
+    expect(snap.truncated).toBe(true);
+    const options = snap.elements.filter((e) => e.role === "option");
+    expect(options.map((e) => e.name)).toEqual(types);
+    expect(options.find((e) => e.name === "URI")!.inViewport).toBe(false);
+  });
+
+  it("an expanded accordion's panel is no popup: its controls out of view are cut like the rest", async () => {
+    const panel = `<div id="faq">${Array.from({ length: 40 }, (_, i) => `<a href="/faq/${i}">Answer ${i}</a>`).join("")}</div>`;
+    await tab.setContent(page(false) + `<button aria-expanded="true" aria-controls="faq">Questions</button>${panel}`);
+    const snap = await snapshot();
+    expect(snap.truncated).toBe(true);
+    expect(snap.elements.some((e) => e.name === "Answer 39")).toBe(false);
+  });
+
   it("a page within the cap lists every control in page order, as before", async () => {
     await tab.setContent(page(true, 100));
     const snap = await snapshot();

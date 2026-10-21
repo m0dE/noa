@@ -158,13 +158,13 @@ describe("ReasoningGovernor", () => {
 describe("reasoningParams (per model, from Anthropic's thinking table)", () => {
   it("Sonnet 5 (switchable): Fast turns thinking off; raised and Thorough are adaptive with room for the thinking", () => {
     expect(reasoningParams("claude-sonnet-5", "fast")).toEqual({ thinking: { type: "disabled" } });
-    for (const when of ["raised", "thorough"] as const) expect(reasoningParams("claude-sonnet-5", when)).toEqual({ thinking: { type: "adaptive" }, max_tokens: THINKING_MAX_TOKENS });
+    for (const when of ["raised", "thorough"] as const) expect(reasoningParams("claude-sonnet-5", when)).toEqual({ thinking: { type: "adaptive", display: "summarized" }, max_tokens: THINKING_MAX_TOKENS });
   });
 
   it("Opus 5.5 and Fable 5.1 (always think; disabled is a 400): Fast is low effort, raised and Thorough their default effort", () => {
     for (const model of ["claude-opus-5-5", "claude-fable-5-1"]) {
-      expect(reasoningParams(model, "fast")).toEqual({ thinking: { type: "adaptive" }, output_config: { effort: "low" } });
-      expect(reasoningParams(model, "raised")).toEqual({ thinking: { type: "adaptive" }, max_tokens: THINKING_MAX_TOKENS });
+      expect(reasoningParams(model, "fast")).toEqual({ thinking: { type: "adaptive", display: "summarized" }, output_config: { effort: "low" } });
+      expect(reasoningParams(model, "raised")).toEqual({ thinking: { type: "adaptive", display: "summarized" }, max_tokens: THINKING_MAX_TOKENS });
     }
   });
 

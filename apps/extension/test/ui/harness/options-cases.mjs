@@ -105,9 +105,9 @@ const headerChecks = (p, signedIn) => [
 export const OPTION_CASES = [
   ["options-header-signedin", "opt-paid", "#ai", () => {}, (p) => headerChecks(p, true)],
   ["options-header-signedout", "opt-signedout", "#ai", () => {}, (p) => headerChecks(p, false)],
-  // No source picked yet (the saved "auto"): no Auto radio; the source that runs now is checked, here Local Claude Code.
+  // No source picked yet (the saved "auto"): no Auto radio; the source that runs now is checked, here Local Claude Code (no usage credit).
   ["options-ai-auto", "ok", "#ai", onFree, (p) => [
-    ["sources: Local Claude Code first, no Auto, no (Recommended)", async () => (await p.locator(".opt[data-brain] .opt-head b").allTextContents()).join("|") === "Local Claude Code|Noa AI|Claude API"],
+    ["sources: Noa AI first, no Auto, no (Recommended)", async () => (await p.locator(".opt[data-brain] .opt-head b").allTextContents()).join("|") === "Noa AI|Local Claude Code|Claude API"],
     ["Local Claude Code checked", () => p.isChecked(radio("claude-code"))],
     ["API key hidden", async () => !(await shown(p, "[data-secret=anthropicApiKey]"))],
     ["helper shown under Local Claude Code", async () => (await shown(p, "#helper-headline")) && (await p.evaluate(() => document.getElementById("helper-box").closest(".opt")?.dataset.brain)) === "claude-code"],
@@ -120,9 +120,9 @@ export const OPTION_CASES = [
     ["Reasoning: Thorough, with its hint", async () => (await p.inputValue("#f-reasoning")) === "thorough" && /Thinks before steps/.test(await p.textContent("#reasoning-hint"))],
     ["Think harder when stuck hidden (Thorough already thinks)", async () => !(await shown(p, "#f-reasoningAutoRaise"))],
   ]],
-  // Not picked yet, the user's own Claude runs first: with the helper working, Local Claude Code even on a plan with credit.
+  // Not picked yet, logged in with credit: Noa AI runs first, even with the helper working.
   ["options-ai-auto-plus", "ok", "#ai", onPlus, (p) => [
-    ["Local Claude Code checked over Noa AI", async () => (await p.isChecked(radio("claude-code"))) && !(await p.isChecked(radio("noa")))],
+    ["Noa AI checked over Local Claude Code", async () => (await p.isChecked(radio("noa"))) && !(await p.isChecked(radio("claude-code")))],
   ]],
   ["options-ai-hosted", "ok", "#ai", (d) => {
     onPlus(d);
@@ -162,7 +162,27 @@ export const OPTION_CASES = [
     ["log in button", () => shown(p, "#hosted-signin")],
     ["no credit shown", async () => !(await shown(p, "#hosted-in"))],
   ]],
+  // The helper does not start: the headline sums it up, and the developer details hold Chrome's words and a check command.
+  ["options-ai-helper-crashed", "ok", "#ai", (d) => {
+    d.state.settings.brain = "claude-code";
+    d.state.brain = {
+      effective: null,
+      helper: null,
+      helperError: "Helper crashed",
+      helperErrorDetail: "Error when communicating with the native messaging host.",
+      hasApiKey: false,
+      jevActive: false,
+    };
+  }, (p) => [
+    ["headline says crashed", async () => (await p.textContent("#helper-headline")) === "Helper crashed"],
+    ["details closed at first", async () => !(await p.$eval("#helper-debug", (el) => el.open))],
+    ["expands", async () => (await p.click("#helper-debug summary"), await p.$eval("#helper-debug", (el) => el.open))],
+    ["Chrome's words in the details", async () => /Chrome said: Error when communicating/.test(await p.textContent("#helper-debug-text"))],
+    ["check command in the details", async () => /--check/.test(await p.textContent("#helper-debug-text"))],
+    ["copy button", () => shown(p, "#helper-debug-copy")],
+  ]],
   ["options-ai-claudecode", "ok", "#ai", (d) => (d.state.settings.brain = "claude-code"), (p) => [
+    ["no developer details when connected", async () => !(await shown(p, "#helper-debug"))],
     ["helper shown", () => shown(p, "#helper-headline")],
     ["no install steps when connected", async () => !(await shown(p, "#helper-install"))],
     ["API key hidden", async () => !(await shown(p, "[data-secret=anthropicApiKey]"))],
@@ -208,7 +228,8 @@ export const OPTION_CASES = [
     ["Save disabled until typed", async () => !(await p.isEnabled("[data-secret=anthropicApiKey] button.primary"))],
   ]],
   // Jev (it had its own Speed section): #jev and #speed open the AI section on its Speed tab.
-  ["options-speed-on", "ok", "#jev", () => {}, (p) => [
+  // On Local Claude Code (auto would run Noa AI here, which brings its own Jev and asks for no key).
+  ["options-speed-on", "ok", "#jev", (d) => (d.state.settings.brain = "claude-code"), (p) => [
     ["on the AI section", async () => (await p.getAttribute("#tab-ai", "aria-selected")) === "true"],
     ["no Speed section in the sidebar", async () => (await p.locator("#tab-speed").count()) === 0],
     ["hash normalised", async () => (await p.evaluate(() => location.hash)) === "#ai"],

@@ -177,6 +177,11 @@ export function observe(book: TraceBook, ev: AgentEvent, t: number): void {
       book.awaiting = t;
       return;
     case "assistant_text_delta":
+      // The thinking's summary is the agent showing it is at work, not text it wrote.
+      if (ev.thinking) {
+        responded(book, turn, t, "thinking");
+        return;
+      }
       if (turn) {
         turn.deltas++;
         turn.firstDelta ??= t;

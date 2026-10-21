@@ -13,6 +13,7 @@
   "dependencies": {
     "@noa/core": "workspace:*",
     "@noa/shared": "workspace:*",
+    "qrcode-generator": "^2.0.4",
     "zod": "^4.1.0"
   },
   "devDependencies": {

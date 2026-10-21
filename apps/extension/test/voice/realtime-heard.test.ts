@@ -78,6 +78,9 @@ async function session(viewing: number) {
     tabPage: async (id) => (id === 1 ? { title: "Intercom", url: "https://app.intercom.com/" } : { title: "Ticket", url: "https://tickets.example/" }),
     goToTab: () => {},
     onSpeaking: () => {},
+    openChat: async () => null,
+    dropChat: () => {},
+    onHearing: () => {},
     keepSpoken: () => {},
     // voice.heard: kept as a heard event.
     keepHeard: (_s, text) => void chat.push({ type: "heard", text }),
@@ -86,7 +89,7 @@ async function session(viewing: number) {
     engines: async () => ({ default: "realtime", engines: [{ id: "realtime", name: "Realtime", model: "gpt-realtime-2.1", approxCentsPerMinute: 6, assumption: "", available: true }] }) as VoiceEnginesResponse,
     saveSettings: async () => {},
     createEngine: (_id, events) =>
-      new RealtimeEngine({
+      new RealtimeEngine({ passOnEverything: false, 
         ticket: async () => ({ url: "wss://x/v1/ai/realtime", token: "t" }),
         createSource: () => ({ start: async () => {}, stop: () => {} }),
         events,
@@ -162,13 +165,13 @@ describe("Realtime: one message per request, the user's words folded under it", 
         t.socket.event({ type: "conversation.item.input_audio_transcription.completed", item_id: "in3", content_index: 0, transcript: W3 });
         t.socket.event({ type: "conversation.item.input_audio_transcription.failed", item_id: "in3", error: { message: "x" } });
         await settle(30);
-        // The first two are the user thinking aloud, which the narrator answered itself (no tool call): heard, kept
-        // for the record, nothing sent. The third is the narrator's request (with the note on the tab the user looks
+        // The first two are the user thinking aloud, which the narrator answered itself (no tool call): heard, shown
+        // as the user's messages, nothing sent. The third is the narrator's request (with the note on the tab the user looks
         // at, when away).
         expect(t.deps.send).toHaveBeenCalledTimes(1);
         expect((t.deps.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toMatch(/^Forget that for now\. I want you to look at Intercom/);
         // One message a request, with the words that led to it.
-        expect(userBubbles(t.chat)).toEqual([{ text: REQUEST, heard: [W3] }]);
+        expect(userBubbles(t.chat)).toEqual([{ text: W1 }, { text: W2 }, { text: REQUEST, heard: [W3] }]);
         expect(t.chat.filter((e) => e.type === "heard").map((e) => (e as { text: string }).text)).toEqual([W1, W2]);
       });
     }

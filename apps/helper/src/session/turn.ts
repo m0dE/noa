@@ -5,7 +5,7 @@
  * shared with the Claude API brain.
  */
 import type { RunConfig, TaskRunResult, ToolName } from "@noa/shared";
-import { agentError, ENDED_WITHOUT_RESULT, EXITED_WITHOUT_RESULT, isTaskEndTool, timeLimitReached, toolBudget, toolCallLimitExceeded, toolCallLimitReached } from "@noa/core";
+import { agentError, ENDED_WITHOUT_RESULT, EXITED_WITHOUT_RESULT, isTaskEndTool, timeLimitReached, toolCallLimitExceeded, toolCallLimitReached, TurnBudget } from "@noa/core";
 
 export interface Turn {
   config: RunConfig;
@@ -16,7 +16,8 @@ export interface Turn {
   /** Persistent brains: the agent went idle without a task_* call. */
   idleEnd: boolean;
   lastError: string | null;
-  toolCalls: number;
+  /** The tool call budget (fed the session's events). */
+  budget: TurnBudget;
   /** When the time limit ends the turn (epoch ms; set with the limit's timer). */
   endsAt?: number;
   timeLimit?: ReturnType<typeof setTimeout>;
@@ -37,7 +38,7 @@ export function createTurn(config: RunConfig): Turn {
     timedOut: false,
     idleEnd: false,
     lastError: null,
-    toolCalls: 0,
+    budget: new TurnBudget(config.maxToolCalls),
     settle,
     settled,
   };
@@ -58,7 +59,7 @@ export function checkToolCall(t: Turn, name: ToolName): { refusal: string | null
   if (t.finish) return { refusal: ends ? "The task result was already recorded. Stop now." : "The task is finished. Stop now." };
   if (ends) return { refusal: null };
   const max = t.config.maxToolCalls;
-  const budget = toolBudget(++t.toolCalls, max);
+  const budget = t.budget.next();
   if (budget === "stop") {
     if (t.abortReason === null) t.abortReason = toolCallLimitExceeded(max);
     return { refusal: "Tool call limit exceeded. The task was stopped.", stop: true };

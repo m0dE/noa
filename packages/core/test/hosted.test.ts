@@ -1,7 +1,7 @@
 /** The Noa hosted AI: startApiAgent with a custom endpoint and bearer auth, 402 handling, and Jev through the proxy. */
 import { describe, expect, it, vi } from "vitest";
 import { startApiAgentWith } from "../src/api-agent.js";
-import { HOSTED_AI_UNAVAILABLE, HOSTED_AI_UNAVAILABLE_CODE, LOW_CREDIT, OUT_OF_CREDIT } from "@noa/shared";
+import { HOSTED_AI_UNAVAILABLE, HOSTED_AI_UNAVAILABLE_CODE, hostedAiUnavailableText, LOW_CREDIT, OUT_OF_CREDIT } from "@noa/shared";
 import { OutOfCreditError } from "../src/api-errors.js";
 import { createJev, withoutCreditPause } from "../src/jev.js";
 import { createToolExecutor } from "../src/executor.js";
@@ -79,6 +79,14 @@ describe("hosted AI transport", () => {
     expect(events.filter((e) => e.type === "error")).toEqual([{ type: "error", text: HOSTED_AI_UNAVAILABLE }]);
   });
 
+  it("502 hosted_ai_unavailable with the server's reason fails with why", async () => {
+    const reason = "Anthropic refused Noa's requests (HTTP 403: Request not allowed)";
+    const body = { error: HOSTED_AI_UNAVAILABLE_CODE, message: "Noa AI is temporarily unavailable. Try again later, or use your own Claude in Settings.", reason };
+    const { session, events } = hosted([{ status: 502, body }], { label: "Noa AI" });
+    expect(await session.done).toEqual({ outcome: "failed", reason: hostedAiUnavailableText(reason) });
+    expect(events.filter((e) => e.type === "error")).toEqual([{ type: "error", text: `${HOSTED_AI_UNAVAILABLE}: ${reason}` }]);
+  });
+
   it("server errors from the proxy are retried as transient with the proxy's label", async () => {
     const { session, requests } = hosted([{ status: 503, body: { error: "upstream" } }]);
     const r = await session.done;
@@ -131,9 +139,22 @@ describe("createJev through the Noa proxy", () => {
   });
 
   it("a machine code with a message reads as the message", async () => {
+    const s = fakeMessagesServer([{ status: 403, body: { error: "plan_required", message: "Voice needs a paid plan." } }]);
+    const jev = createJev("t", { fetch: s.fetchImpl, endpoint: "https://api.test/v1/ai/jev" });
+    await expect(jev.decide({ goal: "g", snapshot })).rejects.toThrow("Jev HTTP 403: Voice needs a paid plan.");
+  });
+
+  it("hosted_ai_unavailable without a reason reads as the plain line", async () => {
     const s = fakeMessagesServer([{ status: 502, body: { error: HOSTED_AI_UNAVAILABLE_CODE, message: "Noa AI is temporarily unavailable." } }]);
     const jev = createJev("t", { fetch: s.fetchImpl, endpoint: "https://api.test/v1/ai/jev" });
-    await expect(jev.decide({ goal: "g", snapshot })).rejects.toThrow("Jev HTTP 502: Noa AI is temporarily unavailable.");
+    await expect(jev.decide({ goal: "g", snapshot })).rejects.toThrow(`Jev HTTP 502: ${HOSTED_AI_UNAVAILABLE}`);
+  });
+
+  it("hosted_ai_unavailable with a reason reads with why", async () => {
+    const reason = "Jev rejected Noa's API key (HTTP 401: invalid api key)";
+    const s = fakeMessagesServer([{ status: 502, body: { error: HOSTED_AI_UNAVAILABLE_CODE, message: "Noa AI is temporarily unavailable.", reason } }]);
+    const jev = createJev("t", { fetch: s.fetchImpl, endpoint: "https://api.test/v1/ai/jev" });
+    await expect(jev.decide({ goal: "g", snapshot })).rejects.toThrow(`Jev HTTP 502: ${hostedAiUnavailableText(reason)}`);
   });
 
   it("other errors name the status", async () => {

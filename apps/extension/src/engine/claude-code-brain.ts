@@ -1,5 +1,5 @@
 /** Headless Claude Code in the helper, behind the Brain interface. */
-import { ATTACHMENT_CHUNK_BYTES, errorMessage, HelperErrorCode, rpcErrorCode, type AgentAttachment, type AgentEvent, type HelperInfo, type HelperMethods, type HelperNotifications, type RunConfig, type TaskRunResult, type TraceEvent } from "@noa/shared";
+import { ATTACHMENT_CHUNK_BYTES, errorMessage, HelperErrorCode, rpcErrorCode, type AgentAttachment, type AgentEvent, type ExtensionSettings, type HelperInfo, type HelperMethods, type HelperNotifications, type RunConfig, type TaskRunResult, type TraceEvent } from "@noa/shared";
 import { HELPER_CALL_TIMEOUT_MS } from "../helper-link.js";
 import { hostedJevEndpoint } from "./hosted-brain.js";
 import { bytesToBase64 } from "../base64.js";
@@ -18,9 +18,12 @@ export interface HelperLike {
 }
 
 
-/** Headless Claude Code in the helper (helper.runTask / helper.continueSession + helper.event). */
+/**
+ * An agent in the helper (helper.runTask / helper.continueSession + helper.event): headless Claude Code, or with
+ * `local` set the Local model brain, OpenCode on the model the user runs on their own computer (RunConfig.local).
+ */
 export class ClaudeCodeBrain implements Brain {
-  readonly kind = "claude-code" as const;
+  readonly kind: "claude-code" | "local";
   /** Attachments go to the helper, into the session's folder: Claude Code Reads and uploads them there. */
   readonly keepsAttachments = true as const;
   /** Task sessions alive in the helper, as it last reported them. */
@@ -40,8 +43,11 @@ export class ClaudeCodeBrain implements Brain {
       onLateTrace?: (sessionId: string, trace: TraceEvent) => void;
       /** The signed-in account's session while Noa's cloud Jev can be used (cloudJevUsable), else null. */
       cloudJev?: () => { token: string; apiBase: string } | null;
+      /** The Local model brain: its runs name the server in Settings (localModelUrl), and the helper runs them on OpenCode. */
+      local?: true;
     } = {},
   ) {
+    this.kind = opts.local ? "local" : "claude-code";
     helper.onNotification("helper.event", (p) => {
       if (p.event.type === "trace" && !this.running.has(p.sessionId)) this.opts.onLateTrace?.(p.sessionId, p.event.trace);
     });
@@ -60,7 +66,7 @@ export class ClaudeCodeBrain implements Brain {
           sessionId,
           task: opts.task,
           mediaPaths: opts.mediaPaths,
-          config: this.withCloudJev(opts.config),
+          config: this.runConfig(opts.config, opts.settings),
           ...(attachments.length ? { attachments: attachments.map(agentAttachment) } : {}),
         }),
       ),
@@ -75,7 +81,7 @@ export class ClaudeCodeBrain implements Brain {
     return this.run(sessionId, opts.onEvent, () =>
       this.after(this.send(sessionId, attachments.filter((a) => a.fresh)), () =>
         this.helper
-          .call("helper.continueSession", { sessionId, text: opts.text, config: this.withCloudJev(opts.config), ...(attachments.length ? { attachments: attachments.map(agentAttachment) } : {}) })
+          .call("helper.continueSession", { sessionId, text: opts.text, config: this.runConfig(opts.config, opts.settings), ...(attachments.length ? { attachments: attachments.map(agentAttachment) } : {}) })
           .catch((err: unknown) => {
             if (rpcErrorCode(err) === HelperErrorCode.sessionEnded) throw new SessionEndedError();
             throw err;
@@ -87,6 +93,12 @@ export class ClaudeCodeBrain implements Brain {
   /** `call` once `sending` is done; at once when nothing was sent (the turn starts without waiting a tick). */
   private after<T>(sending: Promise<void> | null, call: () => Promise<T>): Promise<T> {
     return sending ? sending.then(call) : call();
+  }
+
+  /** What the helper runs the turn with: the Local model's server and model (local brain), and Noa's cloud Jev (withCloudJev). */
+  private runConfig(config: RunConfig, settings: Pick<ExtensionSettings, "localModelUrl" | "localModel">): RunConfig {
+    const run = this.withCloudJev(config);
+    return this.opts.local ? { ...run, model: settings.localModel.trim(), local: { serverUrl: settings.localModelUrl } } : run;
   }
 
   /** Noa's cloud Jev for the helper, used when neither a key here nor its own is set (jevSourceFor). */
@@ -114,6 +126,8 @@ export class ClaudeCodeBrain implements Brain {
   }
 
   prewarm(config: RunConfig): void {
+    // OpenCode starts nothing ahead: each message is a run of its own.
+    if (this.opts.local) return;
     this.helper.call("helper.prewarm", { config: this.withCloudJev(config) }, { timeoutMs: HELPER_CALL_TIMEOUT_MS }).catch(() => {});
   }
 

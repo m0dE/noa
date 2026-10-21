@@ -180,6 +180,18 @@ export function areasNote(snap: PageSnapshot, before?: PageSnapshot): string[] {
 }
 const AREAS_HEADING = "scrollable areas with more content than they show";
 
+/** read_page's list of the page's pictures (see PageSnapshot.pictures): save_file keeps one by its address. */
+export function picturesNote(snap: PageSnapshot): string[] {
+  if (!snap.pictures?.length) return [];
+  return [
+    "--- pictures on this page, largest first (save_file with a picture's address as url keeps it) ---",
+    ...snap.pictures.map((p) => {
+      const size = p.width && p.height ? `${p.width}x${p.height} px` : "size unknown";
+      return `- ${p.text ? `${JSON.stringify(p.text)} ` : ""}(${size}, shown ${p.shownWidth}x${p.shownHeight}) ${p.url}${p.link ? ` [links to ${p.link}]` : ""}`;
+    }),
+  ];
+}
+
 /** The heading of read_page's page text. */
 export const TEXT_HEADING = "--- visible text ---";
 
@@ -197,6 +209,7 @@ export function formatSnapshot(snap: PageSnapshot, opts: { words?: boolean } = {
     TEXT_HEADING,
     textWithoutElements(snap.text, words ? words.listed : snap.elements),
     ...(snap.textCut ? [TEXT_CUT] : []),
+    ...picturesNote(snap),
     ...framesNote(snap),
   ].join("\n");
 }
@@ -229,13 +242,13 @@ export function formatTabSnapshots(reads: ({ tab: string; snap: PageSnapshot } |
       const { snap } = r;
       if (opts.words) {
         const list = listInWords(snap.elements, snap.truncated, MULTI_TAB_ELEMENTS);
-        return `${header}\n${[`URL: ${snap.url}`, `Title: ${snap.title}`, WORDS_HEADING, list.text, ...areasNote(snap), TEXT_HEADING, textWithoutElements(snap.text, list.listed), ...(snap.textCut ? [TEXT_CUT] : [])].join("\n")}`;
+        return `${header}\n${[`URL: ${snap.url}`, `Title: ${snap.title}`, WORDS_HEADING, list.text, ...areasNote(snap), TEXT_HEADING, textWithoutElements(snap.text, list.listed), ...(snap.textCut ? [TEXT_CUT] : []), ...picturesNote(snap)].join("\n")}`;
       }
       const extra = snap.elements.length - MULTI_TAB_ELEMENTS;
       if (extra <= 0) return `${header}\n${formatSnapshot(snap)}`;
       const shown = snap.elements.slice(0, MULTI_TAB_ELEMENTS);
       const note = `(${extra} more elements; switch_tab to ${r.tab} and call read_page for the full list)`;
-      const body = [`URL: ${snap.url}`, `Title: ${snap.title}`, formatElements(shown), note, ...areasNote(snap), TEXT_HEADING, textWithoutElements(snap.text, shown), ...(snap.textCut ? [TEXT_CUT] : [])];
+      const body = [`URL: ${snap.url}`, `Title: ${snap.title}`, formatElements(shown), note, ...areasNote(snap), TEXT_HEADING, textWithoutElements(snap.text, shown), ...(snap.textCut ? [TEXT_CUT] : []), ...picturesNote(snap)];
       return `${header}\n${body.join("\n")}`;
     })
     .join("\n\n");

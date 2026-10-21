@@ -30,6 +30,8 @@ const SEND_EVERY_MS = 100;
 const START_TIMEOUT_MS = 15_000;
 
 export interface RealtimeEngineDeps {
+  /** See RealtimeClientOptions.passOnEverything (default: every turn of the user's goes to the agent). */
+  passOnEverything?: boolean;
   /** Which Realtime engine this is (the ticket asks for its model); default realtime. */
   id?: "realtime" | "realtime-mini";
   /** Where to connect, with the session token. Rejects with the reason it cannot. */
@@ -124,6 +126,7 @@ export class RealtimeEngine implements HandsFreeEngine {
         ...(this.deps.languages ? { languages: this.deps.languages } : {}),
         ...(this.deps.language ? { language: this.deps.language } : {}),
         ...(this.deps.openSocket ? { open: this.deps.openSocket } : {}),
+        ...(this.deps.passOnEverything !== undefined ? { passOnEverything: this.deps.passOnEverything } : {}),
         handlers: {
           onReady: () => {
             if (started) return;
@@ -146,6 +149,7 @@ export class RealtimeEngine implements HandsFreeEngine {
           },
           onTool: (name, args, inputId, heard) => this.tool(name, args, inputId, heard),
           onHeard: (words) => !this.stopped && ev.userWords(words),
+          onUserText: (text, final) => !this.stopped && ev.partial(text, final),
           playing: () => this.player.playing,
           quietMs: () => this.player.quietMs,
           // Noise's reply: what of it plays stops.

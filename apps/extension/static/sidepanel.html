@@ -31,7 +31,7 @@
     </section>
     <header class="top">
       <!--
-        Over every view: the name, the jobs view (Home | Scheduled, job-list.ts; on a job's page it goes back to the
+        Over every view: the name, the jobs view (Home | Scheduled | History, job-list.ts; on a job's page it goes back to the
         list), the Noa folder (header.ts) and the account avatar with its menu (ui/account-menu.ts, built by header.ts).
       -->
       <div id="list-head" class="head">
@@ -39,6 +39,7 @@
         <div id="job-views" class="seg" role="tablist" aria-label="Jobs view">
           <button id="view-home" type="button" role="tab" data-view="home" aria-selected="true" aria-controls="job-groups">Home</button>
           <button id="view-scheduled" type="button" role="tab" data-view="scheduled" aria-selected="false" aria-controls="job-groups" tabindex="-1">Scheduled</button>
+          <button id="view-history" type="button" role="tab" data-view="history" aria-selected="false" aria-controls="job-groups" tabindex="-1">History</button>
         </div>
         <span class="spacer"></span>
         <button id="open-folder" type="button" class="icon head-icon" title="Open the Noa folder (Downloads/Noa)" aria-label="Open the Noa folder">

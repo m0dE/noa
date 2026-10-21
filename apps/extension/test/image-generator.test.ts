@@ -89,7 +89,7 @@ describe("ImageGenerator", () => {
       keepInCloud: async (png, name, folder) => {
         if (fail) throw new ApiRequestError(413, "Your cloud files are full");
         kept.push({ name, folder, type: png.type, bytes: png.size });
-        return true;
+        return { id: name, name, folder, contentType: png.type, size: png.size, createdAt: "2026-10-20T00:00:00.000Z" };
       },
       onCloudError: (err) => errors.push(err),
     });
@@ -103,5 +103,34 @@ describe("ImageGenerator", () => {
     expect(again.path).toBeTruthy();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(errors).toHaveLength(1);
+  });
+
+  it("Storage: cloud stores the picture there only (the path upload downloads it to), else here; this computer, no cloud copy", async () => {
+    const kept: string[] = [];
+    const written = () => chrome.downloads.items.map((i) => i.filename);
+    const make = (where: "cloud" | "local", ok = true) =>
+      new ImageGenerator({
+        settings: async () => ({ imageGeneration: true, imageModel: "gpt-image-2" }),
+        generate: async (req) => made(req),
+        preview: async () => PREVIEW,
+        keepInCloud: async (png, name, folder) => {
+          kept.push(`${folder}/${name}`);
+          return ok ? { id: "c1", name, folder, contentType: png.type, size: png.size, createdAt: "2026-10-20T00:00:00.000Z" } : null;
+        },
+        where: async () => where,
+        cloudPath: async (f) => `/home/me/Downloads/Noa/${f.folder}/${f.name}`,
+      });
+    const cloud = await make("cloud").generate({ prompt: "a cat", name: "cat" }, null);
+    expect(cloud.path).toBe("/home/me/Downloads/Noa/images/cat.png");
+    expect(kept).toEqual(["images/cat.png"]);
+    expect(written()).toEqual([]);
+    // The cloud cannot take it (no plan): kept here.
+    const here = await make("cloud", false).generate({ prompt: "a dog", name: "dog" }, null);
+    expect(here.path).toMatch(/dog\.png$/);
+    expect(written()).toEqual([expect.stringMatching(/Noa.images.dog\.png$/)]);
+    kept.length = 0;
+    await make("local").generate({ prompt: "a cow", name: "cow" }, null);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(kept).toEqual([]);
   });
 });

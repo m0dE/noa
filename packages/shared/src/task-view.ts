@@ -22,10 +22,18 @@ type Timing = { status: TaskStatus; notBefore?: string | null; retryAfter?: stri
 export const PAUSED_BY_USER = "Paused by you";
 /** Starts the pause reason of a job paused because its runs kept failing (failureHoldReason). */
 export const FAILURE_HOLD_PREFIX = "Paused after ";
+const FAILURE_HOLD_LAST = "Last: ";
 
 /** Why a job was paused after `failures` failed runs in a row, the last one for `last`. */
 export function failureHoldReason(failures: number, last: string): string {
-  return `${FAILURE_HOLD_PREFIX}${failures} failed runs in a row. Last: ${last}`;
+  return `${FAILURE_HOLD_PREFIX}${failures} failed runs in a row. ${FAILURE_HOLD_LAST}${last}`;
+}
+
+/** A pause reason as a list shows it: a failure hold (failureHoldReason) by its last failure alone, others as they are. */
+export function shortPauseReason(reason: string): string {
+  if (!reason.startsWith(FAILURE_HOLD_PREFIX)) return reason;
+  const at = reason.indexOf(FAILURE_HOLD_LAST);
+  return at < 0 ? reason : reason.slice(at + FAILURE_HOLD_LAST.length);
 }
 
 /**
@@ -125,19 +133,31 @@ export function isDueNow(task: Timing, now = Date.now(), source: "local" | "acco
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
+/** A time soon as its day and its time: { day: "Today" | "Tomorrow" | "Yesterday" | "Fri" | "Oct 12" | "Jan 2, 2027", time: "9:00 AM" }. */
+export function whenParts(iso: string, now = Date.now(), opts: { hour12?: boolean; tz?: string } = {}): { day: string; time: string } {
+  const { day, time } = whenPieces(iso, now, opts);
+  return { day, time };
+}
+
 /** A time soon, in words: "Today 3:00 PM", "Tomorrow 9:00 AM", "Fri 9:00 AM", "Oct 12, 9:00 AM" (in `tz`, default this runtime's). */
 export function whenText(iso: string, now = Date.now(), opts: { hour12?: boolean; tz?: string } = {}): string {
+  const { day, time, near } = whenPieces(iso, now, opts);
+  return near ? `${day} ${time}` : `${day}, ${time}`;
+}
+
+/** whenText's pieces; `near`: a day with a name (today, tomorrow, yesterday, a weekday this week), which reads without a comma before the time. */
+function whenPieces(iso: string, now: number, opts: { hour12?: boolean; tz?: string }): { day: string; time: string; near: boolean } {
   const tz = opts.tz ?? localTimeZone();
   const hour12 = opts.hour12 ?? prefersHour12();
   const w = wallTime(Date.parse(iso), tz);
   const n = wallTime(now, tz);
   const days = Math.round((Date.UTC(w.year, w.month - 1, w.day) - Date.UTC(n.year, n.month - 1, n.day)) / 86_400_000);
   const time = timeText(w.hour, w.minute, hour12);
-  if (days === 0) return `Today ${time}`;
-  if (days === 1) return `Tomorrow ${time}`;
-  if (days === -1) return `Yesterday ${time}`;
-  if (days > 1 && days < 7) return `${WEEKDAY_SHORT[new Date(Date.UTC(w.year, w.month - 1, w.day)).getUTCDay()]} ${time}`;
-  return `${MONTHS[w.month - 1]} ${w.day}${w.year === n.year ? "" : `, ${w.year}`}, ${time}`;
+  if (days === 0) return { day: "Today", time, near: true };
+  if (days === 1) return { day: "Tomorrow", time, near: true };
+  if (days === -1) return { day: "Yesterday", time, near: true };
+  if (days > 1 && days < 7) return { day: WEEKDAY_SHORT[new Date(Date.UTC(w.year, w.month - 1, w.day)).getUTCDay()]!, time, near: true };
+  return { day: `${MONTHS[w.month - 1]} ${w.day}${w.year === n.year ? "" : `, ${w.year}`}`, time, near: false };
 }
 
 /**

@@ -16,7 +16,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, posix, resolve } from "node:path";
+import { dirname, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { errorMessage, NATIVE_HOST_NAME } from "@noa/shared";
 import { loadConfig, repoRoot } from "./config.js";
@@ -43,11 +43,24 @@ export function buildManifest(opts: { extensionId: string; launcherPath: string 
   };
 }
 
-export function buildLauncher(opts: { nodePath: string; hostJsPath: string; env?: Record<string, string> }): string {
+/**
+ * The cmd launcher (Windows). cmd reads a .cmd file in the console's code page (949 on Korean Windows, 932 on
+ * Japanese ...), not UTF-8, so a path under C:\Users\플레이스엠 written as is reaches node garbled and the helper dies
+ * before answering ("Helper crashed"). host.js is named from the launcher's own folder (%~dp0, which cmd keeps in
+ * UTF-16) when on the same drive; whatever else is not ASCII gets the UTF-8 code page first.
+ */
+export function buildLauncher(opts: { nodePath: string; hostJsPath: string; launcherDir?: string; env?: Record<string, string> }): string {
   const lines = ["@echo off"];
   for (const [k, v] of Object.entries(opts.env ?? {})) lines.push(`set "${k}=${v}"`);
-  lines.push(`"${opts.nodePath}" "${opts.hostJsPath}" %*`);
+  lines.push(`"${opts.nodePath}" "${launcherRelative(opts.hostJsPath, opts.launcherDir)}" %*`);
+  if (lines.some((l) => /[^\x00-\x7f]/.test(l))) lines.splice(1, 0, "chcp 65001 >nul");
   return lines.join("\r\n") + "\r\n";
+}
+
+/** A Windows path as %~dp0<relative> from the launcher's folder, or as given on another drive (or no folder). */
+function launcherRelative(path: string, launcherDir: string | undefined): string {
+  if (!launcherDir || win32.parse(path).root.toLowerCase() !== win32.parse(launcherDir).root.toLowerCase()) return path;
+  return `%~dp0${win32.relative(launcherDir, path)}`;
 }
 
 /** A single-quoted sh word. */
@@ -124,7 +137,7 @@ function install(args: InstallArgs): void {
   if (process.platform === "win32") {
     const launcherPath = join(hostDir, LAUNCHER_NAME);
     const manifestPath = join(hostDir, MANIFEST_NAME);
-    writeFileSync(launcherPath, buildLauncher({ nodePath: process.execPath, hostJsPath, env: args.env }));
+    writeFileSync(launcherPath, buildLauncher({ nodePath: process.execPath, hostJsPath, launcherDir: hostDir, env: args.env }));
     writeFileSync(manifestPath, JSON.stringify(buildManifest({ extensionId, launcherPath }), null, 2));
     for (const key of REGISTRY_KEYS) reg(["add", key, "/ve", "/t", "REG_SZ", "/d", manifestPath, "/f"]);
     console.log(`  manifest: ${manifestPath}`);

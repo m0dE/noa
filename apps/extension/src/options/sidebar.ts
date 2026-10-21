@@ -24,6 +24,7 @@ const ICONS: Record<SectionId, { tone: Tone; paths: string }> = {
   tasks: { tone: "ok", paths: '<rect x="2.25" y="2.25" width="11.5" height="11.5" rx="2.5"/><path d="m5.25 8.1 1.9 1.9 3.6-3.9"/>' },
   logins: { tone: "teal", paths: '<rect x="3" y="7" width="10" height="6.75" rx="1.75"/><path d="M5.25 7V5.25a2.75 2.75 0 0 1 5.5 0V7M8 9.75v1.25"/>' },
   memory: { tone: "pink", paths: '<ellipse cx="8" cy="3.9" rx="5" ry="1.9"/><path d="M3 3.9v8.2c0 1.05 2.25 1.9 5 1.9s5-.85 5-1.9V3.9M3 8c0 1.05 2.25 1.9 5 1.9s5-.85 5-1.9"/>' },
+  storage: { tone: "sky", paths: '<path d="M4.5 12.75h7.25a2.75 2.75 0 0 0 .4-5.47A3.75 3.75 0 0 0 4.9 6.3 3.25 3.25 0 0 0 4.5 12.75z"/>' },
   advanced: { tone: "slate", paths: '<path d="M2.5 4.5h6M11.5 4.5h2M2.5 11.5h2M7.5 11.5h6"/><circle cx="10" cy="4.5" r="1.5"/><circle cx="6" cy="11.5" r="1.5"/>' },
 };
 

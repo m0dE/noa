@@ -9,7 +9,7 @@
  * URL setting changes, the extension is signed out of it. An earlier default
  * address of the same server (currentAccountApiBase) is not a change.
  */
-import { type CloudFileList, type CloudFolder, currentAccountApiBase, errorMessage, type ExtensionSettings, type GenerateImageRequest, type GenerateImageResponse, type MeBillingResponse, type SignInCodeResponse, type SpeakRequest, type TranscribeResponse, type VoiceEnginesResponse } from "@noa/shared";
+import { CLOUD_FILES_FEATURE, planAllows, type CloudFile, type CloudFileList, type CloudFolder, type FileMeta, type FileSearchResponse, MAX_FILE_SEARCH_QUERY_CHARS, currentAccountApiBase, errorMessage, type ExtensionSettings, type GenerateImageRequest, type GenerateImageResponse, type MeBillingResponse, type SignInCodeResponse, type SpeakRequest, type TranscribeResponse, type VoiceEnginesResponse } from "@noa/shared";
 import { ApiClient } from "../api-client.js";
 import type { StorageLike } from "../engine/kv.js";
 import type { StoredLocalTask } from "../engine/local-task-rules.js";
@@ -165,6 +165,11 @@ export class AccountService {
     return !!this.session() && todoAllowed(this.cache?.info?.plan);
   }
 
+  /** Signed in on a plan that includes cloud files (CLOUD_FILES_FEATURE). */
+  cloudFilesAllowed(): boolean {
+    return !!this.session() && planAllows(this.cache?.info?.plan, CLOUD_FILES_FEATURE);
+  }
+
   /** The account as the UI shows it. */
   async view(): Promise<AccountView> {
     const a = await this.load();
@@ -224,14 +229,13 @@ export class AccountService {
   }
 
   /**
-   * Keeps a copy of a file in the account's cloud files (POST /v1/files). False, sending nothing, when signed out or
-   * the plan has no cloud files. Throws ApiRequestError (e.g. 413 when they are full).
+   * Keeps a copy of a file in the account's cloud files (POST /v1/files): the stored file. Null, sending nothing, when
+   * signed out or the plan has no cloud files. Throws ApiRequestError (e.g. 413 when they are full).
    */
-  async keepInCloud(blob: Blob, filename: string, folder: CloudFolder = ""): Promise<boolean> {
+  async keepInCloud(blob: Blob, filename: string, folder: CloudFolder = "", meta?: FileMeta): Promise<CloudFile | null> {
     await this.load();
-    if (!this.todoAllowed()) return false;
-    await (await this.api()).uploadFile(blob, filename, folder);
-    return true;
+    if (!this.cloudFilesAllowed()) return null;
+    return (await this.api()).uploadFile(blob, filename, folder, meta);
   }
 
   /** The account's cloud files (GET /v1/files), or null when signed out. Throws ApiRequestError. */
@@ -239,6 +243,13 @@ export class AccountService {
     await this.load();
     if (!this.session()) return null;
     return (await this.api()).listFiles();
+  }
+
+  /** The account's files nearest in meaning to `query` (POST /v1/files/search), or null when signed out. Throws ApiRequestError. */
+  async searchCloudFiles(query: string): Promise<FileSearchResponse | null> {
+    await this.load();
+    if (!this.session()) return null;
+    return (await this.api()).searchFiles({ query: query.slice(0, MAX_FILE_SEARCH_QUERY_CHARS) });
   }
 
   /** A cloud file's download: its URL and the session's Authorization. Throws NotSignedInError. */
@@ -252,12 +263,22 @@ export class AccountService {
     return new AccountApi(this.apiOpts(this.apiBase)).voiceEngines();
   }
 
-  /** Realtime voice: the session's server and token, which the side panel offers the relay. Throws NotSignedInError. */
+  /**
+   * Realtime voice: the session's server and what the side panel offers the relay: a single-use ticket (the relay's
+   * WebSocket carries it in a header the server's logs keep), or the session token from a server without tickets
+   * (404). Throws NotSignedInError, or ApiRequestError.
+   */
   async realtimeSession(): Promise<{ apiBase: string; token: string }> {
     await this.load();
     const s = this.session();
     if (!s) throw new NotSignedInError();
-    return { apiBase: s.apiBase, token: s.token };
+    try {
+      const ticket = await new AccountApi({ ...this.apiOpts(s.apiBase), token: s.token, onUnauthorized: () => void this.expire(s.token) }).realtimeTicket();
+      return { apiBase: s.apiBase, token: ticket };
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.status === 404) return { apiBase: s.apiBase, token: s.token };
+      throw err;
+    }
   }
 
   /**

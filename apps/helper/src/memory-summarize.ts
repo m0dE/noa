@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { errorMessage, MEMORY_SUMMARIZE_TIMEOUT_MS, MEMORY_WRITER_CLAUDE_CODE_MODEL, type HelperMethods } from "@noa/shared";
+import { errorMessage, localMessagesBase, MEMORY_SUMMARIZE_TIMEOUT_MS, MEMORY_WRITER_CLAUDE_CODE_MODEL, MEMORY_WRITER_MAX_TOKENS, type HelperMethods } from "@noa/shared";
 import { claudeEnv, isolatedClaudeArgs, killTree } from "./claude-process.js";
 
 export type SummarizeResult = HelperMethods["memory.summarize"]["result"];
@@ -111,4 +111,42 @@ export function runMemorySummarize(opts: {
     });
     child.stdin!.end(opts.prompt, "utf8");
   });
+}
+
+/**
+ * memory.summarize for the Local model: one chat completion from the user's own server with the model the
+ * conversation ran on (the extension cannot post to Ollama: it refuses an extension's posts unless told otherwise).
+ */
+export async function localSummarize(opts: {
+  serverUrl: string;
+  model: string;
+  system: string;
+  prompt: string;
+  apiKey?: string | undefined;
+  timeoutMs?: number;
+  fetch?: typeof fetch;
+}): Promise<SummarizeResult> {
+  const base = localMessagesBase(opts.serverUrl);
+  if (!base) throw new Error(`The local model's server address is not a web address: ${opts.serverUrl}`);
+  const res = await (opts.fetch ?? fetch)(`${base}/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(opts.apiKey ? { authorization: `Bearer ${opts.apiKey}` } : {}) },
+    body: JSON.stringify({
+      model: opts.model,
+      max_tokens: MEMORY_WRITER_MAX_TOKENS,
+      messages: [
+        { role: "system", content: opts.system },
+        { role: "user", content: opts.prompt },
+      ],
+    }),
+    signal: AbortSignal.timeout(opts.timeoutMs ?? MEMORY_SUMMARIZE_TIMEOUT_MS),
+  });
+  const body = (await res.json().catch(() => null)) as { choices?: { message?: { content?: unknown } }[]; error?: { message?: unknown } } | null;
+  if (!res.ok) {
+    const why = typeof body?.error?.message === "string" ? `: ${body.error.message.slice(0, ERROR_DETAIL_CHARS)}` : "";
+    throw new Error(`The local model's server answered HTTP ${res.status}${why}`);
+  }
+  const text = body?.choices?.[0]?.message?.content;
+  if (typeof text !== "string" || !text.trim()) throw new Error("The local model's answer was empty");
+  return { text };
 }

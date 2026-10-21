@@ -138,3 +138,34 @@ describe("settings of the removed runner-key cloud sync", () => {
     expect(chrome.storage.local.data.settings).toEqual({ accountApiBase: ACCOUNT_API_BASE });
   });
 });
+
+describe("where Noa keeps files (fileStorage)", () => {
+  it("a choice from Settings > Storage is saved and read back; null follows the plan's default", async () => {
+    expect((await loadSettings()).fileStorage).toBeNull();
+    expect((await saveSettingsPatch({ fileStorage: "both" })).fileStorage).toBe("both");
+    expect((await loadSettings()).fileStorage).toBe("both");
+    expect((await saveSettingsPatch({ fileStorage: "local" })).fileStorage).toBe("local");
+    // Not a choice: the stored one stays.
+    expect((await saveSettingsPatch({ fileStorage: "elsewhere" as never })).fileStorage).toBe("local");
+  });
+
+  it("the earlier 'Keep copies in the cloud' turned off reads as this computer, and is moved once at worker start", async () => {
+    await chrome.storage.local.set({ settings: { cloudCopies: false } });
+    expect((await loadSettings()).fileStorage).toBe("local");
+    expect(await migrateStoredSettings()).toBe(true);
+    expect((await chrome.storage.local.get("settings")).settings).toEqual({ fileStorage: "local" });
+    expect(await migrateStoredSettings()).toBe(false);
+    expect((await loadSettings()).fileStorage).toBe("local");
+  });
+
+  it("turned on (or a choice made since) keeps its meaning: the old key just goes", async () => {
+    await chrome.storage.local.set({ settings: { cloudCopies: true } });
+    expect((await loadSettings()).fileStorage).toBeNull();
+    expect(await migrateStoredSettings()).toBe(true);
+    expect((await chrome.storage.local.get("settings")).settings).toEqual({});
+    await chrome.storage.local.set({ settings: { cloudCopies: false, fileStorage: "both" } });
+    expect((await loadSettings()).fileStorage).toBe("both");
+    await migrateStoredSettings();
+    expect((await chrome.storage.local.get("settings")).settings).toEqual({ fileStorage: "both" });
+  });
+});

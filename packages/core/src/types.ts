@@ -196,8 +196,8 @@ export interface ApiAgentOptions {
   label?: string;
   /**
    * Stream responses (server-sent events) and emit assistant_text_delta
-   * events as text is written. Default: on for x-api-key (Anthropic), off
-   * for bearer (the hosted AI's /v1/ai/messages answers whole messages).
+   * events as text and the thinking's summary are written. Default: on (a
+   * hosted AI server from before streaming turns it off for the conversation).
    */
   stream?: boolean;
   /**

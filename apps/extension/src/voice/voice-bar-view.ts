@@ -13,8 +13,7 @@
  * there, it does not end it).
  *
  * It says "Listening" only once it listens: until the microphone's audio
- * reaches the engine the session is starting, and the strip (grey, like the
- * orb) says what it waits on (startingText: "Connecting…", "Opening the
+ * reaches the engine the session is starting, and the strip (grey) says what it waits on (startingText: "Connecting…", "Opening the
  * mic…", "Still …" when slow). The panel stops a start that takes too long
  * and says why (sidepanel/hands-free.ts START_TIMEOUT_MS).
  *
@@ -48,15 +47,6 @@ export function startingText(step: StartStep, slow = false): string {
   const what = step === "connecting" ? "connecting…" : "opening the mic…";
   return slow ? `Still ${what}` : `${what[0]!.toUpperCase()}${what.slice(1)}`;
 }
-
-/** Under the orb while it does not listen yet: that first, then what it waits on. */
-export function notListeningCaption(step: StartStep | "reconnecting", slow = false): string {
-  if (step === "reconnecting") return "Not listening · reconnecting…";
-  return `Not listening yet · ${startingText(step, slow).toLowerCase()}`;
-}
-
-/** Under the orb once it listens (and has nothing else to say). */
-export const LISTENING_CAPTION = "Listening · go ahead · say “stop” to end";
 
 export interface VoiceBarInput {
   phase: VoiceBarPhase;
@@ -135,8 +125,8 @@ const STATUS: Record<Exclude<VoiceBarState, "elsewhere">, string> = {
 
 const HINTS: Record<Exclude<VoiceBarState, "elsewhere">, string> = {
   starting: "Not listening yet: wait for the sound, then talk",
-  listening: "Just talk · say “stop” to end",
-  hearing: "Just talk · say “stop” to end",
+  listening: "Just talk · it goes out when you finish",
+  hearing: "Just talk · it goes out when you finish",
   muted: "Microphone off · Unmute to talk",
   sending: "Say “cancel” or press Esc to take it back",
   working: "Still listening: talk to add to the task",

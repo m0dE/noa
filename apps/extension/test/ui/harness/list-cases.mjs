@@ -24,7 +24,9 @@ export const LIST_CASES = [
           key: b.dataset.key,
           title: b.querySelector(".job-title").textContent,
           meta: b.querySelector(".job-meta")?.textContent ?? "",
-          when: b.querySelector(".job-when").textContent,
+          when: b.querySelector(".job-when")?.textContent ?? "",
+          clock: b.querySelector(".job-clock") ? [b.querySelector(".clock-time").textContent, b.querySelector(".clock-day").textContent] : null,
+          pill: b.querySelector(".job-pill")?.textContent ?? "",
           aria: b.getAttribute("aria-label"),
         })),
       );
@@ -32,7 +34,7 @@ export const LIST_CASES = [
       if (row("chat:s-r1")?.title !== "Schedule 3x daily X posts" || row("chat:s-r1")?.when !== "now") fail(`titles: running row ${JSON.stringify(row("chat:s-r1"))}`);
       const web = row("chat:s-r2");
       if (web?.title !== "Check Chrome Web Store emails" || web.when !== "12 min ago" || web.meta !== "mail.google.com" || web.aria !== "Check Chrome Web Store emails, Done, 12 min ago, mail.google.com") fail(`titles: row ${JSON.stringify(web)}`);
-      if (row("chat:s-r3")?.meta !== "Needs you to pick dates") fail(`titles: needs-you row ${JSON.stringify(row("chat:s-r3"))}`);
+      if (row("chat:s-r3")?.meta !== "") fail(`titles: needs-you row ${JSON.stringify(row("chat:s-r3"))}`);
       await checkLayout(p, `titles ${label}`);
       await shoot(p, "panel-list-titles", size, scheme);
 
@@ -440,13 +442,14 @@ export const LIST_CASES = [
       await p.close();
     },
   },
-  // The two views: Home (Needs you, Running, Upcoming cut to its soonest 3 with "All scheduled (N) →", Recent) and
-  // Scheduled (every scheduled job, soonest first, paused last, each with Pause or Resume), switched by a segmented
+  // The three views: Home (Needs you, Running, Upcoming cut to its soonest 3 with "All scheduled (N) →", Recent),
+  // Scheduled (every scheduled job, soonest first, paused last, each with Pause or Resume) and History (every job that
+  // ran, newest first by day), switched by a segmented
   // control in the header beside "Noa" (a tablist: Left and Right), with the Noa folder button before the avatar; the
   // search under it, the whole width, filters the view shown; the panel keeps the view, and a tab picked on a job's
   // page goes back to the list in that view.
   {
-    names: ["panel-home", "panel-scheduled", "panel-scheduled-search"],
+    names: ["panel-home", "panel-scheduled", "panel-scheduled-search", "panel-history"],
     async run({ ctx, size, scheme, label, fail, groups, openPanel, openJob, backToList, shoot, checkLayout, reportErrors }) {
       const p = await openPanel(ctx, "views");
       const bar = await p.evaluate(() => {
@@ -468,7 +471,7 @@ export const LIST_CASES = [
           searchBelow: search.top >= seg.bottom,
         };
       });
-      if (bar.role !== "tablist" || JSON.stringify(bar.tabs) !== JSON.stringify([["Home", "true", 0], ["Scheduled", "false", -1]]) || bar.panel !== "view-home") fail(`views: the switch ${JSON.stringify(bar)}`);
+      if (bar.role !== "tablist" || JSON.stringify(bar.tabs) !== JSON.stringify([["Home", "true", 0], ["Scheduled", "false", -1], ["History", "false", -1]]) || bar.panel !== "view-home") fail(`views: the switch ${JSON.stringify(bar)}`);
       if (!bar.inHead || !bar.headLine || !bar.order || !bar.searchBelow || bar.searchWidth < size.w - 40) fail(`views: the header ${JSON.stringify(bar)}`);
 
       // Home: every group; Upcoming its soonest 3 and the way to the rest; the job paused by the user is not here, the
@@ -493,14 +496,15 @@ export const LIST_CASES = [
         [...document.querySelectorAll("#job-groups li")].map((li) => ({
           key: li.querySelector(".job-row").dataset.key,
           meta: li.querySelector(".job-meta")?.textContent ?? "",
-          when: li.querySelector(".job-when").textContent,
+          when: li.querySelector(".job-when")?.textContent ?? "",
+          clock: li.querySelector(".job-clock") ? [li.querySelector(".clock-time").textContent, li.querySelector(".clock-day").textContent] : null,
           toggle: li.querySelector(".job-toggle")?.textContent ?? null,
           toggleName: li.querySelector(".job-toggle")?.getAttribute("aria-label") ?? null,
         })),
       );
       const row = (k) => rows.find((r) => r.key === k);
       if (row("task:t10")?.toggle !== "Resume" || row("task:t10")?.when !== "Paused" || row("task:t1")?.toggle !== "Pause" || !/^Daily at /.test(row("task:t1")?.meta ?? "") || row("task:t9")?.meta !== "Once" || row("task:t5")?.toggle !== null) fail(`views: Scheduled rows ${JSON.stringify(rows)}`);
-      if (!/^Once · Paused after 3 failed runs/.test(row("task:t11")?.meta ?? "") && !/Paused after 3 failed runs/.test(row("task:t11")?.meta ?? "")) fail(`views: failing row ${JSON.stringify(row("task:t11"))}`);
+      if (!/ · the orders page did not load$/.test(row("task:t11")?.meta ?? "")) fail(`views: failing row ${JSON.stringify(row("task:t11"))}`);
       if (!row("task:t1")?.toggleName?.startsWith("Pause ")) fail(`views: toggle name ${JSON.stringify(row("task:t1"))}`);
       await checkLayout(p, `scheduled ${label}`);
       await shoot(p, "panel-scheduled", size, scheme);
@@ -528,6 +532,20 @@ export const LIST_CASES = [
       await checkLayout(p, `scheduled search ${label}`);
       await shoot(p, "panel-scheduled-search", size, scheme);
       await p.fill("#job-search", "");
+
+      // History: every job that ran (Home's Recent among them), by day, newest first; no ✕ on its rows.
+      await p.click("#view-history");
+      await p.waitForSelector('#view-history[aria-selected="true"]');
+      const past = await groups(p);
+      const days = ["Today", "Yesterday", "Previous 7 days", "Previous 30 days", "Older"];
+      const recent = home.find(([n]) => n === "Recent")?.[1] ?? [];
+      const inHistory = past.flatMap(([, keys]) => keys);
+      if (!past.length || past.some(([n]) => !days.includes(n)) || recent.some((k) => !inHistory.includes(k)) || inHistory.includes("task:t9")) fail(`views: History ${JSON.stringify({ past, recent })}`);
+      const historyUi = await p.evaluate(() => ({ placeholder: document.getElementById("job-search").placeholder, dismiss: document.querySelectorAll("#job-groups .job-dismiss").length }));
+      if (historyUi.placeholder !== "Search history" || historyUi.dismiss !== 0) fail(`views: History ${JSON.stringify(historyUi)}`);
+      await checkLayout(p, `history ${label}`);
+      await shoot(p, "panel-history", size, scheme);
+      await p.click("#view-scheduled");
 
       // The panel keeps the view: back from a job, and in its session storage.
       await openJob(p, "task:t9");

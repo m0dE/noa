@@ -317,3 +317,125 @@ describe("without a chat (no session using the slot)", () => {
     expect(activations()).toEqual([]);
   });
 });
+
+/**
+ * A run that ends needing the user in its tab (a sign-in, a code; agent-slots.ts showForUser, called by the runner at
+ * the turn's end): the tab comes forward under the same setting, and the chat says why once.
+ */
+describe("a run that pauses for the user in its tab", () => {
+  it("the tab comes forward (its window keeps its focus), and the chat is told it needs them there", async () => {
+    const slot = await runIn(makeSlots());
+    expect(await slot.showForUser!({ chat: true })).toBe(true);
+    expect(activations()).toEqual([runTab]);
+    expect(windowUpdates()).toEqual([]);
+    expect(told).toEqual([["S", { type: "auto_tab_switching", tab: "t1", url: "https://run.test/", why: "needs_you" }]]);
+    expect(requests).toEqual([]);
+  });
+
+  it("a chat's run switches even while the user is active in that window: the pause is Noa's reply to them", async () => {
+    chrome.idle.state = "active";
+    const slot = await runIn(makeSlots());
+    expect(await slot.showForUser!({ chat: true })).toBe(true);
+    expect(activations()).toEqual([runTab]);
+  });
+
+  it("a scheduled run's pause does not switch while the user is active in that window (their keys stay where they type)", async () => {
+    chrome.idle.state = "active";
+    const slot = await runIn(makeSlots());
+    expect(await slot.showForUser!({ chat: false })).toBe(false);
+    expect(activations()).toEqual([]);
+    expect(told).toEqual([]);
+    chrome.idle.state = "idle";
+    expect(await slot.showForUser!({ chat: false })).toBe(true);
+    expect(activations()).toEqual([runTab]);
+  });
+
+  it("the agent opened the page in a background tab and paused without switching to it: that tab comes forward", async () => {
+    const slot = await runIn(makeSlots(), userTab);
+    const [opened] = (await slot.browser.call("browser.openTabs", { urls: ["https://login.test/"] })).tabs;
+    chrome.tabs.updateCalls.length = 0;
+    expect(await slot.showForUser!({ chat: true })).toBe(true);
+    const loginTab = [...chrome.tabs.byId.values()].find((t) => t.url === "https://login.test/")!.id;
+    expect(activations()).toEqual([loginTab]);
+    expect(told).toEqual([["S", { type: "auto_tab_switching", tab: opened!.id, url: "https://login.test/", why: "needs_you" }]]);
+  });
+
+  it("a tool acted in the current tab after the background tab opened, or several opened at once: the current tab", async () => {
+    const slot = await runIn(makeSlots(), userTab);
+    await slot.browser.call("browser.openTabs", { urls: ["https://login.test/"] });
+    await slot.browser.call("browser.readPage", {});
+    chrome.tabs.updateCalls.length = 0;
+    // The current tab (the user's) is in front already: nothing moves.
+    expect(await slot.showForUser!({ chat: true })).toBe(true);
+    expect(activations()).toEqual([]);
+    await slot.browser.call("browser.openTabs", { urls: ["https://a.test/", "https://b.test/"] });
+    chrome.tabs.updateCalls.length = 0;
+    expect(await slot.showForUser!({ chat: true })).toBe(true);
+    expect(activations()).toEqual([]);
+  });
+
+  it("a tab named by the runner (it reached a login page) comes forward, whichever tab is current, though the runner stopped the run for it", async () => {
+    const slot = await runIn(makeSlots(), userTab);
+    await slot.browser.call("browser.openTabs", { urls: ["https://x.test/login", "https://b.test/"] });
+    const loginTab = [...chrome.tabs.byId.values()].find((t) => t.url === "https://x.test/login")!.id;
+    chrome.tabs.updateCalls.length = 0;
+    stopped = true;
+    expect(await slot.showForUser!({ chat: true, tabId: loginTab })).toBe(true);
+    expect(activations()).toEqual([loginTab]);
+  });
+
+  it("a tab already in front: nothing moves and nothing is said; a minimized window is shown again", async () => {
+    const slots = makeSlots();
+    await chrome.tabs.update(runTab, { active: true });
+    const slot = await runIn(slots);
+    expect(await slot.showForUser!({ chat: true })).toBe(true);
+    expect(activations()).toEqual([]);
+    expect(told).toEqual([]);
+    await chrome.windows.update(windowId, { state: "minimized" });
+    chrome.windows.updateCalls.length = 0;
+    expect(await slot.showForUser!({ chat: true })).toBe(true);
+    expect(windowUpdates()).toEqual([{ state: "normal" }]);
+  });
+
+  it("told once per conversation, apart from the screenshot notice", async () => {
+    const slot = await runIn(makeSlots());
+    await slot.screenshot();
+    await new Promise((r) => setTimeout(r, 0));
+    await chrome.tabs.update(userTab, { active: true });
+    await slot.showForUser!({ chat: true });
+    await chrome.tabs.update(userTab, { active: true });
+    await slot.showForUser!({ chat: true });
+    expect(told.map(([, e]) => (e as { why?: string }).why ?? "shot")).toEqual(["shot", "needs_you"]);
+  });
+
+  it("Auto tab switching off: the tab stays behind (the pill on the user's tab opens the chat), no card", async () => {
+    auto = false;
+    const slot = await runIn(makeSlots());
+    expect(await slot.showForUser!({ chat: true })).toBe(false);
+    expect(activations()).toEqual([]);
+    expect(requests).toEqual([]);
+    expect(told).toEqual([]);
+  });
+
+  it("full autonomy switches whatever the setting says, and says so", async () => {
+    auto = false;
+    level = "full";
+    chrome.idle.state = "active";
+    const slot = await runIn(makeSlots());
+    expect(await slot.showForUser!({ chat: false })).toBe(true);
+    expect(activations()).toEqual([runTab]);
+    expect(told).toEqual([["S", { type: "auto_tab_switching", tab: "t1", url: "https://run.test/", full: true, why: "needs_you" }]]);
+  });
+
+  it("never for a stopped run, nor a run whose tab is gone", async () => {
+    const slots = makeSlots();
+    const slot = await runIn(slots);
+    stopped = true;
+    expect(await slot.showForUser!({ chat: true })).toBe(false);
+    stopped = false;
+    await chrome.tabs.remove(runTab);
+    expect(await slot.showForUser!({ chat: true })).toBe(false);
+    expect(activations()).toEqual([]);
+    expect(told).toEqual([]);
+  });
+});

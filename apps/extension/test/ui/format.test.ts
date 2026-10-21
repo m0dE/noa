@@ -149,6 +149,12 @@ describe("model chip", () => {
     const opus = state({ settings: { ...DEFAULT_SETTINGS, anthropicModel: "claude-opus-5-5" } }, { jevActive: true });
     expect(modelChip(opus)).toMatchObject({ label: "Opus 5.5 · Jev", model: "claude-opus-5-5", jevActive: true });
   });
+  it("a local model: its own model, not the Claude one; says when none is picked", () => {
+    const local = (localModel: string, effective: UiState["brain"]["effective"]) => state({ settings: { ...DEFAULT_SETTINGS, brain: "local", localModel } }, { effective });
+    expect(modelChip(local("qwen3:8b", "local"))).toMatchObject({ local: true, hosted: false, model: "qwen3:8b", label: "qwen3:8b" });
+    expect(modelChip(local("", null))).toMatchObject({ local: true, model: "", label: "No local model" });
+    expect(modelChip(state()).local).toBe(false);
+  });
   it("offers the Jev switch only when a key exists somewhere", () => {
     expect(modelChip(state()).jevPossible).toBe(false);
     expect(modelChip(state({ settings: { ...DEFAULT_SETTINGS, jevApiKey: "set" } })).jevPossible).toBe(true);

@@ -281,8 +281,8 @@ describe("Realtime voice in the chat: one message per request, the user's words 
     expect(describeEvent({ type: "user_message", text: request })).toEqual({ kind: "user", text: request });
   });
 
-  it("words that led to no request (small talk, one sec) are kept for the record, not shown in the chat", () => {
-    expect(describeEvent({ type: "heard", text: "thanks" })).toEqual({ kind: "status", text: "" });
+  it("words that led to no request (small talk, one sec) show in the chat as the user's message, nothing marked", () => {
+    expect(describeEvent({ type: "heard", text: "thanks" })).toEqual({ kind: "user", text: "thanks", voice: true });
   });
 
   it("the first message of a voice chat: the request as understood, the words folded under it", () => {

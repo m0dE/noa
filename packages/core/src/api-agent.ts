@@ -15,7 +15,7 @@ import { agentError, CLAUDE_DECLINED, ENDED_WITHOUT_RESULT } from "./failures.js
 import { Interjections } from "./interjections.js";
 import { buildSystemPrompt, buildTaskPrompt, FOLLOW_UP_PREFIX } from "./prompts.js";
 import { raiseNote, ReasoningGovernor, reasoningParams, reasoningTrace } from "./reasoning.js";
-import { isTaskEndTool, timeLimitReached, toolBudget, toolCallLimitExceeded, toolCallLimitReached, turnEndEvents } from "./turn-rules.js";
+import { isTaskEndTool, timeLimitReached, toolCallLimitExceeded, toolCallLimitReached, TurnBudget, turnEndEvents } from "./turn-rules.js";
 import {
   buildRequest,
   postMessages,
@@ -68,7 +68,7 @@ export const NOT_RUN = "Not run: the turn was stopped before this tool ran.";
  * and at the end its span (outcome, stop reason, tokens). The deltas still go
  * to the chat (`onDelta`); only counts are kept.
  */
-function startModelCall(streaming: boolean, doFetch: typeof fetch, onDelta: (id: string, text: string) => void) {
+function startModelCall(streaming: boolean, doFetch: typeof fetch, onDelta: (id: string, text: string, thinking?: true) => void) {
   const t = Date.now();
   const took = stopwatch();
   let headersMs: number | undefined;
@@ -94,6 +94,8 @@ function startModelCall(streaming: boolean, doFetch: typeof fetch, onDelta: (id:
             deltas++;
             onDelta(`${messageId}:${index}`, text);
           },
+          // The thinking's summary: shown live, then gone (it never becomes assistant_text).
+          onThinking: (messageId: string, index: number, text: string) => onDelta(`${messageId}:${index}`, text, true),
           onToolStart: () => {
             toolStarted = true;
           },
@@ -159,8 +161,14 @@ export function startApiAgentWith(opts: ApiAgentOptions, internals: ApiAgentInte
   };
   if (opts.headers) transport.headers = opts.headers;
 
-  // Stream text as it is written: on by default for the Anthropic API; the hosted AI (bearer) answers whole messages.
-  const streaming = opts.stream ?? transport.auth !== "bearer";
+  // Stream text and thinking as they are written, from Anthropic and from the hosted AI alike.
+  let streaming = opts.stream ?? true;
+  /**
+   * The hosted AI's server is deployed apart from the extension: one from before it relayed streams and thinking
+   * summaries refuses them (400 "... not supported by hosted AI ..."). Then this conversation asks as it used to:
+   * whole messages, thinking not shown.
+   */
+  let legacyHosted = false;
   // Live text goes out in ~50 ms batches; every other event first sends what is pending.
   const batcher = new DeltaBatcher((e) => {
     try {
@@ -171,11 +179,14 @@ export function startApiAgentWith(opts: ApiAgentOptions, internals: ApiAgentInte
   });
   /** The executor, once it exists: task_complete checks the answer text the user reads, and may hold it back (noteText). */
   let textGate: Pick<ToolExecutor, "noteText" | "flushText"> | undefined;
+  /** The running turn's tool call budget (turn-rules.ts), fed the executor's events. */
+  let budget: TurnBudget | undefined;
   const emit = (e: AgentEvent) => {
     if (e.type === "assistant_text" || e.type === "assistant_text_delta") {
       if (textGate?.noteText?.(e)) return;
     } else if (e.type !== "trace") textGate?.flushText?.();
     reasoning.observe(e);
+    budget?.observe(e);
     batcher.emit(e);
   };
   const trace = (e: TraceDraft) => {
@@ -322,13 +333,14 @@ export function startApiAgentWith(opts: ApiAgentOptions, internals: ApiAgentInte
      * One request with retries. null means the turn already ended. "interrupted": a message from the user came
      * while the model was only writing (thinking or text, no tool call started), so the request was stopped and
      * its reply dropped: the next request carries the message at once, as Claude Code's interrupt does. A reply
-     * that is not streamed (the hosted AI) never shows where it is, so it is let finish.
+     * that is not streamed (a hosted AI server from before streaming) never shows where it is, so it is let finish.
      */
     const request = async (): Promise<MessagesResponse | "interrupted" | null> => {
       const thinking = reasoningNow();
-      const body = buildRequest({ model: opts.model, system, tools, messages, jev: jevOn, reasoning: reasoningParams(opts.model, thinking) });
+      const build = () => buildRequest({ model: opts.model, system, tools, messages, jev: jevOn, reasoning: reasoningParams(opts.model, thinking, legacyHosted ? { summary: false } : undefined) });
+      let body = build();
       for (let attempt = 0; ; attempt++) {
-        const call = startModelCall(streaming, doFetch, (id, text) => batcher.delta(id, text));
+        const call = startModelCall(streaming, doFetch, (id, text, thinkingText) => batcher.delta(id, text, thinkingText));
         const thisRequest = new AbortController();
         const endRequest = () => thisRequest.abort();
         controller.signal.addEventListener("abort", endRequest, { once: true });
@@ -352,6 +364,13 @@ export function startApiAgentWith(opts: ApiAgentOptions, internals: ApiAgentInte
         if (ended) return null;
         if (interrupted) return "interrupted";
         if (r.kind === "ok") return r.message;
+        if (r.kind === "unsupported" && !legacyHosted) {
+          legacyHosted = true;
+          streaming = false;
+          body = build();
+          attempt--;
+          continue;
+        }
         if (r.kind === "credit") {
           emit({ type: "error", text: r.reason });
           try {
@@ -367,7 +386,7 @@ export function startApiAgentWith(opts: ApiAgentOptions, internals: ApiAgentInte
           finish({ outcome: "failed", reason: transport.auth === "bearer" ? r.reason : KEY_REJECTED });
           return null;
         }
-        if (r.kind === "error") {
+        if (r.kind === "error" || r.kind === "unsupported") {
           emit({ type: "error", text: r.reason });
           finish({ outcome: "failed", reason: r.reason });
           return null;
@@ -389,7 +408,8 @@ export function startApiAgentWith(opts: ApiAgentOptions, internals: ApiAgentInte
 
     const loop = async () => {
       const max = config.maxToolCalls;
-      let toolCalls = 0;
+      const turnBudget = new TurnBudget(max);
+      budget = turnBudget;
       /** How the next request gets the user's waiting messages. */
       let route: "request" | "interrupt" = "request";
       while (!ended) {
@@ -446,17 +466,17 @@ export function startApiAgentWith(opts: ApiAgentOptions, internals: ApiAgentInte
             results.push(toolResultBlock(use.id, { text: `Tool ${use.name} is not available.${hint}`, isError: true }));
             continue;
           }
-          const budget = isTaskEndTool(name) ? "run" : toolBudget(++toolCalls, max);
-          if (budget === "stop") {
+          const verdict = isTaskEndTool(name) ? "run" : turnBudget.next();
+          if (verdict === "stop") {
             finish({ outcome: "failed", reason: toolCallLimitExceeded(max) });
             return;
           }
-          if (budget === "refuse") {
+          if (verdict === "refuse") {
             results.push(toolResultBlock(use.id, { text: toolCallLimitReached(max), isError: true }));
             continue;
           }
           // A Fast run's first task_fail: one careful look first, with its reasoning raised (never after the tool limit).
-          const recheck = name === "task_fail" && toolCalls < max ? reasoning.beforeTaskFail() : null;
+          const recheck = name === "task_fail" && !turnBudget.spent ? reasoning.beforeTaskFail() : null;
           if (recheck) {
             results.push(toolResultBlock(use.id, { text: recheck, isError: true }));
             continue;

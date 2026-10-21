@@ -32,6 +32,19 @@ describe("install", () => {
     );
   });
 
+  it("names host.js from the launcher's folder, so a non-English user name survives cmd's code page", () => {
+    const local = "C:\\Users\\플레이스엠\\AppData\\Local\\noa";
+    expect(buildLauncher({ nodePath: "C:\\Program Files\\nodejs\\node.exe", hostJsPath: `${local}\\helper\\host.js`, launcherDir: `${local}\\host` })).toBe(
+      '@echo off\r\n"C:\\Program Files\\nodejs\\node.exe" "%~dp0..\\helper\\host.js" %*\r\n',
+    );
+    // node under the user folder (nvm) is not ASCII either: the UTF-8 code page goes first.
+    expect(buildLauncher({ nodePath: `${local}\\nvm\\node.exe`, hostJsPath: `${local}\\helper\\host.js`, launcherDir: `${local}\\host` })).toBe(
+      `@echo off\r\nchcp 65001 >nul\r\n"${local}\\nvm\\node.exe" "%~dp0..\\helper\\host.js" %*\r\n`,
+    );
+    // Another drive has no relative path.
+    expect(buildLauncher({ nodePath: "node.exe", hostJsPath: "D:\\repo\\host.js", launcherDir: "C:\\noa\\host" })).toBe('@echo off\r\n"node.exe" "D:\\repo\\host.js" %*\r\n');
+  });
+
   it("builds the sh launcher, quoting paths and env values", () => {
     expect(buildShLauncher({ nodePath: "/opt/node/bin/node", hostJsPath: "/Users/me/repo/apps/helper/dist/host.js", env: { PATH: "/usr/bin:/bin", NOTE: "it's" } })).toBe(
       "#!/bin/sh\nexport PATH='/usr/bin:/bin'\nexport NOTE='it'\\''s'\nexec '/opt/node/bin/node' '/Users/me/repo/apps/helper/dist/host.js' \"$@\"\n",

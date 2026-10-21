@@ -3,10 +3,12 @@
  * usage credit), and it is saved as a PNG in the user's Noa folder, Downloads/Noa/images/<name>.png, where it stays
  * (it is the user's; nothing here deletes it). The agent gets its path, which upload takes, and a smaller JPEG preview
  * to look at: the PNG (1-3 MB as base64) may be larger than a native message to the helper carries (1 MB).
- * On a plan with cloud files a copy also goes to the account's "images" folder (POST /v1/files), in the background:
- * the tool never waits for it or fails because of it.
+ * Where it is kept follows Settings > Storage (FileStorage): both, a copy also goes to the account's "images" folder
+ * (POST /v1/files) in the background (the tool never waits for it or fails because of it); cloud only, it is stored
+ * there first and not written here (the path is where it is downloaded when uploaded), and kept here instead when the
+ * cloud cannot take it; this computer only, no cloud copy. Its prompt is kept as its note (FileMeta.about).
  */
-import { type BrowserMethods, type ExtensionSettings, type GenerateImageRequest, type GenerateImageResponse } from "@noa/shared";
+import { MAX_FILE_ABOUT_CHARS, type BrowserMethods, type CloudFile, type ExtensionSettings, type FileMeta, type FileStorage, type GenerateImageRequest, type GenerateImageResponse } from "@noa/shared";
 import { base64ToBytes, bytesToBase64 } from "../base64.js";
 import { ApiRequestError, NotSignedInError } from "../http-client.js";
 import { writeDownload, type DownloadsLike } from "./media-files.js";
@@ -48,8 +50,17 @@ export function imageFileBase(name: string | undefined, prompt: string): string 
  * in a JPEG). Null when this context cannot draw (no OffscreenCanvas).
  */
 export async function jpegPreview(png: Uint8Array<ArrayBuffer>): Promise<{ base64: string; mimeType: string } | null> {
+  const view = await jpegView(new Blob([png], { type: "image/png" }));
+  return view && { base64: view.base64, mimeType: view.mimeType };
+}
+
+/**
+ * Any picture the browser decodes (PNG, JPEG, GIF, WebP, BMP) as jpegPreview makes it, with the picture's own width
+ * and height: what view_file shows. Null when this context cannot draw; rejects when the bytes are not a picture.
+ */
+export async function jpegView(blob: Blob): Promise<{ base64: string; mimeType: string; width: number; height: number } | null> {
   if (typeof OffscreenCanvas === "undefined" || typeof createImageBitmap !== "function") return null;
-  const bitmap = await createImageBitmap(new Blob([png], { type: "image/png" }));
+  const bitmap = await createImageBitmap(blob);
   try {
     const scale = Math.min(1, PREVIEW_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
     const width = Math.max(1, Math.round(bitmap.width * scale));
@@ -61,8 +72,8 @@ export async function jpegPreview(png: Uint8Array<ArrayBuffer>): Promise<{ base6
     ctx.fillRect(0, 0, width, height);
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(bitmap, 0, 0, width, height);
-    const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: PREVIEW_JPEG_QUALITY });
-    return { base64: bytesToBase64(new Uint8Array(await blob.arrayBuffer())), mimeType: "image/jpeg" };
+    const out = await canvas.convertToBlob({ type: "image/jpeg", quality: PREVIEW_JPEG_QUALITY });
+    return { base64: bytesToBase64(new Uint8Array(await out.arrayBuffer())), mimeType: "image/jpeg", width: bitmap.width, height: bitmap.height };
   } finally {
     bitmap.close();
   }
@@ -77,7 +88,13 @@ export interface ImageGeneratorDeps {
    * Keeps a copy in the account's cloud files (AccountService.keepInCloud): resolves false when the plan has none.
    * Absent: no cloud copy.
    */
-  keepInCloud?(png: Blob, filename: string, folder: "images"): Promise<boolean>;
+  keepInCloud?(png: Blob, filename: string, folder: "images", meta: FileMeta): Promise<CloudFile | null>;
+  /** Where the user keeps files (Settings > Storage, fileStorageFor). Absent: both. */
+  where?(): Promise<FileStorage>;
+  /** The path in the Noa folder a cloud-only picture is downloaded to when it is uploaded (NoaFiles.adopt). */
+  cloudPath?(file: CloudFile): Promise<string>;
+  /** Keeps the note on the picture in the Noa folder (the helper's files.note). Absent or failing: no local note. */
+  note?(path: string, meta: FileMeta): Promise<void>;
   /** A cloud copy that failed (it is only logged: the picture is saved on this computer). */
   onCloudError?(err: unknown): void;
   downloads?: DownloadsLike;
@@ -111,18 +128,38 @@ export class ImageGenerator {
       throw err;
     }
     const png = base64ToBytes(made.base64);
-    const path = await this.save(`${IMAGES_FOLDER}/${imageFileBase(params.name, params.prompt)}.png`, made.base64);
-    this.copyToCloud(png, path);
+    const fileName = `${imageFileBase(params.name, params.prompt)}.png`;
+    // What it shows, for list_files to tell it from the user's other pictures later.
+    const meta: FileMeta = { about: `Made with generate_image: ${params.prompt}`.slice(0, MAX_FILE_ABOUT_CHARS) };
+    const where = (await this.deps.where?.()) ?? "both";
+    let path = where === "cloud" ? await this.cloudOnly(png, fileName, meta) : null;
+    if (!path) {
+      path = await this.save(`${IMAGES_FOLDER}/${fileName}`, made.base64);
+      if (this.deps.note) await this.deps.note(path, meta).catch(() => {});
+      if (where === "both") this.copyToCloud(png, path, meta);
+    }
     const preview = (await (this.deps.preview ?? jpegPreview)(png)) ?? { base64: made.base64, mimeType: made.mimeType };
     return { path, preview, size: made.size, quality: made.quality, chargedCents: made.chargedCents };
   }
 
+  /** Stores the picture in the cloud only: where upload finds it, or null when the cloud cannot take it. */
+  private async cloudOnly(png: Uint8Array<ArrayBuffer>, fileName: string, meta: FileMeta): Promise<string | null> {
+    if (!this.deps.keepInCloud || !this.deps.cloudPath) return null;
+    try {
+      const file = await this.deps.keepInCloud(new Blob([png], { type: "image/png" }), fileName, "images", meta);
+      return file ? await this.deps.cloudPath(file) : null;
+    } catch (err) {
+      this.deps.onCloudError?.(err);
+      return null;
+    }
+  }
+
   /** Sends the saved picture to the account's cloud files under the name it got here (Chrome may have numbered it). */
-  private copyToCloud(png: Uint8Array<ArrayBuffer>, path: string): void {
+  private copyToCloud(png: Uint8Array<ArrayBuffer>, path: string, meta: FileMeta): void {
     const keep = this.deps.keepInCloud;
     if (!keep) return;
     const name = path.split(/[\\/]/).pop() || "image.png";
-    void keep(new Blob([png], { type: "image/png" }), name, "images").catch((err: unknown) => this.deps.onCloudError?.(err));
+    void keep(new Blob([png], { type: "image/png" }), name, "images", meta).catch((err: unknown) => this.deps.onCloudError?.(err));
   }
 
   /** Writes the PNG into the download folder (a name already there gets a number); resolves with its absolute path. */

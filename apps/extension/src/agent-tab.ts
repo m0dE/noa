@@ -104,6 +104,11 @@ export interface AgentTabOptions {
 export class AgentTab {
   private readonly tabKey: string;
   private readonly tabsKey: string;
+  /**
+   * The one tab open() made last, in the background, while no tool has acted in the current tab since (see
+   * tabForUser). Kept in memory only: a restarted worker forgets it, and the current tab is used again.
+   */
+  private openedBehind: number | null = null;
 
   constructor(
     readonly slot = 0,
@@ -126,6 +131,7 @@ export class AgentTab {
    */
   async prepare(mode: TabMode, opts: { tabId?: number; owner?: string; userTabs?: boolean } = {}): Promise<number> {
     const tabId = mode === "current-tab" ? await this.pickCurrentTab(opts.tabId) : await this.pickOwnTab();
+    this.openedBehind = null;
     const previous = await this.state();
     const left = previous?.tabs.slice(1) ?? [];
     let kept: RunTab[] = [];
@@ -162,6 +168,7 @@ export class AgentTab {
   async park(owner: string): Promise<void> {
     const state = await this.state();
     if (!state || state.owner !== owner) return;
+    this.openedBehind = null;
     const [main, ...rest] = state.tabs;
     if (!rest.length) return;
     // The user's own tabs stay theirs: the next turn finds them again (prepare).
@@ -287,6 +294,7 @@ export class AgentTab {
       await this.save(state);
     }
     await addToGroup(created.map((t) => t.tabId));
+    this.openedBehind = !opts.current && created.length === 1 ? created[0]!.tabId : null;
     if (opts.current && created[0]) await this.followFromBlank(was, created[0].tabId);
     return created;
   }
@@ -330,8 +338,25 @@ export class AgentTab {
     const state = await this.state();
     if (!state) throw new Error(AGENT_TAB_CLOSED);
     await this.save({ ...state, current: tabId });
+    this.openedBehind = null;
     await this.followFromBlank(state.current, tabId);
     return tabId;
+  }
+
+  /** A tool acted in the current tab: that is where the agent works now, not a tab it opened behind it (tabForUser). */
+  actedInCurrent(): void {
+    this.openedBehind = null;
+  }
+
+  /**
+   * The tab a turn that ends needing the user (a sign-in, a code) needs them in: the one tab the agent opened in the
+   * background last, when no tool has acted in the current tab since (the agent opened the sign-in page and paused
+   * without switching to it); else the current tab. Null when there is no agent tab.
+   */
+  async tabForUser(): Promise<number | null> {
+    const behind = this.openedBehind;
+    if (behind !== null && (await this.tabIds()).includes(behind) && (await tabExists(behind))) return behind;
+    return this.tabId();
   }
 
   /**
@@ -372,6 +397,7 @@ export class AgentTab {
     const [main, ...opened] = state.tabs;
     if (!opened.length) return 0;
     const closed = await closeTabsOf(opened, this.opts.removeTabs);
+    this.openedBehind = null;
     await this.save({ ...state, tabs: [main], current: main.tabId, unreported: [] });
     return closed;
   }

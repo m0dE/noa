@@ -59,7 +59,7 @@ function setup() {
     failed: (f) => void log.push(`failed:${(f as { kind: string }).kind}`),
   };
   const player = { play: vi.fn(), stop: vi.fn(() => ({ itemId: "a1", playedMs: 800 })), close: vi.fn(), playing: false, pause: vi.fn(() => false), resume: vi.fn(), level: () => 0, quietMs: 0 };
-  const engine = new RealtimeEngine({
+  const engine = new RealtimeEngine({ passOnEverything: false, 
     ticket: async () => ({ url: "wss://api.test/v1/ai/realtime", token: "tok" }),
     createSource: () => mic,
     events,
@@ -137,7 +137,7 @@ describe("RealtimeEngine", () => {
     // The user's turn: its words, then the narrator's call for it.
     t.socket.event({ type: "input_audio_buffer.committed", item_id: "in1" });
     t.socket.event({ type: "response.created", response: { id: "r1" } });
-    t.socket.event({ type: "conversation.item.input_audio_transcription.completed", item_id: "in1", transcript: "post gm on x" });
+    t.socket.event({ type: "conversation.item.input_audio_transcription.completed", item_id: "in1", transcript: "post gm on x." });
     t.socket.event({ type: "response.function_call_arguments.done", call_id: "c1", name: "send_to_agent", arguments: JSON.stringify({ text: "Post gm on X" }) });
     await settle();
     expect(t.log).toContain("forward:Post gm on X");
@@ -146,7 +146,7 @@ describe("RealtimeEngine", () => {
 
   it("stop_task and end_voice reach the panel", async () => {
     const t = await started();
-    userSaid(t.socket, "stop it and goodbye");
+    userSaid(t.socket, "stop it and goodbye.");
     t.socket.event({ type: "response.function_call_arguments.done", call_id: "c1", name: "stop_task", arguments: "{}" });
     t.socket.event({ type: "response.function_call_arguments.done", call_id: "c2", name: "end_voice", arguments: "{}" });
     await settle();
@@ -158,7 +158,7 @@ describe("RealtimeEngine", () => {
 
   it("use_this_tab reaches the panel, and its answer goes back to the narrator; notes are silent system messages", async () => {
     const t = await started();
-    userSaid(t.socket, "use this tab");
+    userSaid(t.socket, "use this tab.");
     t.socket.event({ type: "response.function_call_arguments.done", call_id: "c1", name: "use_this_tab", arguments: "{}" });
     await settle();
     expect(t.log).toContain("useThisTab");
@@ -182,7 +182,7 @@ describe("RealtimeEngine", () => {
 
   it("cancel_request stops the task (the request already went to the agent)", async () => {
     const t = await started();
-    userSaid(t.socket, "never mind");
+    userSaid(t.socket, "never mind.");
     t.socket.event({ type: "response.function_call_arguments.done", call_id: "c1", name: "cancel_request", arguments: "{}" });
     await settle();
     expect(t.log).toContain("stopTask");

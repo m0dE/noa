@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { SAVE_FILE_MAX_BYTES } from "@noa/shared";
+import { SAVE_FILE_MAX_BYTES, type CloudFile } from "@noa/shared";
 import { FileSaver, lastDownloadFinder, savedName, type FileSaverDeps, type SaverDownloadsLike } from "../src/engine/file-saver.js";
 
 const NOA = "C:\\Users\\me\\Downloads\\Noa";
+
+/** The cloud's answer for a stored file. */
+const stored = (name: string, folder: string): CloudFile => ({ id: `c-${name}`, name, folder, contentType: "", size: 1, createdAt: "2026-10-20T00:00:00.000Z" });
 
 function saver(over: Partial<FileSaverDeps> = {}) {
   const written: { rel: string; text: string; type: string }[] = [];
@@ -13,7 +16,7 @@ function saver(over: Partial<FileSaverDeps> = {}) {
       written.push({ rel, text: await blob.text(), type: blob.type });
       return `C:\\Users\\me\\Downloads\\${rel.replace(/\//g, "\\")}`;
     },
-    cloud: async (blob, name, folder) => (cloud.push({ name, folder, type: blob.type }), { saved: true }),
+    cloud: async (blob, name, folder) => (cloud.push({ name, folder, type: blob.type }), { saved: true, file: stored(name, folder) }),
     folder: async () => NOA,
     ...over,
   };
@@ -24,9 +27,39 @@ describe("FileSaver", () => {
   it("saves a link's file in the Noa folder and the cloud, in the folder asked for", async () => {
     const { s, written, cloud } = saver();
     const r = await s.save({ url: "https://console.neon.tech/api/invoices/NEON-2026-09.pdf", folder: "Invoices/2026" }, {});
-    expect(r).toEqual({ path: `${NOA}\\Invoices 2026\\NEON-2026-09.pdf`, name: "NEON-2026-09.pdf", folder: "Invoices 2026", size: 8, contentType: "application/pdf", cloud: "saved" });
+    expect(r).toEqual({
+      path: `${NOA}\\Invoices 2026\\NEON-2026-09.pdf`,
+      local: true,
+      name: "NEON-2026-09.pdf",
+      folder: "Invoices 2026",
+      size: 8,
+      contentType: "application/pdf",
+      cloud: "saved",
+      meta: { source: "https://console.neon.tech/api/invoices/NEON-2026-09.pdf" },
+    });
     expect(written).toEqual([{ rel: "Noa/Invoices 2026/NEON-2026-09.pdf", text: "%PDF-1.4", type: "application/pdf" }]);
     expect(cloud).toEqual([{ name: "NEON-2026-09.pdf", folder: "Invoices 2026", type: "application/pdf" }]);
+  });
+
+  it("keeps what is known with both copies: the picture's size, its address, the open page and the note", async () => {
+    const png = new Uint8Array(33);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 3, 0x20, 0, 0, 2, 0x58]);
+    const notes: { path: string; meta: unknown }[] = [];
+    const metas: unknown[] = [];
+    const { s } = saver({
+      fetch: async () => new Response(new Blob([png], { type: "image/png" }), { headers: { "Content-Type": "image/png" } }),
+      cloud: async (_b, n, f, meta) => (metas.push(meta), { saved: true, file: stored(n, f) }),
+      note: async (path, meta) => void notes.push({ path, meta }),
+    });
+    const page = async () => ({ url: "https://shop.test/lamp", title: "Lamp – Shop" });
+    const r = await s.save({ url: "https://shop.test/cdn/7f3a.png", name: "lamp.png", folder: "products", about: "The lamp from the front" }, { page });
+    const meta = { width: 800, height: 600, source: "https://shop.test/cdn/7f3a.png", page: "https://shop.test/lamp", pageTitle: "Lamp – Shop", about: "The lamp from the front" };
+    expect(r.meta).toEqual(meta);
+    expect(notes).toEqual([{ path: `${NOA}\\products\\lamp.png`, meta }]);
+    expect(metas).toEqual([meta]);
+    // A file from this computer was not found on the open page; a failing note never fails the save.
+    const { s: s2 } = saver({ readLocal: async () => new Blob(["x"], { type: "text/plain" }), note: async () => Promise.reject(new Error("old helper")) });
+    expect((await s2.save({ path: "C:\\x\\a.txt", about: "a note" }, { page })).meta).toEqual({ about: "a note" });
   });
 
   it("names text by its extension, and gives a name without one the type's", async () => {
@@ -69,13 +102,44 @@ describe("FileSaver", () => {
     await expect(saver({ lastDownload: async () => null }).s.save({ download: true }, {})).rejects.toThrow(/has not downloaded a file in the last 15 minutes/);
   });
 
+  it("Storage: this computer keeps it here only; cloud keeps it there only, at the path upload downloads it to", async () => {
+    const local = saver({ where: async () => "local" });
+    const r = await local.s.save({ text: "hi", name: "a.txt" }, {});
+    expect(r).toMatchObject({ cloud: "off", local: true, path: `${NOA}\\a.txt` });
+    expect(local.written).toHaveLength(1);
+    expect(local.cloud).toEqual([]);
+
+    const notes: string[] = [];
+    const cloudOnly = saver({ where: async () => "cloud", cloudPath: async (f) => `${NOA}\\${f.folder}\\${f.name}`, note: async (p) => void notes.push(p) });
+    const c = await cloudOnly.s.save({ text: "hi", name: "a.txt", folder: "notes", about: "a note" }, {});
+    expect(c).toMatchObject({ cloud: "saved", local: false, path: `${NOA}\\notes\\a.txt`, name: "a.txt" });
+    expect(cloudOnly.written).toEqual([]);
+    expect(cloudOnly.cloud).toEqual([{ name: "a.txt", folder: "notes", type: "text/plain" }]);
+    // No note here: nothing is here (the cloud row keeps it).
+    expect(notes).toEqual([]);
+  });
+
+  it("Storage: cloud, when the cloud cannot take it, keeps it here instead and says why; a file already here stays", async () => {
+    for (const cloud of [async () => ({ saved: false as const, why: "no-plan" as const }), async () => Promise.reject(new Error("Your cloud files are full"))]) {
+      const t = saver({ where: async () => "cloud", cloudPath: async () => "unused", cloud });
+      const r = await t.s.save({ text: "hi", name: "a.txt" }, {});
+      expect(r).toMatchObject({ local: true, path: `${NOA}\\a.txt` });
+      expect(r.cloud).not.toBe("saved");
+      expect(t.written).toHaveLength(1);
+    }
+    const here = `${NOA}\\images\\logo.png`;
+    const t = saver({ where: async () => "cloud", cloudPath: async () => "unused", readLocal: async () => new Blob(["png"]) });
+    expect(await t.s.save({ path: here, folder: "images" }, {})).toMatchObject({ local: true, path: here, cloud: "saved" });
+    expect(t.written).toEqual([]);
+  });
+
   it("says when the cloud has no copy, and why; the local copy is kept anyway", async () => {
     expect((await saver({ cloud: async () => ({ saved: false, why: "no-plan" }) }).s.save({ text: "x", name: "a.txt" }, {})).cloud).toBe("no-plan");
     expect((await saver({ cloud: async () => ({ saved: false, why: "signed-out" }) }).s.save({ text: "x", name: "a.txt" }, {})).cloud).toBe("signed-out");
     const failed = await saver({ cloud: async () => Promise.reject(new Error("Your cloud files are full")) }).s.save({ text: "x", name: "a.txt" }, {});
     expect(failed).toMatchObject({ cloud: "failed", cloudError: "Your cloud files are full", path: `${NOA}\\a.txt` });
     // An older account server took it in the top folder.
-    expect((await saver({ cloud: async () => ({ saved: true, folder: "" }) }).s.save({ text: "x", name: "a.txt", folder: "notes" }, {})).cloudFolder).toBe("");
+    expect((await saver({ cloud: async () => ({ saved: true, file: stored("a.txt", ""), folder: "" }) }).s.save({ text: "x", name: "a.txt", folder: "notes" }, {})).cloudFolder).toBe("");
   });
 
   it("refuses what is not a file: a failed request, a web page instead of the file, a blob: link, one too large", async () => {

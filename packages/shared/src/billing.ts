@@ -192,8 +192,15 @@ export function lowCreditText(balanceCents: number, neededCents: number): string
  * log). Nothing the user sent is wrong; their own Claude still works.
  */
 export const HOSTED_AI_UNAVAILABLE_CODE = "hosted_ai_unavailable";
-/** What the user reads when the hosted AI answered HOSTED_AI_UNAVAILABLE_CODE (a failed turn's reason is exactly this). */
+/** What the user reads when the hosted AI answered HOSTED_AI_UNAVAILABLE_CODE (a failed turn's reason starts with this). */
 export const HOSTED_AI_UNAVAILABLE = "Noa AI is unavailable right now";
+/**
+ * A failed turn's reason for HOSTED_AI_UNAVAILABLE_CODE, with the answer's `reason` when it has one:
+ * "Noa AI is unavailable right now: Anthropic refused Noa's requests (HTTP 403: Request not allowed)".
+ */
+export function hostedAiUnavailableText(reason?: string): string {
+  return reason ? `${HOSTED_AI_UNAVAILABLE}: ${reason}` : HOSTED_AI_UNAVAILABLE;
+}
 
 /**
  * 402 of /v1/ai/* when the user has no credit left, or too little for the request (then with `balanceCents`

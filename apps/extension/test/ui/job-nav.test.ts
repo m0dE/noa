@@ -57,6 +57,8 @@ describe("JobNav: the list and a job's page", () => {
     storeView(storage, "scheduled");
     expect(storedView(storage)).toBe("scheduled");
     expect(new JobNav(storedView(storage)).listPlace()).toEqual({ view: "scheduled", query: "", scrollTop: 0, focusKey: null });
+    storeView(storage, "history");
+    expect(storedView(storage)).toBe("history");
     const blocked = { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } };
     expect(storedView(blocked)).toBe("home");
     expect(() => storeView(blocked, "home")).not.toThrow();

@@ -6,7 +6,7 @@
  * out of usage credit, a plan without the TODO list) with the button that fixes it. Jobs are paused one by one
  * (their rows and menus), never all at once from here. The brain in use is the brand's tooltip.
  */
-import { planAllows } from "@noa/shared";
+import { CLOUD_FILES_FEATURE, planAllows } from "@noa/shared";
 import { uiRequest, type AccountView, type UiState } from "../ui-protocol.js";
 import { openCloudFiles } from "../ui/billing.js";
 import { createAccountMenu } from "../ui/account-menu.js";
@@ -113,5 +113,5 @@ export function initHeader(deps: HeaderDeps): Header {
 
 /** Signed in on a plan with cloud files: the files button opens them (the dashboard's Files page). */
 export function hasCloudFiles(account: AccountView | undefined): boolean {
-  return !!account?.signedIn && !!account.filesUrl && planAllows(account.plan, "todo");
+  return !!account?.signedIn && !!account.filesUrl && planAllows(account.plan, CLOUD_FILES_FEATURE);
 }

@@ -18,8 +18,10 @@ const REMOVED_SETTING_KEYS = ["cloudEnabled", "apiBase", "runnerKey"];
 /**
  * Writes the stored account server back at its current address when it is an
  * earlier default (loadSettings already reads it that way), so storage, the
- * Advanced tab and the session agree, and deletes REMOVED_SETTING_KEYS. Runs
- * at every service worker start: install, update and browser start. True when it wrote.
+ * Advanced tab and the session agree; turns the earlier cloudCopies into
+ * fileStorage (loadSettings reads it that way too); and deletes
+ * REMOVED_SETTING_KEYS. Runs at every service worker start: install, update and
+ * browser start. True when it wrote.
  */
 export async function migrateStoredSettings(): Promise<boolean> {
   const raw: unknown = (await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY];
@@ -31,6 +33,12 @@ export async function migrateStoredSettings(): Promise<boolean> {
       delete next[key];
       changed = true;
     }
+  }
+  // "Keep copies in the cloud" (cloudCopies) became fileStorage: turned off, it is "local"; the old key goes.
+  if ("cloudCopies" in next) {
+    if (next.cloudCopies === false && next.fileStorage === undefined) next.fileStorage = "local";
+    delete next.cloudCopies;
+    changed = true;
   }
   const stored = next.accountApiBase;
   if (typeof stored === "string" && currentAccountApiBase(stored) !== stored) {

@@ -8,6 +8,7 @@ import { assertOpenable, BACKGROUND_SHOT_SKIPPED, NAV_TIMEOUT_MS, type CaptureVi
 import { fallbackNote, FallbackDriver } from "./fallback-driver.js";
 import { keyEvents } from "./keys.js";
 import { pageIndicators, type HiddenPart, type PageIndicators } from "./page-indicator.js";
+import { otherSite } from "./page-entered.js";
 import { leavingDocument, readWhenDrawn, stillLoadingNote, waitForUsablePage, type LoadProbe } from "./page-load.js";
 import { WAIT_MIN_GAP_MS, WAIT_POLL_MS, type PageWait, type PageWaitArgs } from "./page-wait.js";
 import { isDebuggerBlocked, isDebuggerDetached, isRestrictedError, isRestrictedUrl, RESTRICTED_TAB, restrictedToolError } from "./restricted.js";
@@ -153,22 +154,32 @@ export class Driver {
    * attach that the page's other-extension frame would drop; so does a tab
    * whose debugger Chrome drops during the navigation. After it, the debugger
    * is tried again only when the new page has no other extension's frame.
+   * A page whose form holds what was entered is not left for another site
+   * (page-entered.ts): the address opens in a new tab, the current one from then on.
    */
   async navigate({ url }: P<"browser.navigate">): Promise<WithNote<R<"browser.navigate">>> {
     assertOpenable(url);
     let started = false;
     let leaving: number | null = null;
-    const from = async (tabId: number, probe: (id: number) => Promise<LoadProbe | null>) => {
+    let keep: number | null = null;
+    /** Reads the page it leaves; true when that page is kept (its form holds entries and `url` is another site). */
+    const from = async (tabId: number, probe: (id: number) => Promise<LoadProbe | null>, entered: (id: number) => Promise<number>) => {
       const before = await chrome.tabs.get(tabId).then(tabUrl, () => undefined);
+      if (otherSite(before, url) && (await entered(tabId)) > 0) {
+        keep = tabId;
+        return true;
+      }
       leaving = leavingDocument(before, url, (await probe(tabId).catch(() => null))?.doc);
+      return false;
     };
-    return this.use(
+    const kept = { url: "", title: "" };
+    const r = await this.use(
       async (tabId) => {
-        await from(tabId, (id) => this.viaCdp.probe(id));
+        if (await from(tabId, (id) => this.viaCdp.probe(id), (id) => this.viaCdp.enteredFields(id))) return kept;
         return this.viaCdp.navigate(tabId, url, () => (started = true), leaving);
       },
       async (tabId) => {
-        if (leaving === null) await from(tabId, (id) => this.fallback.probe(id));
+        if (keep === tabId || (leaving === null && (await from(tabId, (id) => this.fallback.probe(id), (id) => this.fallback.enteredFields(id))))) return kept;
         // Page.navigate may have gone through before Chrome refused or dropped the debugger: then only wait.
         const heading = started || (await chrome.tabs.get(tabId).then((t) => t.pendingUrl === url, () => false));
         const { probe, ...r } = heading ? await this.fallback.waitForLoad(tabId, url, leaving) : await this.fallback.navigate(tabId, { url }, leaving);
@@ -179,6 +190,13 @@ export class Driver {
       undefined,
       { droppedGoesFallback: true },
     );
+    if (keep === null) return r;
+    const [t] = await this.agent.open([url], { current: true });
+    const loaded = await this.waitForTab(t!.tabId);
+    if (!(await tabExists(t!.tabId))) throw new Error(`Navigation to ${url} failed: ${loaded.error ?? "the tab was closed"}`);
+    const id = (await this.agent.shortId(keep)) ?? undefined;
+    const out: WithNote<R<"browser.navigate">> = { url: loaded.url || url, title: loaded.title, tab: t!.id, ...(id ? { kept: id } : {}) };
+    return r.note ? { ...out, note: r.note } : out;
   }
 
   /**
@@ -480,6 +498,7 @@ export class Driver {
     try {
       if (tabId === undefined) {
         tabId = await this.ready();
+        this.agent.actedInCurrent();
       } else {
         await this.attachOrFallback(tabId, false);
       }

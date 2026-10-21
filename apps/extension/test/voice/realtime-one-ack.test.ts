@@ -96,6 +96,9 @@ async function panel() {
     tabPage: async (id) => (id === 1 ? { title: "Intercom", url: "https://app.intercom.com/" } : { title: "Recipes", url: "https://recipes.example/" }),
     goToTab: () => {},
     onSpeaking: () => {},
+    openChat: async () => null,
+    dropChat: () => {},
+    onHearing: () => {},
     keepSpoken: () => {},
     keepHeard: () => {},
     settings: () => ({ voiceEngine: "realtime" }) as ExtensionSettings,
@@ -103,7 +106,7 @@ async function panel() {
     engines: async () => ENGINES,
     saveSettings: async () => {},
     createEngine: (_id, events) =>
-      new RealtimeEngine({
+      new RealtimeEngine({ passOnEverything: false, 
         ticket: async () => ({ url: "wss://x/v1/ai/realtime", token: "t" }),
         createSource: () => new Mic(),
         events,

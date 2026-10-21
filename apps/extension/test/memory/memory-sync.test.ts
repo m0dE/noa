@@ -47,13 +47,20 @@ function fakeServer() {
   return { api, calls, rows, forgotten: () => forgotten };
 }
 
+/** chrome.storage.local of a computer where the user chose to keep memory in the account. */
+function keptInAccount() {
+  const storage = memoryStorage();
+  storage.data[MEMORY_SYNC_KEY] = { where: "cloud" };
+  return storage;
+}
+
 let clock = Date.parse("2026-09-26T10:00:00Z");
 const now = () => new Date(clock);
 
 type Account = { userId: string; email: string; syncAllowed: boolean };
 
 function browser(server: ReturnType<typeof fakeServer>, account: Account | null, name: string) {
-  const storage = memoryStorage();
+  const storage = keptInAccount();
   let n = 0;
   const store = new MemoryStore({ storage, now, newId: () => `${name}${++n}` });
   const sync = new MemorySync({ store, storage, now, account: async () => (account ? { ...account, api: server.api } : null) });
@@ -142,7 +149,7 @@ describe("MemorySync", () => {
   it("stays on this computer while signed out or on a plan without it; the first sign-in to an empty account sends everything", async () => {
     const server = fakeServer();
     let account: Account | null = null;
-    const storage = memoryStorage();
+    const storage = keptInAccount();
     const store = new MemoryStore({ storage, now });
     const sync = new MemorySync({ store, storage, now, account: async () => (account ? { ...account, api: server.api } : null) });
     await store.put({ kind: "preference", subject: "Tone", text: "calm", scope: "global" }, CHAT);
@@ -159,7 +166,7 @@ describe("MemorySync", () => {
   it("signing in to another account sends nothing until the user adds this computer's memory to it", async () => {
     const server = fakeServer();
     let account: Account = ADA;
-    const storage = memoryStorage();
+    const storage = keptInAccount();
     const store = new MemoryStore({ storage, now });
     let asked = 0;
     const sync = new MemorySync({ store, storage, now, account: async () => ({ ...account, api: server.api }), onQuestionChange: () => asked++ });
@@ -184,7 +191,7 @@ describe("MemorySync", () => {
   it("keep separate: nothing goes to that account while it is signed in; the account it was synced with goes on", async () => {
     const server = fakeServer();
     let account: Account = ADA;
-    const storage = memoryStorage();
+    const storage = keptInAccount();
     const store = new MemoryStore({ storage, now });
     const sync = new MemorySync({ store, storage, now, account: async () => ({ ...account, api: server.api }) });
     await store.put({ kind: "preference", subject: "Tone", text: "calm", scope: "global" }, CHAT);
@@ -240,7 +247,7 @@ describe("MemorySync", () => {
   });
 
   it("a failed sync is reported and tried again with the next change", async () => {
-    const storage = memoryStorage();
+    const storage = keptInAccount();
     const store = new MemoryStore({ storage, now });
     let fail = true;
     const server = fakeServer();
@@ -252,7 +259,7 @@ describe("MemorySync", () => {
       forgetMemory: server.api.forgetMemory,
     };
     const sync = new MemorySync({ store, storage, now, account: async () => ({ ...ADA, api }) });
-    storage.data[MEMORY_SYNC_KEY] = { userId: ADA.userId, rev: 0, dirty: [], deleted: [] };
+    storage.data[MEMORY_SYNC_KEY] = { where: "cloud", userId: ADA.userId, rev: 0, dirty: [], deleted: [] };
     await store.put({ kind: "preference", subject: "Tone", text: "calm", scope: "global" }, CHAT);
     await wait();
     expect(await sync.sync()).toEqual({ state: "on", error: PLAN_REQUIRED });
@@ -262,9 +269,87 @@ describe("MemorySync", () => {
   });
 });
 
+describe("where memory is kept (Settings > Memory)", () => {
+  it("is this computer by default: nothing is sent, pulled or asked, even signed in on a plan that syncs", async () => {
+    const server = fakeServer();
+    const storage = memoryStorage();
+    const store = new MemoryStore({ storage, now });
+    let asked = 0;
+    const sync = new MemorySync({ store, storage, now, account: async () => ({ ...ADA, api: server.api }), onQuestionChange: () => asked++ });
+    await store.put({ kind: "preference", subject: "Tone", text: "calm", scope: "global" }, CHAT);
+    await wait();
+    expect(await sync.sync()).toEqual({ state: "local", cloud: "allowed" });
+    expect(await sync.question()).toBeNull();
+    expect(await sync.search("tone", { limit: 5 })).toBeNull();
+    expect(server.calls).toEqual([]);
+    expect(asked).toBe(0);
+  });
+
+  it("says why the account cannot be chosen: signed out, or a plan without it", async () => {
+    let account: Account | null = null;
+    const storage = memoryStorage();
+    const sync = new MemorySync({ store: new MemoryStore({ storage, now }), storage, now, account: async () => (account ? { ...account, api: fakeServer().api } : null) });
+    expect(await sync.status()).toEqual({ state: "local", cloud: "signed-out" });
+    account = { ...ADA, syncAllowed: false };
+    expect(await sync.status()).toEqual({ state: "local", cloud: "no-plan" });
+  });
+
+  it("choosing the account sends this computer's memory to it, even when it keeps some already; choosing this computer stops syncing", async () => {
+    const server = fakeServer();
+    const other = browser(server, ADA, "o");
+    await other.store.put({ kind: "person", subject: "Paul Lee", text: "accountant", scope: "global" }, CHAT);
+    await other.sync.sync();
+
+    const storage = memoryStorage();
+    let n = 0;
+    const store = new MemoryStore({ storage, now, newId: () => `h${++n}` });
+    const sync = new MemorySync({ store, storage, now, account: async () => ({ ...ADA, api: server.api }) });
+    await store.put({ kind: "preference", subject: "Tone", text: "calm", scope: "global" }, CHAT);
+    await wait();
+    expect(await sync.setWhere("cloud")).toMatchObject({ state: "on" });
+    expect((await store.list()).map((e) => e.subject).sort()).toEqual(["Paul Lee", "Tone"]);
+    expect([...server.rows.values()].map((r) => r.entry?.subject).sort()).toEqual(["Paul Lee", "Tone"]);
+
+    expect(await sync.setWhere("local")).toEqual({ state: "local", cloud: "allowed" });
+    const calls = server.calls.length;
+    await store.put({ kind: "person", subject: "Mia", text: "sister", scope: "global" }, CHAT);
+    await wait();
+    expect(await sync.sync()).toEqual({ state: "local", cloud: "allowed" });
+    expect(server.calls.length).toBe(calls);
+    // What the account had stays there; back to the account, what changed here meanwhile goes too.
+    expect(server.rows.size).toBe(2);
+    expect(await sync.setWhere("cloud")).toMatchObject({ state: "on" });
+    expect(server.calls.at(-1)!.upserts.map((e) => e.subject)).toEqual(["Mia"]);
+  });
+
+  it("choosing the account while signed out waits for a sign-in on a paid plan", async () => {
+    const server = fakeServer();
+    let account: Account | null = null;
+    const storage = memoryStorage();
+    const store = new MemoryStore({ storage, now });
+    const sync = new MemorySync({ store, storage, now, account: async () => (account ? { ...account, api: server.api } : null) });
+    await store.put({ kind: "preference", subject: "Tone", text: "calm", scope: "global" }, CHAT);
+    expect(await sync.setWhere("cloud")).toEqual({ state: "signed-out" });
+    account = ADA;
+    expect(await sync.sync()).toMatchObject({ state: "on" });
+    expect(server.calls.at(-1)!.upserts.map((e) => e.subject)).toEqual(["Tone"]);
+  });
+
+  it("a computer that synced before the choice existed keeps syncing", async () => {
+    const server = fakeServer();
+    const storage = memoryStorage();
+    storage.data[MEMORY_SYNC_KEY] = { userId: ADA.userId, rev: 0, dirty: [], deleted: [] };
+    const sync = new MemorySync({ store: new MemoryStore({ storage, now }), storage, now, account: async () => ({ ...ADA, api: server.api }) });
+    expect(await sync.sync()).toMatchObject({ state: "on" });
+  });
+});
+
 describe("syncText (Settings > Memory)", () => {
   it("says where memory is kept", () => {
-    expect(syncText({ state: "signed-out" }).text).toMatch(/^Kept on this computer only\. Log in with a paid plan/);
+    expect(syncText({ state: "local", cloud: "signed-out" }).text).toMatch(/^Log in with a paid plan to keep it in your account too/);
+    expect(syncText({ state: "local", cloud: "no-plan" }).text).toMatch(/^Keeping it in your account comes with a paid plan/);
+    expect(syncText({ state: "local", cloud: "allowed" }).text).toBe("");
+    expect(syncText({ state: "signed-out" }).text).toMatch(/^Kept on this computer only until you log in with a paid plan/);
     expect(syncText({ state: "no-plan" }).text).toMatch(/^Kept on this computer only\. With a paid plan it syncs/);
     expect(syncText({ state: "on", lastSyncAt: "2026-09-26T21:14:00Z" }, new Date("2026-09-26T22:00:00Z"))).toMatchObject({ text: expect.stringMatching(/^Synced with your account, last Sep 26 /), tone: "ok" });
     expect(syncText({ state: "on", error: "offline" })).toMatchObject({ tone: "bad", text: expect.stringMatching(/offline/) });
@@ -278,7 +363,7 @@ describe("search (the account's semantic search)", () => {
     const asked: unknown[] = [];
     const api = { ...server.api, memorySearch: async (input: unknown) => (asked.push(input), { model: "m", hits: [{ id: "a1", score: 0.7 }], pending: 0 }) };
     const account = { userId: "u1", email: "u@x.io", syncAllowed: true };
-    const storage = memoryStorage();
+    const storage = keptInAccount();
     const store = new MemoryStore({ storage, now });
     const sync = new MemorySync({ store, storage, now, account: async () => ({ ...account, api }) });
     // Not synced with this account yet: nothing is asked.

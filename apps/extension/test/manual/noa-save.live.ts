@@ -73,7 +73,7 @@ async function loadSaver(): Promise<SaveHandler | null> {
         },
         cloud: async (blob, name, folder) => {
           ctx.cloud.push({ name, folder, size: blob.size });
-          return { saved: true };
+          return { saved: true, file: { id: name, name, folder, contentType: blob.type, size: blob.size, createdAt: new Date().toISOString() } };
         },
         readLocal: async (path) => new Blob([readFileSync(path)]),
         lastDownload: async () => ctx.download,

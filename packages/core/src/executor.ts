@@ -25,6 +25,7 @@ import {
   type BrowserMethod,
   type BrowserMethods,
   type ElementPicks,
+  type FileMeta,
   type NoaFileList,
   type SavedFile,
   type PageSnapshot,
@@ -56,7 +57,7 @@ export const MAX_UNCONFIRMED_REFUSALS = 2;
 const err = (text: string): ToolResult => ({ text, isError: true });
 
 /** Tools that do not change the page: the steps Jev left to the model stay open across them. */
-const KEEPS_PENDING = new Set<string>(["act", "read_page", "find_text", "screenshot", "list_tabs", "list_files"]);
+const KEEPS_PENDING = new Set<string>(["act", "read_page", "find_text", "screenshot", "list_tabs", "list_files", "view_file"]);
 
 /** Tools that change a page: the model's text before one of them is not its final answer. */
 const ACTIONS = new Set<string>(["act", "navigate", "click", "type", "paste", "press_key", "upload", "open_tabs", "switch_tab", "handle_dialog"]);
@@ -70,6 +71,10 @@ const ACTIONS = new Set<string>(["act", "navigate", "click", "type", "paste", "p
  *   waiting is read right after it anyway).
  */
 const WAITS_FOR_LOAD: Partial<Record<ToolName, "waiting" | "new">> = { navigate: "waiting", open_tabs: "waiting", read_page: "new" };
+
+/** navigate's result when the current tab was kept for what its form holds and the address opened in a new tab. */
+export const keptTabText = (kept: string, tab: string, url: string) =>
+  `Opened ${url} in a new tab, ${tab}, now your current tab: ${kept} was left as it is, because its form holds what was entered there and leaving it would lose that. Its page is still open, with everything on it: go back to it with switch_tab ${kept} to carry on there.`;
 
 /** Result of navigate when a message from the user ended its wait for the page. */
 export const PAGE_STILL_LOADING = (url: string) =>
@@ -134,25 +139,68 @@ function pathKey(p: string): string {
   return p.trim().replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
 }
 
-/** list_files' answer: the folder, then each file's absolute path (what upload takes), size and date. */
+/** What is known about a file, for list_files and save_file: "800x600 px; from https://…; found on "Title" (https://…); note: …". */
+export function formatFileMeta(meta: FileMeta | undefined): string {
+  if (!meta) return "";
+  const parts: string[] = [];
+  if (meta.width && meta.height) parts.push(`${meta.width}x${meta.height} px`);
+  if (meta.source) parts.push(`from ${meta.source}`);
+  if (meta.page && meta.page !== meta.source) parts.push(`found on ${meta.pageTitle ? `${JSON.stringify(meta.pageTitle)} (${meta.page})` : meta.page}`);
+  if (meta.about) parts.push(`note: ${meta.about}`);
+  return parts.join("; ");
+}
+
+/**
+ * list_files' answer: the folder, then each file's absolute path (what upload takes), size, date and what is known
+ * about it. Without a search, the newest files and how many there are; with one, the best matches first.
+ */
 export function formatFileList(r: NoaFileList, search?: string): string {
-  const matching = search ? ` matching "${search}"` : "";
   const lines = [`The user's Noa folder: ${r.folder}`];
   if (r.partial) lines.push("Only the files Chrome saved there itself are listed (Noa's helper, which reads the folder, is not connected here); a file the user put there another way is not shown.");
   if (!r.files.length) {
-    lines.push(`It has no files${matching}. The user can put files there (or attach them to the message) for you to use.`);
+    lines.push(
+      search
+        ? `No file matches "${search}" by its name, note, page, site or date. Try other words (what it shows, where it came from), or list_files without a search for the newest files.`
+        : "It has no files. The user can put files there (or attach them to the message) for you to use.",
+    );
     return lines.join("\n");
   }
-  const more = r.total > r.files.length ? ` (the newest ${r.files.length} of ${r.total}; give search to narrow it)` : "";
-  lines.push(`Files${matching}, newest first${more}. To put one on a page, upload its path exactly as written:`);
-  for (const f of r.files) lines.push(`- ${f.path} (${formatBytes(f.size)}, ${f.modified.slice(0, 10)}${f.cloud ? ", in the user's cloud files: saved to this path when you upload it" : ""})`);
+  if (search) {
+    const meaning = r.searched?.meaning ? "" : " (by name, words and date only: the account's meaning search is not available)";
+    const pending = r.searched?.pending ? ` ${r.searched.pending} of the user's cloud files are still being indexed and may be missing.` : "";
+    lines.push(`${r.total} file(s) match "${search}"${meaning}, best first${r.total > r.files.length ? ` (the best ${r.files.length})` : ""}.${pending} To put one on a page, upload its path exactly as written:`);
+  } else {
+    const more = r.total > r.files.length ? `, the newest ${r.files.length} of ${r.total}: give search to find any of the others by what it is (name, note, page, site) or when it was saved` : "";
+    lines.push(`Files, newest first${more}. To put one on a page, upload its path exactly as written:`);
+  }
+  for (const f of r.files) {
+    const meta = formatFileMeta(f.meta);
+    lines.push(`- ${f.path} (${formatBytes(f.size)}, ${f.modified.slice(0, 10)}${f.cloud ? ", in the user's cloud files: saved to this path when you upload it" : ""})${meta ? `\n  ${meta}` : ""}`);
+  }
   return lines.join("\n");
 }
 
 /** save_file's answer: where the file is on this computer, and whether the cloud has a copy (and why not). */
 export function formatSavedFile(r: SavedFile): string {
   const where = r.folder ? `${r.folder} folder` : "top folder";
-  const lines = [`Saved ${r.name} (${formatBytes(r.size)}) in the user's Noa folder: ${r.path}`];
+  const meta = formatFileMeta(r.meta);
+  const size = `${formatBytes(r.size)}${r.meta?.width && r.meta.height ? `, ${r.meta.width}x${r.meta.height} px` : ""}`;
+  const cloudFolder = r.cloudFolder !== undefined ? "the top folder" : `the ${where}`;
+  // Cloud only (the user's Storage setting): not on this computer until it is uploaded somewhere.
+  if (!r.local) {
+    return [
+      `Saved ${r.name} (${size}) in the user's cloud files, ${cloudFolder}, only: they keep files in the cloud (Settings > Storage), so it is not in the Noa folder on this computer.`,
+      ...(meta ? [`Kept with it: ${meta}`] : []),
+      `To put it on a page, upload this path (it is downloaded there first): ${r.path}`,
+      "Tell the user what you kept and that it is in their cloud files.",
+    ].join("\n");
+  }
+  const lines = [`Saved ${r.name} (${size}) in the user's Noa folder: ${r.path}`];
+  if (meta) lines.push(`Kept with it: ${meta}`);
+  // A tracking pixel or a lazy page's placeholder, not the picture the page shows.
+  if (r.meta?.width && r.meta.height && Math.max(r.meta.width, r.meta.height) < 16) {
+    lines.push(`This picture is only ${r.meta.width}x${r.meta.height} px: a placeholder or tracking pixel, not a real picture. Read the page again for the picture's own address.`);
+  }
   switch (r.cloud) {
     case "saved":
       lines.push(r.cloudFolder !== undefined ? `A copy is in their cloud files, in the top folder (the account server does not take the folder "${r.folder}" yet).` : `A copy is in their cloud files, ${where}.`);
@@ -162,6 +210,9 @@ export function formatSavedFile(r: SavedFile): string {
       break;
     case "no-plan":
       lines.push("No cloud copy: the user's plan has no cloud files. Tell the user it is on this computer only; cloud files come with a paid plan.");
+      break;
+    case "off":
+      lines.push("No cloud copy: the user keeps files on this computer only (Settings > Storage). Tell the user it is on this computer.");
       break;
     case "failed":
       lines.push(`No cloud copy: storing it failed (${r.cloudError ?? "unknown error"}). Tell the user it is on this computer only.`);
@@ -332,14 +383,15 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
       case "navigate": {
         const r = await browser("browser.navigate", { url: (a as ToolArgsOf<"navigate">).url });
         gate.picks.byAddress = (gate.picks.byAddress ?? 0) + 1;
-        // What act typed on the page it leaves is gone with it.
-        delete gate.typedSince;
+        // What act typed on the page it leaves is gone with it (a kept page still holds it).
+        if (!r.kept) delete gate.typedSince;
         // The page it opened, as read_page shows it: the agent goes on from it without one more model turn to read it.
         const page = await browser("browser.readPage", {}).then(
           (snap) => pageView(snap),
           () => null,
         );
-        return { text: page ? `Navigated to ${r.url}\n\n${page}` : `Navigated to ${r.url}\nTitle: ${r.title}` };
+        const head = r.kept ? keptTabText(r.kept, r.tab ?? "a new tab", r.url) : `Navigated to ${r.url}`;
+        return { text: page ? `${head}\n\n${page}` : `${head}\nTitle: ${r.title}` };
       }
       case "read_page": {
         const { tabs } = a as ToolArgsOf<"read_page">;
@@ -465,10 +517,10 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
         if (!r.found) {
           return r.locked
             ? err(
-                `The user's saved site logins are locked. If ${host} is asking you to sign in, call task_pause with the reason "Sign in to ${host} in this tab (or unlock saved logins in Settings > Site logins), then press Continue."`,
+                `The user's saved site logins are locked. If ${host} is asking you to sign in, leave its sign-in page open in its tab (the user signs in there: never close that tab) and call task_pause with the reason "Sign in to ${host} in its tab (or unlock saved logins in Settings > Site logins), then press Continue."`,
               )
             : err(
-                `No login is saved for ${host}. First check whether the user is already signed in there. Only if it shows a sign-in page, call task_pause with the reason "Please sign in to ${host} in this tab, then press Continue." Never mention a vault.`,
+                `No login is saved for ${host}. First check whether the user is already signed in there. Only if it shows a sign-in page, leave that page open in its tab (the user signs in there: never close that tab) and call task_pause with the reason "Please sign in to ${host} in its tab, then press Continue." Never mention a vault.`,
               );
         }
         secrets.add(r.password);
@@ -488,6 +540,7 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
         const params: BrowserMethods["files.save"]["params"] = {};
         if (args.name) params.name = args.name;
         if (args.folder) params.folder = args.folder;
+        if (args.about) params.about = args.about;
         if (args.url !== undefined) {
           if (!/^(https?|data):/i.test(args.url.trim())) return err("save_file url must be an http(s) address (a link's href from read_page) or a data: URL. For a file a page makes itself, click its Download button, then save_file with download: true.");
           params.url = args.url.trim();
@@ -505,6 +558,14 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
         // A kept file is the agent's to upload, like the ones list_files gives.
         allowedMedia.set(pathKey(r.path), r.path);
         return { text: formatSavedFile(r) };
+      }
+      case "view_file": {
+        const { path } = a as ToolArgsOf<"view_file">;
+        // Only files the agent may use anyway (list_files, save_file, the task's media and attachments).
+        const known = allowedMedia.get(pathKey(path));
+        if (!known) return err(`view_file refused: ${path} is not a file you were given. Use a path from list_files or save_file.`);
+        const r = await browser("files.view", { path: known });
+        return { text: `${known}: ${r.width}x${r.height} px, ${formatBytes(r.size)}.`, image: r.image };
       }
       case "generate_image": {
         const r = await browser("media.generateImage", a as ToolArgsOf<"generate_image">);
@@ -599,6 +660,8 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
     },
     noteText(e) {
       if (releasing) return false;
+      // The thinking's summary is not an answer to the user.
+      if (e.type === "assistant_text_delta" && e.thinking) return false;
       if (e.type === "assistant_text_delta") shownText.set(e.id, (shownText.get(e.id) ?? "") + e.text);
       else if (e.type === "assistant_text") shownText.set(e.id ?? `text${textBlocks++}`, e.text);
       else return false;

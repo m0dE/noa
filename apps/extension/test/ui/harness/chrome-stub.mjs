@@ -63,7 +63,29 @@ export function installChromeStub(data) {
     "helper.connect": () => data.state,
     "run.adhoc": (req) => newChat(req.screen ? "Figure out what to do based on the current screen" : req.instructions, req),
     // A message to no conversation starts one (in its tab), like run.adhoc.
-    "run.message": (req) => (req.sessionId ? { sessionId: req.sessionId, mode: "turn" } : { ...newChat(req.text, req), mode: "new" }),
+    // A message to no conversation starts one (in its tab); the first one to a chat voice opened empty starts it there.
+    "run.message": (req) => {
+      const opened = req.sessionId && data.sessions.find((x) => x.sessionId === req.sessionId && x.empty);
+      if (opened) {
+        const events = data.eventsBySession?.[req.sessionId] ?? [];
+        newChat(req.text, req);
+        data.eventsBySession["s-new"] = events;
+        // The background tells the panel the chat has its first message now (sessions.create emits it).
+        const started = data.sessions.find((x) => x.sessionId === "s-new");
+        setTimeout(() => window.__push({ type: "session", session: started }), 0);
+        return { sessionId: "s-new", mode: "new" };
+      }
+      return req.sessionId ? { sessionId: req.sessionId, mode: "turn" } : { ...newChat(req.text, req), mode: "new" };
+    },
+    // Hands-free voice where the tab has no chat: an empty one, "s-new", bound to the tab at once.
+    "chat.open": (req) => {
+      const at = new Date().toISOString();
+      const session = { sessionId: "s-new", source: "adhoc", title: "Voice chat", brain: "claude-api", jev: true, startedAt: at, endedAt: at, empty: true, voice: true };
+      data.sessions = [session, ...data.sessions.filter((x) => x.sessionId !== "s-new")];
+      data.eventsBySession = { ...(data.eventsBySession ?? {}), "s-new": [] };
+      if (req.tabId !== undefined) data.state = { ...data.state, tabChats: { ...data.state.tabChats, [req.tabId]: "s-new" } };
+      return { session };
+    },
     "run.due": () => ({ started: false, detail: "Nothing is due right now." }),
     "run.stop": () => ({ ok: true }),
     "run.continue": (req) => ({ sessionId: req.sessionId }),
@@ -134,6 +156,12 @@ export function installChromeStub(data) {
       const { memoryQuestion: _q, ...rest } = data.state;
       data.state = rest;
       setTimeout(() => window.__push({ type: "state", state: data.state }), 0);
+      return { sync: data.memorySync };
+    },
+    // Settings > Memory: this computer, or the account (it syncs at once when the stub's plan allows it).
+    "memory.where": (req) => {
+      const allowed = data.memorySync?.state === "local" ? data.memorySync.cloud === "allowed" : true;
+      data.memorySync = req.where === "local" ? { state: "local", cloud: allowed ? "allowed" : "no-plan" } : allowed ? { state: "on", lastSyncAt: new Date().toISOString() } : { state: "no-plan" };
       return { sync: data.memorySync };
     },
     // Undo on a memory note: the background pushes the conversation's memory_undone.
@@ -365,6 +393,7 @@ export function installChromeStub(data) {
         onDisconnect: { addListener: () => {} },
         postMessage: (m) => void window.__portSent.push(m),
       }),
+      onMessage: noEvent,
       openOptionsPage: () => {},
       getURL: (path) => `${location.origin}/${path}`,
       getManifest: () => ({ version: "9.8.7" }),
@@ -393,6 +422,7 @@ export function installChromeStub(data) {
       onUpdated: noEvent,
     },
     windows: { getCurrent: async () => ({ id: 1 }), update: async () => ({}), onFocusChanged: noEvent },
+    storage: { onChanged: noEvent },
   };
 }
 

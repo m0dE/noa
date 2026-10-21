@@ -16,19 +16,23 @@ const site = await serveHtml((path) => {
   const name = path.slice(1) || "home";
   return `<!doctype html><title>Page ${name}</title><h1>Page ${name}</h1>
 <button onclick="document.getElementById('n').textContent = String(++window.clicks)">Count</button>
-<p>Clicks: <span id="n">0</span></p><script>window.clicks = 0;</script>`;
+<p>Clicks: <span id="n">0</span></p>${name === "h" ? '<label>Note <input id="note"></label>' : ""}<script>window.clicks = 0;</script>`;
 });
 const { base } = site;
+// The same server under another host name: another site.
+const other = `${base.replace("127.0.0.1", "localhost")}/a`;
 
 const { step, finish } = createSuite("tab");
-const ext = await launchExtension({ name: "tabs" });
+// x.com goes nowhere (a refused connection): its login address still becomes the tab's, which pauses a run (pause-rules.ts).
+const ext = await launchExtension({ name: "tabs", args: ["--host-resolver-rules=MAP x.com 127.0.0.1:9"] });
 const { context, sw, extensionId } = ext;
 
 try {
   // The fake brain: each run waits for its gate, then reads its tab and clicks Count there.
   const fake = await installFakeBrain(sw, {
     gated: true,
-    makeAct: () => {
+    arg: { f: `${base}/f`, other, xLogin: "https://x.com/i/flow/login" },
+    makeAct: (arg) => {
       const log = (globalThis.__turns = []);
       return async ({ browser }, name) => {
         // Task E starts on a blank tab next to the settings page: the agent moves to the user's own tab /e and works
@@ -36,6 +40,32 @@ try {
         if (name === "task E") {
           const own = (await browser.call("browser.listTabs", {})).tabs.find((t) => t.url.endsWith("/e"));
           await browser.call("browser.switchTab", { tab: own.id });
+        }
+        // Tasks F: the agent opens a page in a new tab (background: the user keeps their tab) and ends needing the
+        // user there (a sign-in), as a run does on a login page it has no credential for.
+        if (name.startsWith("task F")) {
+          const [tab] = (await browser.call("browser.openTabs", { urls: [arg.f] })).tabs;
+          await browser.call("browser.switchTab", { tab: tab.id });
+          log.push({ name, url: tab.url });
+          return { outcome: "paused", reason: `Sign in on ${tab.url}, then tell me to continue`, byAgent: true };
+        }
+        // Task G: the agent opens the sign-in page in a background tab (open_tabs, never switched to) and ends needing
+        // the user there, as the real agent does after get_credential finds no login.
+        if (name === "task G") {
+          const [tab] = (await browser.call("browser.openTabs", { urls: [arg.f] })).tabs;
+          log.push({ name, url: tab.url });
+          return { outcome: "paused", reason: `Please sign in on ${tab.url} in the new tab, then press Continue`, byAgent: true };
+        }
+        // Task X: a background tab the agent opens reaches X's login page: the runner pauses the run (pause URL).
+        if (name === "task X") {
+          await browser.call("browser.openTabs", { urls: [arg.xLogin] });
+          await new Promise(() => {});
+        }
+        // Tasks H: the agent goes to another site by address from the user's page /h.
+        if (name.startsWith("task H")) {
+          const r = await browser.call("browser.navigate", { url: arg.other });
+          log.push({ name, r });
+          return `navigated: ${JSON.stringify(r)}`;
         }
         const snap = await browser.call("browser.readPage", {});
         const btn = snap.elements.find((e) => e.name === "Count");
@@ -260,6 +290,111 @@ try {
     assert.equal((await tabOf(e)).groupId, -1);
     await settingsPage.close();
     return `blank tab ${blank} -> the user's tab ${e}`;
+  });
+
+  await step("a run that ends needing the user in a tab it opened: Auto tab switching brings that tab forward (off: it stays behind)", async () => {
+    // The user asks from their page /g and stays there while the agent opens /f in a new tab.
+    const pageG = await context.newPage();
+    await pageG.goto(`${base}/g`);
+    const g = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u }))[0].id, `${base}/g`);
+    await sw.evaluate(async (t) => void (await chrome.tabs.update(t, { active: true })), g);
+    const tabOf = (id) => sw.evaluate((t) => chrome.tabs.get(t), id);
+    const eventsOf = (id) => sw.evaluate(async (i) => (await globalThis.__noa.sessions.eventsOf(i)).map(({ ts, sessionId, ...e }) => e), id);
+    const settle = async (name) => {
+      const s = await ui({ type: "run.adhoc", instructions: name, tabId: g });
+      await fake.release(name);
+      const ended = await sessionWhen(sw, s.sessionId, `${name} to end`);
+      assert.equal(ended.outcome, "paused", JSON.stringify(ended));
+      const f = (await sw.evaluate(async (u) => chrome.tabs.query({ url: u }), `${base}/f`)).at(-1);
+      assert.ok(f, "the tab the agent opened");
+      return { sessionId: s.sessionId, f: f.id };
+    };
+    // On (the default): the tab the agent needs the user in comes to the front, and the chat says why.
+    const on = await settle("task F on");
+    await waitFor(async () => (await tabOf(on.f)).active, "the agent's tab /f in front after its run ended needing the user");
+    assert.equal((await tabOf(g)).active, false, "the user's tab /g is behind now");
+    const told = (await eventsOf(on.sessionId)).filter((e) => e.type === "auto_tab_switching");
+    assert.equal(told.length, 1, JSON.stringify(told));
+    assert.match(told[0].tab, /^t\d+$/);
+    assert.deepEqual({ ...told[0], tab: "t?" }, { type: "auto_tab_switching", tab: "t?", url: `${base}/f`, why: "needs_you" }, JSON.stringify(told));
+    const ends = (await eventsOf(on.sessionId)).map((e) => e.type);
+    assert.ok(ends.indexOf("auto_tab_switching") < ends.indexOf("task_end"), `the notice before the end: ${ends.join(" ")}`);
+    await sw.evaluate(async (t) => void (await chrome.tabs.remove(t)), on.f);
+    await sw.evaluate(async (t) => void (await chrome.tabs.update(t, { active: true })), g);
+    // Off: the user keeps their tab (the "Noa needs you" pill on it opens the chat).
+    await sw.evaluate(() => globalThis.__noa.settings.save({ autoTabSwitching: false }));
+    try {
+      const off = await settle("task F off");
+      await new Promise((r) => setTimeout(r, 1000));
+      assert.equal((await tabOf(off.f)).active, false, "the agent's tab stays behind");
+      assert.equal((await tabOf(g)).active, true, "the user stays on /g");
+      assert.deepEqual((await eventsOf(off.sessionId)).filter((e) => e.type === "auto_tab_switching"), []);
+      await sw.evaluate(async (t) => void (await chrome.tabs.remove(t)), off.f);
+    } finally {
+      await sw.evaluate(() => globalThis.__noa.settings.save({ autoTabSwitching: true }));
+    }
+    await pageG.close();
+    return `on: /f in front; off: /g kept`;
+  });
+
+  await step("a run that ends needing the user in a background tab it opened (never switched to), by its own pause or a login page: that tab comes forward", async () => {
+    const pageG = await context.newPage();
+    await pageG.goto(`${base}/g`);
+    const g = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u }))[0].id, `${base}/g`);
+    const tabOf = (id) => sw.evaluate((t) => chrome.tabs.get(t), id);
+    const eventsOf = (id) => sw.evaluate(async (i) => (await globalThis.__noa.sessions.eventsOf(i)).map(({ ts, sessionId, ...e }) => e), id);
+    const settle = async (name, url) => {
+      await sw.evaluate(async (t) => void (await chrome.tabs.update(t, { active: true })), g);
+      const s = await ui({ type: "run.adhoc", instructions: name, tabId: g });
+      await fake.release(name);
+      const ended = await sessionWhen(sw, s.sessionId, `${name} to end`);
+      assert.equal(ended.outcome, "paused", JSON.stringify(ended));
+      const opened = (await sw.evaluate(async (u) => chrome.tabs.query({ url: u }), url)).at(-1);
+      assert.ok(opened, `the tab the agent opened at ${url}`);
+      await waitFor(async () => (await tabOf(opened.id)).active, `${name}: the tab it opened (${url}) in front after its run ended needing the user`);
+      assert.equal((await tabOf(g)).active, false, "the user's tab /g is behind now");
+      const told = (await eventsOf(s.sessionId)).filter((e) => e.type === "auto_tab_switching");
+      assert.deepEqual(
+        told.map((e) => [e.url, e.why]),
+        [[url, "needs_you"]],
+        JSON.stringify(told),
+      );
+      await sw.evaluate(async (t) => void (await chrome.tabs.remove(t)), opened.id);
+      return ended.reason;
+    };
+    const own = await settle("task G", `${base}/f`);
+    const login = await settle("task X", "https://x.com/i/flow/login");
+    await pageG.close();
+    return `its pause: ${own}; the login page: ${login}`;
+  });
+
+  await step("navigate to another site from a page whose form holds what the user typed: the page stays, the address opens in a new tab", async () => {
+    const pageH = await context.newPage();
+    await pageH.goto(`${base}/h`);
+    const h = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u }))[0].id, `${base}/h`);
+    const run = async (name) => {
+      const s = await ui({ type: "run.adhoc", instructions: name, tabId: h });
+      await fake.release(name);
+      await sessionWhen(sw, s.sessionId, `${name} to end`);
+      return (await sw.evaluate(() => globalThis.__turns)).find((t) => t.name === name).r;
+    };
+    // Typed into: kept.
+    await pageH.fill("#note", "half-written note");
+    const kept = await run("task H typed");
+    assert.match(kept.kept ?? "", /^t\d+$/, JSON.stringify(kept));
+    assert.equal(kept.url, other);
+    assert.equal(pageH.url(), `${base}/h`, "the user's page stays");
+    assert.equal(await pageH.inputValue("#note"), "half-written note", "with what was typed");
+    const opened = (await sw.evaluate(async (u) => chrome.tabs.query({ url: u }), other)).map((t) => t.id);
+    assert.equal(opened.length, 1, "the address in a new tab");
+    await sw.evaluate(async (ids) => chrome.tabs.remove(ids), opened);
+    // Nothing typed: the tab itself goes there.
+    await pageH.fill("#note", "");
+    const moved = await run("task H empty");
+    assert.equal(moved.kept, undefined, JSON.stringify(moved));
+    await waitFor(async () => pageH.url() === other, "the user's tab on the other site");
+    await pageH.close();
+    return `typed: kept as ${kept.kept}, opened in ${kept.tab}; empty: navigated in place`;
   });
 
   await step("closing a chat's tab while it runs stops it (paused); the session stays", async () => {

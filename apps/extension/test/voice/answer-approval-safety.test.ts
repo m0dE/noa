@@ -59,7 +59,7 @@ async function started() {
     useThisTab: async () => "",
     failed: noop,
   };
-  const engine = new RealtimeEngine({
+  const engine = new RealtimeEngine({ passOnEverything: false, 
     ticket: async () => ({ url: "wss://api.test/v1/ai/realtime", token: "tok" }),
     createSource: () => new FakeMic(),
     events,

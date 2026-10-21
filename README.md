@@ -46,9 +46,26 @@ Node.js 22+ and pnpm 10):
    pick the repo's `dist` folder.
 3. Open the extension's settings, go to **AI** and pick where the AI comes
    from: Noa AI (hosted, needs an account), Local Claude Code (your Claude
-   subscription, via a helper app; the page shows the install steps) or the
-   Claude API (your own key).
+   subscription, via a helper app; the page shows the install steps), the
+   Claude API (your own key) or a local model (see below).
 4. Sign in to your sites by hand in Chrome, then type a task in the side panel.
+
+### A local model (Qwen, Hermes, ...)
+
+Noa can run on a model on your own computer. One command sets it all up:
+
+```sh
+npx -y noa-local-llm
+```
+
+It installs the helper, [OpenCode](https://opencode.ai) (the open-source agent the helper runs the model on,
+with web search, web pages and skills besides Noa's browser tools), [Ollama](https://ollama.com) if you have
+none, and a model (`qwen3:8b`, or `--model`) with a context Noa's instructions fit in. Then in **Settings >
+AI** pick **Local model** and click **Find models**. LM Studio (`:1234`), llama.cpp (`:8080`) and vLLM work
+too: put their address in Settings. Details: [packages/local-llm](packages/local-llm/README.md).
+
+How well it works depends on the model: small models often lose track of a
+multi-step task.
 
 ### The helper (Local Claude Code)
 
@@ -90,6 +107,7 @@ step, it sends what is on the page to the AI that runs the task:
 
 - **Local Claude Code** and the **Claude API** send it to Anthropic, under
   your own Claude plan or key.
+- **A local model** keeps it on your computer (unless Jev is on).
 - **Your own Jev key** sends single steps to Jev (TypeSafe) directly.
 - **Noa AI**, Noa's **hosted Jev**, **voice**, and memory sync on a plan with
   the TODO list go through Noa's account server (`https://app.noa.bot`),

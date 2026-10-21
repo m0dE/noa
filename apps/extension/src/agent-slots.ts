@@ -40,6 +40,14 @@ export interface AgentSlot {
    * unregisters it.
    */
   onWait(start: () => () => void): () => void;
+  /**
+   * The turn ended needing the user in a tab of the slot (a sign-in, a code): `tabId` (the tab that reached a login
+   * page; the run's stop for it does not count as stopped here), else the one AgentTab.tabForUser names (a tab the
+   * agent opened behind and paused about, or the current tab). Brings that tab forward when Auto tab switching allows
+   * it (see AgentSlots.showForUser). chat: the user is talking with this run (a chat's turn), so it switches even
+   * while they are active in that window; else (a scheduled run) not then. True when the tab is in front now.
+   */
+  showForUser?(opts: { chat: boolean; tabId?: number }): Promise<boolean>;
 }
 
 /** Agent slots (tabs) in use at most: maxParallelTasks due tasks plus one-off runs beside them. */
@@ -86,7 +94,7 @@ export class AgentSlots implements SlotPool {
   private readonly slots = new Map<number, Slot>();
   /** "<sessionId> <tabId>" of the tabs whose limited mode the session's chat was told about. */
   private readonly toldLimited = new Set<string>();
-  /** The conversations told that Auto tab switching brought a tab forward. */
+  /** "<sessionId> <why>" of the conversations told that Auto tab switching brought a tab forward, per reason (a screenshot, needs_you). */
   private readonly toldSwitching = new Set<string>();
 
   constructor(
@@ -170,6 +178,7 @@ export class AgentSlots implements SlotPool {
       gate,
       ending: Promise.resolve(),
       switchRefused: null,
+      showForUser: (opts) => this.showForUser(slot, opts),
       browser: {
         call: (method, params) => {
           if (method !== "browser.waitFor") return gated.call(method, params);
@@ -389,6 +398,38 @@ export class AgentSlots implements SlotPool {
     }
   }
 
+  /**
+   * The slot's turn ended needing the user in a tab of its run (the runner, at a pause of the agent's own or on a login
+   * page: lifecycle.ts finish): opts.tabId (the tab that reached the login page), else AgentTab.tabForUser. The tab
+   * comes forward as for a screenshot (Auto tab switching on, or full autonomy; never for a stopped run, except by the
+   * stop for that login page itself, which is what opts.tabId comes with), without taking the window's focus, and the
+   * chat is told once why. A chat's pause is Noa's reply to the user, so it switches even while they are active in that
+   * window; a scheduled run's does not then (their keys would go on in the run's tab), and the "Noa needs you" pill on
+   * their tab opens the chat. A tab already in front moves nothing and says nothing (a minimized window is shown
+   * again). Off: nothing moves, no card (the run is over: there is nothing to wait for). Resolves true when the tab is
+   * in front.
+   */
+  private async showForUser(slot: Slot, opts: { chat: boolean; tabId?: number }): Promise<boolean> {
+    const sessionId = slot.sessionId;
+    const tabId = opts.tabId ?? (await slot.tab.tabForUser());
+    if (tabId === null) return false;
+    const ctx = sessionId && this.approvals ? await this.approvals.context(sessionId) : null;
+    if (opts.tabId === undefined && ctx?.stopped?.()) return false;
+    const full = ctx?.level === "full";
+    if (!full && !(await this.autoTabSwitching?.())) return false;
+    if (!full && !opts.chat && (await userActiveInWindowOf(tabId))) return false;
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) return false;
+    if (tab.active) {
+      const win = await chrome.windows.get(tab.windowId).catch(() => null);
+      if (win?.state === "minimized") await chrome.windows.update(tab.windowId, { state: "normal" }).catch(() => undefined);
+      return true;
+    }
+    if (!(await bringTabForward(tabId, { restore: true, focus: false }))) return false;
+    if (sessionId) await this.tellSwitching(slot, sessionId, tabId, full, "needs_you").catch(() => undefined);
+    return true;
+  }
+
   /** The slot's session runs under full autonomy (Settings > Permission): nothing of it waits for the user, a tab switch included. */
   private async fullAutonomy(slot: Slot): Promise<boolean> {
     const sessionId = slot.sessionId;
@@ -396,12 +437,16 @@ export class AgentSlots implements SlotPool {
     return (await this.approvals.context(sessionId)).level === "full";
   }
 
-  /** Auto tab switching (or full autonomy: full) brought a tab of the session's run forward: its chat is told, once per conversation. */
-  private async tellSwitching(slot: Slot, sessionId: string, tabId: number, full: boolean): Promise<void> {
-    if (this.toldSwitching.has(sessionId)) return;
-    this.toldSwitching.add(sessionId);
+  /**
+   * Auto tab switching (or full autonomy: full) brought a tab of the session's run forward, for a screenshot (no why)
+   * or for the user (why needs_you): its chat is told, once per conversation and reason.
+   */
+  private async tellSwitching(slot: Slot, sessionId: string, tabId: number, full: boolean, why?: "needs_you"): Promise<void> {
+    const key = `${sessionId} ${why ?? "shot"}`;
+    if (this.toldSwitching.has(key)) return;
+    this.toldSwitching.add(key);
     const { short, url } = await tabLabel(slot, tabId);
-    this.onPageEvent?.(sessionId, { type: "auto_tab_switching", ...(short ? { tab: short } : {}), ...(url ? { url } : {}), ...(full ? { full: true } : {}) });
+    this.onPageEvent?.(sessionId, { type: "auto_tab_switching", ...(short ? { tab: short } : {}), ...(url ? { url } : {}), ...(full ? { full: true } : {}), ...(why ? { why } : {}) });
   }
 
   /** Every tab of every slot. */

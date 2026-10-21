@@ -5,17 +5,14 @@
  * The languages are the one picked in Settings (language.ts), if any, then the
  * browser's preferred languages (navigator.languages, set in Chrome's
  * settings): the Realtime input transcription is told them
- * (its `languages` hint), and a transcript in a script none of them is
- * written in is not the user talking to the assistant. Two cases, told apart
- * by how much of it is words:
- * - "unclear": next to no letters ("有，......。", "..."): the transcription
- *   failed on the user's words. The narrator's own reading of the audio is
- *   what counts; the transcript is not shown.
- * - "other_language": whole sentences in another script: other people talking
- *   in the room (a Chinese conversation while the user speaks English). No
- *   reply, no request, nothing shown.
- * A script the hint does not pin down (a language not listed below) is never
- * judged. Pure.
+ * (its `languages` hint). A transcript with next to no letters in a script
+ * none of them is written in ("有，......。", "...") is "unclear": the
+ * transcription failed on the user's words, and the narrator's own reading of
+ * the audio counts. Whole sentences in any language are the user's ("clear"):
+ * people speak to voice in a language their browser is not set to (Korean on
+ * an English Chrome), and dropping that as other people talking left them
+ * with replies to small talk and their requests silently lost. A script the
+ * hint does not pin down (a language not listed below) is never judged. Pure.
  */
 
 /** The scripts each language is written in (ISO 639-1). Languages not listed are not judged. */
@@ -60,7 +57,7 @@ export function voiceLanguages(browser: readonly string[], chosen?: string | nul
 }
 
 /** What a transcript is, for the languages the user speaks (see the top of this file). */
-export type TranscriptFit = "clear" | "unclear" | "other_language";
+export type TranscriptFit = "clear" | "unclear";
 
 /** At least this share of a transcript's letters must be in the user's scripts. */
 const MIN_SCRIPT_SHARE = 0.5;
@@ -77,5 +74,5 @@ export function transcriptFit(text: string, languages: readonly string[]): Trans
   const mine = letters.filter((c) => scripts.some((re) => re.test(c))).length;
   if (mine / letters.length >= MIN_SCRIPT_SHARE) return "clear";
   const marks = [...text].filter((c) => /[\p{P}\p{S}]/u.test(c)).length;
-  return letters.length < MIN_SPEECH_LETTERS || marks > letters.length ? "unclear" : "other_language";
+  return letters.length < MIN_SPEECH_LETTERS || marks > letters.length ? "unclear" : "clear";
 }

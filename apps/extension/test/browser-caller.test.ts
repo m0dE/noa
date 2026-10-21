@@ -40,7 +40,7 @@ describe("files: list_files and upload", () => {
     const uploads: unknown[] = [];
     const driver = { upload: async (p: unknown) => (uploads.push(p), { ok: true }) } as unknown as DriverLike;
     const vault = {} as VaultLike;
-    const files = { save: async () => { throw new Error("unused"); }, list: async () => ({ folder: "/d/Noa", files: [], total: 0 }), fetch: async (paths: string[]) => paths.map((p) => p.replace("x.png", "x (1).png")) };
+    const files = { save: async () => { throw new Error("unused"); }, view: async () => { throw new Error("unused"); }, list: async () => ({ folder: "/d/Noa", files: [], total: 0 }), fetch: async (paths: string[]) => paths.map((p) => p.replace("x.png", "x (1).png")) };
     await createBrowserCaller(driver, vault, undefined, files).call("browser.upload", { index: 3, paths: ["/d/Noa/x.png"] });
     expect(uploads).toEqual([{ index: 3, paths: ["/d/Noa/x (1).png"] }]);
     await expect(createBrowserCaller(driver, vault).call("files.list", {})).rejects.toThrow("The user's Noa folder cannot be listed here.");

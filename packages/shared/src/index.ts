@@ -42,3 +42,6 @@ export * from "./browser-release.js";
 export * from "./bookmark-sync.js";
 export * from "./cloud-files.js";
 export * from "./noa-files.js";
+export * from "./local-model.js";
+export * from "./image-size.js";
+export * from "./chat-sync.js";

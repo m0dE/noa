@@ -4,9 +4,18 @@ import {
   BOOKMARKS_PATH,
   BOOKMARKS_SYNC_PATH,
   BookmarkSyncResponse,
+  ChatChanges,
+  ChatEvents,
+  CHATS_PATH,
+  ChatWritten,
+  type ChatUpload,
   CloudFile,
   CloudFileList,
   type CloudFolder,
+  type FileMeta,
+  FileSearchResponse,
+  FILES_SEARCH_PATH,
+  type FileSearchInput,
   FILES_PATH,
   type BookmarkSyncInput,
   GenerateImageResponse,
@@ -31,6 +40,8 @@ import {
   TRANSCRIBE_QUERY,
   TranscribeResponse,
   VOICE_ENGINES_PATH,
+  REALTIME_TICKET_PATH,
+  RealtimeTicketResponse,
   VoiceEnginesResponse,
   type CreateTaskInput,
   type MediaInfo,
@@ -165,12 +176,21 @@ export class AccountApi {
     return this.http.uploadMedia(blob, filename);
   }
 
-  /** POST /v1/files: keeps a file in the account's cloud files (403 plan_required without the TODO list, 413 when full). */
-  uploadFile(blob: Blob, filename: string, folder: CloudFolder = ""): Promise<CloudFile> {
+  /**
+   * POST /v1/files: keeps a file in the account's cloud files (403 plan_required without the TODO list, 413 when
+   * full), with what is known about it (a server from before file notes ignores `meta`).
+   */
+  uploadFile(blob: Blob, filename: string, folder: CloudFolder = "", meta?: FileMeta): Promise<CloudFile> {
     const form = new FormData();
     form.append("file", blob, filename);
     form.append("folder", folder);
+    if (meta) form.append("meta", JSON.stringify(meta));
     return this.http.json(CloudFile, "POST", FILES_PATH, form);
+  }
+
+  /** POST /v1/files/search: the account's files nearest in meaning to `query` (cosine scores, nearest first). */
+  searchFiles(input: FileSearchInput): Promise<FileSearchResponse> {
+    return this.http.json(FileSearchResponse, "POST", FILES_SEARCH_PATH, input);
   }
 
   /** GET /v1/files: the account's cloud files, newest first (any plan: what a past plan kept stays listed). */
@@ -204,9 +224,34 @@ export class AccountApi {
     return this.http.json(BookmarkSyncResponse, "GET", `${BOOKMARKS_PATH}?since=${since}`);
   }
 
+  /** GET /v1/chats?since=rev: the account's chats changed after `since` (a page of them; `more` when there are others). */
+  chatChanges(since: number): Promise<ChatChanges> {
+    return this.http.json(ChatChanges, "GET", `${CHATS_PATH}?since=${since}`);
+  }
+
+  /** PUT /v1/chats/{id}: keeps a chat (its SessionInfo and events) in the account. */
+  putChat(chat: ChatUpload): Promise<ChatWritten> {
+    return this.http.json(ChatWritten, "PUT", `${CHATS_PATH}/${encodeURIComponent(chat.info.sessionId)}`, chat);
+  }
+
+  /** GET /v1/chats/{id}/events: a chat's events, oldest first. */
+  async chatEvents(sessionId: string): Promise<Record<string, unknown>[]> {
+    return (await this.http.json(ChatEvents, "GET", `${CHATS_PATH}/${encodeURIComponent(sessionId)}/events`)).events;
+  }
+
+  /** DELETE /v1/chats/{id}: deletes a chat from the account (the user's other computers delete theirs). */
+  async deleteChat(sessionId: string): Promise<void> {
+    await this.http.request("DELETE", `${CHATS_PATH}/${encodeURIComponent(sessionId)}`);
+  }
+
   /** DELETE /v1/memory: forget everything the account keeps (any plan). */
   async forgetMemory(): Promise<void> {
     await this.http.request("DELETE", MEMORY_PATH);
+  }
+
+  /** POST REALTIME_TICKET_PATH: a single-use ticket for one Realtime voice connection. */
+  async realtimeTicket(): Promise<string> {
+    return (await this.http.json(RealtimeTicketResponse, "POST", REALTIME_TICKET_PATH)).ticket;
   }
 
   voiceEngines(): Promise<VoiceEnginesResponse> {

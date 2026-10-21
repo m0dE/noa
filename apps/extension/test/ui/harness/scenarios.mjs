@@ -474,8 +474,12 @@ export function scenario(kind) {
   if (kind.startsWith("err-")) {
     // A failed turn in the chat of tab 1: each shows its error once, in plain words, with the button that fixes it.
     const failures = {
-      // The server's own AI key was refused (502 hosted_ai_unavailable): the error event, then the end with the same reason.
-      "err-hosted": { brain: "noa", model: "claude-opus-5-5", error: "Noa AI is unavailable right now", outcome: "failed", reason: "Noa AI is unavailable right now" },
+      // The server's own AI key was refused (502 hosted_ai_unavailable with its reason): the error event, then the end with the same reason.
+      "err-hosted": {
+        brain: "noa", model: "claude-opus-5-5",
+        error: "Noa AI is unavailable right now: Anthropic refused Noa's requests (HTTP 403: Request not allowed)",
+        outcome: "failed", reason: "Noa AI is unavailable right now: Anthropic refused Noa's requests (HTTP 403: Request not allowed)",
+      },
       // Local Claude Code's helper went away mid-turn: no error event, only the end's reason.
       "err-helper": { brain: "claude-code", outcome: "retry", reason: "helper disconnected: Native host has exited." },
       "err-ratelimit": {

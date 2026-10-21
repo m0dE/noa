@@ -1,6 +1,7 @@
 /**
  * Memory in the signed-in account (POST /v1/memory/sync, packages/shared/src/memory.ts), so another browser gets
- * it: on a plan with the TODO list. Each change made on this computer is noted (the entries to send, the
+ * it: on a plan with the TODO list, when the user keeps memory in the account (Settings > Memory, setWhere). Memory is
+ * kept on this computer by default; a computer that synced before the choice existed keeps syncing. Each change made on this computer is noted (the entries to send, the
  * deletions) and sent a few seconds later; the answer brings the account's changes since the last sync, which
  * the store applies (the newer version of an entry wins). What is noted survives a restart
  * (chrome.storage.local, MEMORY_SYNC_KEY). Signed out, or on a plan without it, memory stays on this computer.
@@ -10,6 +11,9 @@
  * <account>?" (choose): Add sends it all to that account and syncs from then on; Keep separate keeps it on this
  * computer, unsynced while that account is signed in. The first sign-in to an account with no memory, the same
  * account again, or a computer with no memory yet sync at once.
+ *
+ * Kept on this computer (where "local"), nothing is sent or pulled and nothing is asked; changes are still noted, so
+ * choosing the account again sends them. What the account already has stays there ("Forget everything" deletes it).
  */
 import {
   errorMessage,
@@ -32,8 +36,15 @@ export const PULL_EVERY_MS = 5 * 60_000;
 /** Deletions noted while nothing can be sent, at most (a few tasks deleted with their records; past it the oldest go). */
 const MAX_PENDING_DELETIONS = 5000;
 
-/** Whether memory syncs with the account, for Settings > Memory. `account`: the signed-in account's address. */
+/** Where this computer's memory is kept: here only, or in the signed-in account too (paid plans). */
+export type MemoryWhere = "local" | "cloud";
+
+/**
+ * Whether memory syncs with the account, for Settings > Memory. `account`: the signed-in account's address. Every
+ * state but "local" means the user chose the account; "local" says whether the account could keep it (`cloud`).
+ */
 export type MemorySyncStatus =
+  | { state: "local"; cloud: "signed-out" | "no-plan" | "allowed" }
   | { state: "on"; lastSyncAt?: string; error?: string }
   | { state: "signed-out" }
   | { state: "no-plan" }
@@ -43,6 +54,8 @@ export type MemorySyncStatus =
   | { state: "separate"; account: string };
 
 interface SyncState {
+  /** Where the user keeps memory; absent (never chosen): the account when this computer already synced, else here. */
+  where?: MemoryWhere;
   /** The account this computer's memory was synced with. */
   userId: string | null;
   /** An account the user is being asked about (its user id): nothing is sent to it until they answer. */
@@ -60,6 +73,9 @@ interface SyncState {
 }
 
 const EMPTY: SyncState = { userId: null, rev: 0, dirty: [], deleted: [] };
+
+/** Where memory is kept: the user's choice, else the account when this computer synced with one before the choice existed. */
+const whereOf = (s: SyncState): MemoryWhere => s.where ?? (s.userId !== null ? "cloud" : "local");
 
 export interface MemorySyncDeps {
   store: MemoryStore;
@@ -126,9 +142,10 @@ export class MemorySync {
   /** Whether memory syncs, and how it went last time. */
   async status(): Promise<MemorySyncStatus> {
     const account = await this.deps.account().catch(() => null);
+    const s = await this.read();
+    if (whereOf(s) === "local") return { state: "local", cloud: !account ? "signed-out" : account.syncAllowed ? "allowed" : "no-plan" };
     if (!account) return { state: "signed-out" };
     if (!account.syncAllowed) return { state: "no-plan" };
-    const s = await this.read();
     if (s.userId !== account.userId) {
       if (s.separate === account.userId) return { state: "separate", account: account.email };
       if (s.asked === account.userId) return { state: "ask", account: account.email };
@@ -160,14 +177,33 @@ export class MemorySync {
   }
 
   /**
+   * Where the user keeps memory (Settings > Memory). The account: choosing it is the answer to "Add this computer's
+   * memory to <account>?" for the signed-in account (everything here goes to it, when the plan allows), and it syncs
+   * from then on. This computer: nothing is sent or pulled; what the account has stays there.
+   */
+  async setWhere(where: MemoryWhere): Promise<MemorySyncStatus> {
+    if (where === "local") {
+      await this.update(({ asked: _a, ...s }) => ({ ...s, where }));
+      this.deps.onQuestionChange?.();
+      return this.status();
+    }
+    await this.update((s) => ({ ...s, where }));
+    const account = await this.deps.account().catch(() => null);
+    if (!account?.syncAllowed) return this.status();
+    if ((await this.read()).userId !== account.userId) return this.choose(true);
+    return this.sync();
+  }
+
+  /**
    * The account's semantic search over its copy of this memory (entry id -> cosine similarity to `query`), or null
-   * when memory does not sync with the signed-in account (signed out, no plan, not added to it yet). Entries not
+   * when memory does not sync with the signed-in account (kept here, signed out, no plan, not added to it yet). Entries not
    * synced yet are simply not among the hits.
    */
   async search(query: string, opts: { taskKey?: string | null; limit: number }): Promise<ReadonlyMap<string, number> | null> {
     const account = await this.deps.account().catch(() => null);
     if (!account?.syncAllowed || !account.api.memorySearch) return null;
-    if ((await this.read()).userId !== account.userId) return null;
+    const s = await this.read();
+    if (whereOf(s) === "local" || s.userId !== account.userId) return null;
     const res = await account.api.memorySearch({ query: query.slice(0, MAX_MEMORY_SEARCH_QUERY_CHARS), ...(opts.taskKey ? { taskKey: opts.taskKey } : {}), limit: opts.limit });
     return new Map(res.hits.map((h) => [h.id, h.score]));
   }
@@ -180,6 +216,7 @@ export class MemorySync {
   }
 
   private async run(): Promise<MemorySyncStatus> {
+    if (whereOf(await this.read()) === "local") return this.status();
     const account = await this.deps.account().catch(() => null);
     if (!account) return { state: "signed-out" };
     if (!account.syncAllowed) return { state: "no-plan" };

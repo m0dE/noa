@@ -13,7 +13,7 @@
  * (memory-section.ts) only renders this. Pure.
  */
 import { isMemoryRecord, MEMORY_KIND_TEXT, MEMORY_KINDS, memoryDate, plansWithText, type ExtensionSettings, type MemoryEntry, type MemoryKind } from "@noa/shared";
-import type { MemorySyncStatus } from "../memory/sync.js";
+import type { MemorySyncStatus, MemoryWhere } from "../memory/sync.js";
 import { memoryQuestionText } from "../ui/memory-question.js";
 
 /** Records a task group shows at first, and how many more each "Show more" adds. */
@@ -256,13 +256,46 @@ export function kindsOffAfter(current: readonly MemoryKind[], kind: MemoryKind, 
   return MEMORY_KINDS.filter((k) => off.has(k));
 }
 
+/** One choice of "Where memory is kept". */
+export interface MemoryWhereOption {
+  id: MemoryWhere;
+  label: string;
+  detail: string;
+  checked: boolean;
+  disabled: boolean;
+}
+
 /**
- * Where memory is kept, under "Use memory": synced with the account, or on this computer only (and how to sync it).
+ * "Where memory is kept": this computer (the default) or the account too (a paid plan). The account can be chosen
+ * while signed in on a plan that syncs memory, or kept once chosen. Empty: this build has no sync.
+ */
+export function whereView(s: MemorySyncStatus | undefined): MemoryWhereOption[] {
+  if (!s) return [];
+  const local = s.state === "local";
+  return [
+    { id: "local", label: "This computer", detail: "Only in this browser. Nothing the agent remembers is sent to your account.", checked: local, disabled: false },
+    {
+      id: "cloud",
+      label: "Your Noa account",
+      detail: `Also in your account, so the agent remembers the same things in every browser you log in to. Needs ${plansWithText("todo")}.`,
+      checked: !local,
+      disabled: local && s.cloud !== "allowed",
+    },
+  ];
+}
+
+/**
+ * How memory is kept now, under "Where memory is kept": synced with the account, or on this computer only (and why).
  * `action`: the buttons that go with it (ask: Add / Keep separate; add: Add to the account).
  */
 export function syncText(s: MemorySyncStatus | undefined, now = new Date()): { text: string; tone: "ok" | "bad" | ""; action?: "ask" | "add"; account?: string } {
   if (!s) return { text: "", tone: "" };
-  if (s.state === "signed-out") return { text: `Kept on this computer only. Log in with ${plansWithText("todo")} to have it in your other browsers too.`, tone: "" };
+  if (s.state === "local") {
+    if (s.cloud === "signed-out") return { text: `Log in with ${plansWithText("todo")} to keep it in your account too.`, tone: "" };
+    if (s.cloud === "no-plan") return { text: `Keeping it in your account comes with ${plansWithText("todo")}.`, tone: "" };
+    return { text: "", tone: "" };
+  }
+  if (s.state === "signed-out") return { text: `Kept on this computer only until you log in with ${plansWithText("todo")}; then it syncs to your account.`, tone: "" };
   if (s.state === "no-plan") return { text: `Kept on this computer only. With ${plansWithText("todo")} it syncs to your account, for your other browsers.`, tone: "" };
   if (s.state === "ask") return { text: `${memoryQuestionText(s.account).question} Nothing is sent until you choose.`, tone: "", action: "ask", account: s.account };
   if (s.state === "separate") return { text: `Kept on this computer only: you chose not to add it to ${s.account}.`, tone: "", action: "add", account: s.account };

@@ -6,6 +6,7 @@ export const BRAIN_LABELS: Readonly<Record<BrainKind, string>> = {
   "claude-api": "Claude API",
   scripted: "Scripted",
   noa: "Noa AI",
+  local: "Local model",
 };
 
 export function brainLabel(kind: BrainKind, jev = false): string {

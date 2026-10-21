@@ -73,7 +73,7 @@ describe("sidebar sections", () => {
     expect(sectionFromHash(null)).toBeNull();
   });
   it("arrow keys (up/down in the column, left/right in the narrow row) move and wrap; Home and End go to the ends; other keys do nothing", () => {
-    expect(SECTIONS.map((t) => t.label)).toEqual(["Account", "AI", "Permission", "Tasks", "Site logins", "Memory", "Advanced"]);
+    expect(SECTIONS.map((t) => t.label)).toEqual(["Account", "AI", "Permission", "Tasks", "Site logins", "Memory", "Storage", "Advanced"]);
     expect(nextSection("account", "ArrowRight")).toBe("ai");
     expect(nextSection("ai", "ArrowLeft")).toBe("account");
     expect(nextSection("ai", "ArrowUp")).toBe("account");
@@ -156,24 +156,36 @@ describe("what each brain reveals", () => {
     expect(view({ draft: { brain: "claude-api" }, settings: { anthropicApiKey: "sk" } }).apiKeyMissing).toBe(false);
     expect(view({ draft: { brain: "auto" } }).apiKeyMissing).toBe(false);
   });
+  it("local model: flags a missing model, and hides the Claude model (it has its own)", () => {
+    expect(view({ draft: { brain: "local" } }).localModelMissing).toBe(true);
+    expect(view({ draft: { brain: "local" } }).showModel).toBe(false);
+    expect(view({ draft: { brain: "local" }, settings: { localModel: "qwen3:8b" } }).localModelMissing).toBe(false);
+    expect(view({ draft: { brain: "claude-api" } }).localModelMissing).toBe(false);
+    expect(view({ draft: { brain: "claude-api" } }).showModel).toBe(true);
+  });
 });
 
 describe("the source shown checked", () => {
-  it("Local Claude Code first, then Noa AI and the Claude API; no Auto, no (Recommended)", () => {
-    const labels = view({}).options.map((o) => o.label);
-    expect(labels).toEqual(["Local Claude Code", "Noa AI", "Claude API"]);
+  it("Noa AI first, then Local Claude Code, the Claude API and a local model; no Auto, no (Recommended)", () => {
+    for (const account of [PLUS, null]) expect(view({ account }).options.map((o) => o.label)).toEqual(["Noa AI", "Local Claude Code", "Claude API", "Local model"]);
   });
   it("a picked source is shown as picked", () => {
-    for (const brain of ["noa", "claude-code", "claude-api"] as const) expect(view({ brain, draft: { brain } }).shownBrain).toBe(brain);
+    for (const brain of ["noa", "claude-code", "claude-api", "local"] as const) expect(view({ brain, draft: { brain } }).shownBrain).toBe(brain);
   });
-  it("not picked yet: the source that runs now, the user's own Claude first", () => {
-    expect(view({ account: PLUS, helper: HELPER }).shownBrain).toBe("claude-code");
-    expect(view({ account: FREE_EMPTY, helper: HELPER }).shownBrain).toBe("claude-code");
-    expect(view({ account: PLUS, settings: { anthropicApiKey: "sk" } }).shownBrain).toBe("claude-api");
+  it("not picked yet: the source that runs now, Noa AI first when it can run", () => {
+    expect(view({ account: PLUS, helper: HELPER }).shownBrain).toBe("noa");
+    expect(view({ account: PLUS, settings: { anthropicApiKey: "sk" } }).shownBrain).toBe("noa");
     expect(view({ account: PLUS }).shownBrain).toBe("noa");
+    // Out of credit or logged out: the user's own Claude.
+    expect(view({ account: FREE_EMPTY, helper: HELPER }).shownBrain).toBe("claude-code");
+    expect(view({ helper: HELPER }).shownBrain).toBe("claude-code");
+    expect(view({ settings: { anthropicApiKey: "sk" } }).shownBrain).toBe("claude-api");
   });
-  it("not picked yet and nothing works: Local Claude Code, whose install steps then show", () => {
+  it("not picked yet and nothing works: logged out, Local Claude Code, whose install steps then show; logged in, Noa AI and what it needs", () => {
     expect(view({ helperError: "not found" }).shownBrain).toBe("claude-code");
+    const broke = view({ account: FREE_EMPTY, helperError: "not found" });
+    expect(broke.shownBrain).toBe("noa");
+    expect(broke.brainProblem).toMatch(/Top up/);
   });
 });
 
@@ -240,6 +252,18 @@ describe("validation", () => {
     expect(validateForm({ ...ok, accountApiBase: "example.com" }).accountApiBase).toMatch(/https:\/\//);
     expect(validateForm({ ...ok, anthropicModel: " " }).anthropicModel).toBeDefined();
     expect(validateForm({ ...ok, anthropicModel: "claude sonnet" }).anthropicModel).toBeDefined();
+  });
+  it("checks the local model's server address and model id, and saves the address without a pasted /v1", () => {
+    const local = { ...ok, brain: "local" as const };
+    expect(validateForm({ ...local, localModelUrl: "localhost:11434" }).localModelUrl).toMatch(/http:\/\/localhost:11434/);
+    expect(validateForm({ ...local, localModelUrl: "" }).localModelUrl).toBeDefined();
+    // Another source: the address is not asked for, so a cleared one is no problem, but it is not saved either.
+    expect(validateForm({ ...ok, localModelUrl: "" })).toEqual({});
+    expect(parseForm({ ...ok, localModelUrl: "", intervalMinutes: "20" })).not.toHaveProperty("localModelUrl");
+    expect(parseForm({ ...ok, localModelUrl: "", intervalMinutes: "20" }).intervalMinutes).toBe(20);
+    expect(validateForm({ ...ok, localModel: "qwen 3" }).localModel).toBeDefined();
+    expect(validateForm({ ...ok, localModel: "" }).localModel).toBeUndefined();
+    expect(parseForm({ ...ok, localModelUrl: " http://127.0.0.1:1234/v1/ " }).localModelUrl).toBe("http://127.0.0.1:1234");
   });
   it("leaves fields with a problem out of what is saved", () => {
     const parsed = parseForm({ ...ok, maxParallelTasks: "9", intervalMinutes: "20" });

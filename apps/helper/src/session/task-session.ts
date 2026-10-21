@@ -138,6 +138,7 @@ export class TaskSession {
       if (this.tools?.executor.noteText?.(raw)) return;
     } else if (raw.type !== "trace") this.tools?.executor.flushText?.(); // timings are not shown in the chat
     this.governor.observe(raw);
+    this.turn?.budget.observe(raw);
     const e = this.opts.secrets.redact(raw);
     if (e.type === "error" && this.turn) this.turn.lastError = e.text;
     // Live text deltas and timings only go to the extension; the run log keeps the final text.
@@ -285,7 +286,7 @@ export class TaskSession {
     const { refusal, stop } = checkToolCall(t, name);
     if (stop) this.controller.abort(new Error("tool call limit"));
     // A Fast run's first task_fail: one careful look first, with its reasoning raised (never after the tool limit).
-    if (!refusal && name === "task_fail" && t.toolCalls < t.config.maxToolCalls) return this.governor.beforeTaskFail();
+    if (!refusal && name === "task_fail" && !t.budget.spent) return this.governor.beforeTaskFail();
     return refusal;
   }
 

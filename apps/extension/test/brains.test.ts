@@ -111,6 +111,28 @@ describe("ClaudeCodeBrain", () => {
     expect(f.calls).toEqual([{ method: "helper.prewarm", params: { config } }]);
   });
 
+  it("the Local model: the helper runs it (OpenCode) with the server from Settings, each turn; nothing started ahead", async () => {
+    const f = fakeHelper();
+    const brain = new ClaudeCodeBrain(f.helper, { local: true });
+    expect(brain.kind).toBe("local");
+    const settings = { ...DEFAULT_SETTINGS, brain: "local" as const, localModelUrl: "http://localhost:11434", localModel: "qwen3:8b" };
+    const run = brain.start(opts([], { settings }));
+    // The Claude model setting (in the runner's config) is not the one that runs.
+    expect(f.calls[0]).toMatchObject({ method: "helper.runTask", params: { config: { model: "qwen3:8b", local: { serverUrl: "http://localhost:11434" } } } });
+    f.finish({ outcome: "done", summary: "ok" });
+    await run.done;
+    f.hello(["s1"]);
+    const next = brain.continue({ sessionId: "s1", text: "more", config: opts([]).config, settings: { ...settings, localModelUrl: "http://127.0.0.1:1234" }, onEvent: () => {} });
+    expect(f.calls[1]).toMatchObject({ method: "helper.continueSession", params: { config: { local: { serverUrl: "http://127.0.0.1:1234" } } } });
+    f.finish({ outcome: "done", summary: "ok" });
+    await next.done;
+    brain.prewarm(opts([]).config);
+    expect(f.calls).toHaveLength(2);
+    // Claude Code's runs never name a local server.
+    new ClaudeCodeBrain(f.helper).start(opts([], { settings }));
+    expect(f.calls[2]!.params.config.local).toBeUndefined();
+  });
+
   it("a helper disconnect ends the run as retry", async () => {
     const f = fakeHelper();
     const run = new ClaudeCodeBrain(f.helper).start(opts([]));

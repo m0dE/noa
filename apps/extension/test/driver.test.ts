@@ -791,7 +791,7 @@ describe("snapshotExpression", () => {
   it("is a self-contained expression with the limits baked in", () => {
     const expr = snapshotExpression();
     expect(expr).toMatch(/^\(function/);
-    expect(expr).toContain(`(${JSON.stringify(PAGE_MARKS)}, 8000, 300, 30, 160, 60, 8)`);
+    expect(expr).toContain(`(${JSON.stringify(PAGE_MARKS)}, 8000, 300, 30, 160, 60, 8, 15, 48)`);
     expect(expr).not.toMatch(/__name|__vite|_interop|import\(/);
     expect(() => new Function(`return ${expr}`)).not.toThrow();
   });

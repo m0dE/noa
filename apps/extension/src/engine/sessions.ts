@@ -88,10 +88,12 @@ export class SessionStore {
     return this.listeners.add((change) => ("event" in change ? l.onEvent?.(change.event) : l.onSession?.(change.session)));
   }
 
+  /** Stores a new session; one that exists already (a chat voice opened empty, SessionInfo.empty) keeps its events. */
   async create(info: SessionInfo): Promise<SessionInfo> {
-    this.seq.set(info.sessionId, 0);
     this.trace?.start(info.sessionId, this.now().getTime(), turnData(info, info.instructions?.length));
     await this.enqueue(async () => {
+      const existed = !!(await this.sessions.get(info.sessionId));
+      this.seq.set(info.sessionId, existed ? Math.max(await this.storedSeq(info.sessionId), this.seq.get(info.sessionId) ?? 0) : 0);
       await this.sessions.put(info.sessionId, info);
       await this.prune();
     });
@@ -255,6 +257,27 @@ export class SessionStore {
   private async storedSeq(sessionId: string): Promise<number> {
     const last = (await this.events.keys(`${sessionId}:`)).at(-1);
     return last ? Number(last.slice(sessionId.length + 1)) + 1 : 0;
+  }
+
+  /**
+   * Keeps a conversation that comes from elsewhere (the account's chat history, chat-sync.ts) as it is there: its info
+   * and events replace what this browser has of it. Not while it runs here (false). The oldest go past MAX_SESSIONS,
+   * as with new ones.
+   */
+  async import(info: SessionInfo, events: readonly StampedAgentEvent[]): Promise<boolean> {
+    const sessionId = info.sessionId;
+    if (this.seq.has(sessionId)) return false;
+    const done = await this.enqueue(async () => {
+      if (this.seq.has(sessionId)) return false;
+      await this.events.deletePrefix(`${sessionId}:`);
+      const kept = events.slice(-MAX_EVENTS_PER_SESSION);
+      for (let i = 0; i < kept.length; i++) await this.events.put(seqKey(sessionId, i), { ...kept[i]!, sessionId });
+      await this.sessions.put(sessionId, info);
+      await this.prune();
+      return !!(await this.sessions.get(sessionId));
+    });
+    if (done) this.emitSession(info);
+    return done;
   }
 
   /** Deletes a conversation with its events, trace and files (the user's Delete). False when there is none. */

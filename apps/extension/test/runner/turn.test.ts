@@ -59,6 +59,43 @@ describe("Runner: one turn", () => {
     expect(h.brain.starts).toHaveLength(1);
   });
 
+  it("a turn that ends needing the user in its tab asks the slot to bring the tab forward: a chat's own pause, or a login URL; never Stop, done or failed", async () => {
+    const h = harness();
+    // A chat's agent pauses for the user (a sign-in): the user is talking with Noa.
+    h.brain.script = () => ({ outcome: "paused", reason: "Sign in to New Relic in the tab I opened, then tell me to continue", byAgent: true });
+    const { sessionId } = await h.runner.runAdhoc({ instructions: "check New Relic" });
+    await h.runner.idle();
+    expect(h.shown).toEqual([{ chat: true }]);
+    // The notice (if any) comes before the end card: the end is recorded after the switch.
+    expect((await h.sessions.eventsOf(sessionId)).at(-1)).toMatchObject({ type: "task_end", outcome: "paused" });
+    // A due task's tab hits a login URL: the run pauses there, and that tab is the one brought forward; the user is not
+    // asked at that moment (a scheduled run).
+    h.shown.length = 0;
+    await h.store.add({ instructions: "x" });
+    h.brain.script = () => "hang";
+    await h.runner.runDue("manual");
+    await vi.waitFor(() => expect(h.brain.starts).toHaveLength(2));
+    await h.runner.onTabUpdated(AGENT_TAB, { url: "https://x.com/i/flow/login" });
+    await h.runner.idle();
+    expect(h.shown).toEqual([{ chat: false, tabId: AGENT_TAB }]);
+    // Stop: paused too, but by the user: nothing moves.
+    h.shown.length = 0;
+    h.brain.script = () => "hang";
+    await h.runner.runAdhoc({ instructions: "another" });
+    await vi.waitFor(() => expect(h.brain.starts).toHaveLength(3));
+    h.runner.stop();
+    await h.runner.idle();
+    expect(h.shown).toEqual([]);
+    // Done and failed: nothing moves.
+    h.brain.script = () => ({ outcome: "done", summary: "ok" });
+    await h.runner.runAdhoc({ instructions: "done one" });
+    await h.runner.idle();
+    h.brain.script = () => ({ outcome: "failed", reason: "no" });
+    await h.runner.runAdhoc({ instructions: "failed one" });
+    await h.runner.idle();
+    expect(h.shown).toEqual([]);
+  });
+
   it("verifies X posts: verified stays done, unverified becomes retry", async () => {
     const h = harness();
     const a = await h.store.add({ instructions: "Post on X from @me. Post: hello world, this is the post body" });

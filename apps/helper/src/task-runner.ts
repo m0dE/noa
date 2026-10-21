@@ -103,7 +103,8 @@ export interface TaskRunnerDeps {
   envJevKey: string | null;
   /** A Jev client: TypeSafe's with a key, or (cloud) Noa's cloud Jev for the session, with the account's token. */
   makeJev: (apiKey: string, cloud?: { endpoint: string; sessionId: string }) => JevLike;
-  makeBrain: () => Brain;
+  /** The brain for a run with this config: OpenCode for the Local model (config.local), else Claude Code (or the scripted one). */
+  makeBrain: (config: RunConfig) => Brain;
   /** helper.event notifications. */
   notify: (sessionId: string, event: AgentEvent) => void;
   /** The TODO tools for a session (the extension's todo.call). Absent: the tools are refused. */
@@ -208,7 +209,7 @@ export class TaskRunner {
    * settings keeps it, one with others replaces it. False when the brain starts nothing ahead.
    */
   prewarm(config: RunConfig): boolean {
-    const brain = this.deps.makeBrain();
+    const brain = this.deps.makeBrain(config);
     if (!brain.warm) return false;
     const model = config.model?.trim() || null;
     const jev = this.jevSource(config) !== null;
@@ -223,7 +224,7 @@ export class TaskRunner {
     const toolTaskId = `warm-${randomUUID()}`;
     const runDir = runDirFor(this.deps.runsDir, toolTaskId);
     mkdirSync(runDir, { recursive: true });
-    const files = this.sessionFiles(runDir, toolTaskId, jev, brain.persistent === true, images);
+    const files = this.sessionFiles(runDir, toolTaskId, jev, brain.persistent === true, images, false);
     const warm = brain.warm({ ...files, ...(model ? { model } : {}), thinking });
     const timer = setTimeout(() => this.dropSpare(), this.deps.warmMs ?? RUNNER_DEFAULTS.warmMs);
     (timer as { unref?: () => void }).unref?.();
@@ -270,6 +271,7 @@ export class TaskRunner {
     jev: boolean,
     followUps: boolean,
     images: boolean,
+    opencode: boolean,
   ): { mcpConfigPath: string; allowedTools: string[]; systemPrompt: string } {
     // act replaces click and type (steps can still name an exact element index).
     const allowed = new Set<ToolName>(toolsFor({ images }));
@@ -285,7 +287,7 @@ export class TaskRunner {
       jev,
     });
     writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig, null, 2));
-    return { mcpConfigPath, allowedTools: toolNames.map(mcpToolName), systemPrompt: buildSystemPrompt({ tools: toolNames, jev, followUps }) };
+    return { mcpConfigPath, allowedTools: toolNames.map(mcpToolName), systemPrompt: buildSystemPrompt({ tools: toolNames, jev, followUps, opencode }) };
   }
 
   async run(params: RunTaskParams): Promise<TaskRunResult> {
@@ -302,7 +304,9 @@ export class TaskRunner {
     const jev = !jevSource ? null : jevSource.kind === "cloud" ? this.deps.makeJev(jevSource.key, { endpoint: jevSource.endpoint, sessionId }) : this.deps.makeJev(jevSource.key);
     // An agent started ahead (prewarm) comes with its run folder; its tool calls carry its own task id.
     const images = config.imageGeneration !== false;
-    const spare = this.takeSpare(jev !== null, images);
+    const brain = this.deps.makeBrain(config);
+    // Only a brain that starts its agent ahead takes the one started (Claude Code's); another stops it.
+    const spare = brain.warm ? this.takeSpare(jev !== null, images) : (this.dropSpare(), null);
     const runDir = spare?.runDir ?? runDirFor(this.deps.runsDir, sessionId);
     const toolTaskId = spare?.toolTaskId ?? sessionId;
     if (spare) this.toolTaskIds.set(toolTaskId, sessionId);
@@ -311,7 +315,6 @@ export class TaskRunner {
     const log = new RunLog(join(runDir, "log.jsonl"), this.deps.live ?? null, sessionId, secrets);
     // act replaces click and type (steps can still name an exact element index).
     const allowed = new Set<ToolName>(toolsFor({ images }));
-    const brain = this.deps.makeBrain();
 
     const s = new TaskSession({
       sessionId,
@@ -356,7 +359,7 @@ export class TaskRunner {
     });
 
     try {
-      const { mcpConfigPath, allowedTools, systemPrompt } = this.sessionFiles(runDir, toolTaskId, jev !== null, s.persistent, images);
+      const { mcpConfigPath, allowedTools, systemPrompt } = this.sessionFiles(runDir, toolTaskId, jev !== null, s.persistent, images, config.local !== undefined);
       const blocks = attachmentBlocks(attachments);
       // The run folder, the MCP config and the prompts, before the agent starts.
       s.emit({ type: "trace", trace: { t: setup.t, ms: setup.elapsed(), cat: "brain", name: "helper.setup", src: "helper", data: { jev: jev !== null, ...(jevSource ? { jevSource: jevSource.kind } : {}), media: mediaPaths.length, prewarmed: spare !== null } } });

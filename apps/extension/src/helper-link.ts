@@ -62,6 +62,8 @@ export class HelperLink {
   /** Delivers each subscribed notification from a peer to its listeners. */
   private readonly deliveries: ((peer: HelperPeer) => void)[] = [];
   private lastErrorText: string | null = null;
+  /** Chrome's own words for lastErrorText (they name the cause our short text sums up); null when it gave none. */
+  private lastErrorChrome: string | null = null;
 
   constructor(private readonly opts: HelperLinkOptions) {}
 
@@ -76,6 +78,11 @@ export class HelperLink {
   /** Why the last connect failed or the port closed; null while connected. */
   get lastError(): string | null {
     return this.lastErrorText;
+  }
+
+  /** Chrome's message behind lastError, for the developer details; null when connected or Chrome said nothing. */
+  get lastErrorDetail(): string | null {
+    return this.lastErrorText === null ? null : this.lastErrorChrome;
   }
 
   /**
@@ -157,7 +164,8 @@ export class HelperLink {
     try {
       port = chrome.runtime.connectNative(hostName);
     } catch (err) {
-      this.lastErrorText = helperErrorText(errorMessage(err));
+      this.lastErrorChrome = errorMessage(err);
+      this.lastErrorText = helperErrorText(this.lastErrorChrome);
       throw new Error(this.lastErrorText);
     }
     const peer: HelperPeer = new RpcPeer<HelperMethods, BrowserMethods & TodoMethods & MemoryMethods>((msg) => port.postMessage(msg), "e");
@@ -171,8 +179,10 @@ export class HelperLink {
     port.onDisconnect.addListener(() => {
       const message = chrome.runtime.lastError?.message;
       const reason = message ? helperErrorText(message) : DISCONNECTED;
-      if (this.port === port) this.teardown(reason);
-      else peer.close(reason);
+      if (this.port === port) {
+        this.teardown(reason);
+        this.lastErrorChrome = message ?? null;
+      } else peer.close(reason);
     });
     try {
       const info = await peer.call("helper.hello", selfTest ? { selfTest: true } : {}, { timeoutMs });
@@ -195,6 +205,7 @@ export class HelperLink {
     this.port = null;
     this.peer = null;
     this.lastErrorText = reason;
+    this.lastErrorChrome = null;
     if (wasConnected) this.setInfo(null);
     else this.helperInfo = null;
     if (hadPeer && wasConnected) this.disconnects.emit(reason);

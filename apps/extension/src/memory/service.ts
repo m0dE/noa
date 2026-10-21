@@ -100,7 +100,7 @@ export interface MemoryToolResult {
 export type MemoryRequest = Extract<
   UiRequest,
   {
-    type: "memory.list" | "memory.edit" | "memory.delete" | "memory.pin" | "memory.deleteTask" | "memory.taskRuns" | "memory.clear" | "memory.undo" | "memory.redo" | "memory.syncChoice" | "chat.setMemory";
+    type: "memory.list" | "memory.edit" | "memory.delete" | "memory.pin" | "memory.deleteTask" | "memory.taskRuns" | "memory.clear" | "memory.undo" | "memory.redo" | "memory.syncChoice" | "memory.where" | "chat.setMemory";
   }
 >;
 export const MEMORY_REQUESTS: readonly MemoryRequest["type"][] = [
@@ -114,6 +114,7 @@ export const MEMORY_REQUESTS: readonly MemoryRequest["type"][] = [
   "memory.undo",
   "memory.redo",
   "memory.syncChoice",
+  "memory.where",
   "chat.setMemory",
 ];
 
@@ -126,7 +127,7 @@ export interface MemoryServiceDeps {
   sessions: Pick<SessionStore, "note" | "eventsOf" | "get" | "update" | "list">;
   settings(): Promise<Pick<ExtensionSettings, "memoryPaused" | "memoryKindsOff">>;
   /** Sync with the signed-in account (sync.ts). Absent: memory stays on this computer. */
-  sync?: Pick<MemorySync, "pullSoon" | "sync" | "status" | "forgetAll" | "choose">;
+  sync?: Pick<MemorySync, "pullSoon" | "sync" | "status" | "forgetAll" | "choose" | "setWhere">;
   /**
    * The account's semantic search (entry id -> cosine similarity to `query`), when memory syncs with it; null or a
    * failure: the turn goes on with words, entities and time alone. Given at most MEMORY_SEARCH_TIMEOUT_MS.
@@ -334,6 +335,10 @@ export class MemoryService {
       case "memory.syncChoice": {
         if (!this.deps.sync) throw new Error("Memory does not sync in this build");
         return { sync: await this.deps.sync.choose(msg.add === true) };
+      }
+      case "memory.where": {
+        if (!this.deps.sync) throw new Error("Memory does not sync in this build");
+        return { sync: await this.deps.sync.setWhere(msg.where === "cloud" ? "cloud" : "local") };
       }
       case "memory.clear": {
         const removed = await store.clear();

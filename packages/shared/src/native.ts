@@ -3,6 +3,7 @@ import type { AgentEvent } from "./events.js";
 import type { TaskOutcome } from "./task.js";
 import type { ReasoningLevel } from "./reasoning.js";
 import type { NoaFileList } from "./noa-files.js";
+import type { FileMeta } from "./cloud-files.js";
 
 /** Native messaging host name registered with Chrome. */
 export const NATIVE_HOST_NAME = "com.noa.helper";
@@ -29,6 +30,11 @@ export interface RunConfig {
    * brains run the same model. The helper falls back to NOA_MODEL, then Claude Code's "sonnet" alias.
    */
   model?: string;
+  /**
+   * The Local model brain: the session runs on OpenCode (HelperInfo.opencodePath) with the model `model` from this
+   * server (Ollama, LM Studio, llama.cpp's server, vLLM: local-model.ts). Absent: Claude Code.
+   */
+  local?: { serverUrl: string };
   /** The Reasoning setting (absent: the helper's NOA_THINKING, else DEFAULT_REASONING). */
   reasoning?: ReasoningLevel;
   /** Fast: raise reasoning when the run gets stuck (absent: true). */
@@ -142,6 +148,8 @@ export interface HelperInfo {
   brain?: HelperBrain;
   /** Absolute path of claude.exe, or null when not found (always null with the scripted brain). */
   claudePath: string | null;
+  /** OpenCode, which runs the Local model brain's sessions (RunConfig.local), or null when not found. Absent from older helpers. */
+  opencodePath?: string | null;
   logDir: string;
   /**
    * Claude Code task sessions whose agent is alive (running a turn, or idle
@@ -229,21 +237,29 @@ export type HelperMethods = {
    * The background memory writer on Claude Code (memory-writer.ts): one headless `claude -p` call on the cheapest
    * model with this system prompt and prompt, on the user's own Claude Code login. text: the model's answer;
    * costUsd: what Claude Code reports it cost. Rejects when Claude Code fails or takes longer than
-   * MEMORY_SUMMARIZE_TIMEOUT_MS.
+   * MEMORY_SUMMARIZE_TIMEOUT_MS. local: the Local model's server and model answer instead (the helper posts to it:
+   * Ollama refuses an extension's posts unless told otherwise).
    */
-  "memory.summarize": { params: { system: string; prompt: string }; result: { text: string; costUsd?: number } };
+  "memory.summarize": { params: { system: string; prompt: string; local?: { serverUrl: string; model: string } }; result: { text: string; costUsd?: number } };
   /**
    * list_files: the files in the user's Noa folder, read from disk (the extension knows where the folder is, but
    * cannot list one). folder: the Noa folder, absolute (the folder of its README download); search: only names
-   * containing it (any case).
+   * containing it (any case); max: the newest this many (default MAX_LISTED_FILES, at most LOCAL_SEARCH_MAX: a
+   * search ranks them all), cut sooner when the answer would not fit in a native message.
    */
-  "files.list": { params: { folder: string; search?: string }; result: NoaFileList };
+  "files.list": { params: { folder: string; search?: string; max?: number }; result: NoaFileList };
   /**
    * save_file: a piece of a file on this computer (the extension cannot read files): at most FILE_READ_CHUNK_BYTES
    * from `offset`. size: the whole file's bytes. The extension asks only for paths the agent may use (list_files,
    * the task's media) and for the browser's own last download.
    */
   "files.read": { params: { path: string; offset: number; length: number }; result: { dataBase64: string; size: number } };
+  /**
+   * save_file: keeps a note on a file it saved in the Noa folder (where it came from, what it shows) in the folder's
+   * NOA_FILE_NOTES, which files.list reads back. folder: the Noa folder, absolute; path: the file, absolute, inside it.
+   * A helper from before notes answers method-not-found: the file is kept without one.
+   */
+  "files.note": { params: { folder: string; path: string; meta: FileMeta }; result: { ok: true } };
 };
 
 /** Notifications the helper sends to the extension (no reply). */

@@ -19,16 +19,16 @@ describe("transcriptFit: whether a transcript reads as the user talking in their
     expect(transcriptFit("Yo sup how you doin", en)).toBe("clear");
   });
 
-  it("other people talking nearby in another language (the owner's trace): not addressed to the assistant", () => {
-    for (const heard of ["你不是手上进不来，上面都是锁了。那那个钥匙呢？", "请你做饭了。", "这挺好。", "我这胖，我的刚刚刚。"]) {
-      expect(transcriptFit(heard, en), heard).toBe("other_language");
+  it("whole sentences in a language the browser is not set to are the user's (ticket 1bba1841: Korean on an English Chrome)", () => {
+    for (const heard of ["이 페이지가 무슨 내용인지 알려줘.", "이메일 확인해 줘.", "请你做饭了。", "这挺好。"]) {
+      expect(transcriptFit(heard, en), heard).toBe("clear");
     }
   });
 
   it("a language the user has set is theirs: Chinese for a Chinese speaker, Korean with Hangul and Hanja", () => {
     expect(transcriptFit("请你做饭了。", ["en", "zh"])).toBe("clear");
     expect(transcriptFit("안녕하세요, 메일 좀 확인해 줘", ["en", "ko"])).toBe("clear");
-    expect(transcriptFit("안녕하세요", en)).toBe("other_language");
+    expect(transcriptFit("안녕하세요", en)).toBe("clear");
   });
 
   it("mixed words count by the share of letters; a language the table does not know is never judged", () => {

@@ -92,19 +92,36 @@ export const VOICE_TUNING = {
 export const REALTIME_PATH = "/v1/ai/realtime";
 
 /**
- * Browsers cannot set headers on a WebSocket, so the session token rides in the subprotocol
- * list: `new WebSocket(url, [REALTIME_PROTOCOL, REALTIME_TOKEN_PROTOCOL_PREFIX + token])`.
- * The server selects REALTIME_PROTOCOL (the token is never echoed).
+ * Browsers cannot set headers on a WebSocket, so the credential rides in the subprotocol
+ * list: `new WebSocket(url, [REALTIME_PROTOCOL, REALTIME_TOKEN_PROTOCOL_PREFIX + ticket])`.
+ * The server selects REALTIME_PROTOCOL (the credential is never echoed). Request headers end up
+ * in the server's logs, and Cloudflare masks Authorization and Cookie there but not the
+ * subprotocol, so the credential is a single-use ticket (REALTIME_TICKET_PATH), never the
+ * session token. The server still takes a session token there from extensions before tickets.
  */
 export const REALTIME_PROTOCOL = "noa";
 export const REALTIME_TOKEN_PROTOCOL_PREFIX = "bt.";
 
 /**
+ * POST (session token in Authorization): a single-use ticket for one REALTIME_PATH connection,
+ * good for REALTIME_TICKET_TTL_MS. Answer: RealtimeTicketResponse.
+ */
+export const REALTIME_TICKET_PATH = "/v1/ai/realtime/ticket";
+/** How long a ticket can be used. */
+export const REALTIME_TICKET_TTL_MS = 60_000;
+/** Tickets start with this (session tokens do not). */
+export const REALTIME_TICKET_PREFIX = "rt_";
+export const RealtimeTicketResponse = z.object({ ticket: z.string().startsWith(REALTIME_TICKET_PREFIX) });
+export type RealtimeTicketResponse = z.infer<typeof RealtimeTicketResponse>;
+
+/**
  * The input transcription model the extension turns on in a realtime session (the user's own
  * words for the chat). The relay allows and bills it (the server's REALTIME_TRANSCRIBE_PRICES),
- * and the voice engines' Realtime price includes it.
+ * and the voice engines' Realtime price includes it. gpt-live-transcribe streams the words while
+ * the user speaks (the panel shows them live); gpt-transcribe only sends them once the turn has
+ * ended (measured 2026-10-20: its first word 400-800 ms after the end of speech).
  */
-export const REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-transcribe";
+export const REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-live-transcribe";
 
 /** Query parameters of REALTIME_PATH. */
 export const REALTIME_QUERY = {

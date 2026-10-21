@@ -58,7 +58,7 @@ function client(languages = ["en"], extra: Partial<RealtimeHandlers> = {}) {
     onTrace: (e) => void traces.push(e.name),
     ...extra,
   };
-  const c = new RealtimeClient({ url: "wss://x/v1/ai/realtime", token: "t", languages, open: () => (socket = new FakeSocket()), handlers });
+  const c = new RealtimeClient({ passOnEverything: false,  url: "wss://x/v1/ai/realtime", token: "t", languages, open: () => (socket = new FakeSocket()), handlers });
   c.connect();
   socket.open();
   const s = socket;
@@ -92,9 +92,9 @@ function client(languages = ["en"], extra: Partial<RealtimeHandlers> = {}) {
 }
 
 describe("the transcription is told the user's languages", () => {
-  it("gpt-transcribe's languages hint and the recording's context", () => {
+  it("the transcription's languages hint and the recording's context", () => {
     const t = client(["en", "ko"]);
-    expect(t.s.sent[0]!.session.audio.input.transcription).toEqual({ model: "gpt-transcribe", languages: ["en", "ko"], prompt: TRANSCRIPTION_PROMPT });
+    expect(t.s.sent[0]!.session.audio.input.transcription).toEqual({ model: "gpt-live-transcribe", languages: ["en", "ko"], prompt: TRANSCRIPTION_PROMPT });
   });
 });
 
@@ -124,32 +124,36 @@ describe("unclear words ('Yo sup how you doin' as '有，......。')", () => {
   });
 });
 
-describe("other people talking nearby in another language", () => {
-  it("no reply is heard, no request goes out, nothing is kept", async () => {
+describe("speech in a language the browser is not set to (ticket 1bba1841: Korean on an English Chrome)", () => {
+  it("is the user's: a small-talk reply is heard", async () => {
     const t = client();
-    t.turn("bg1");
-    t.speaks("bg1", "你好！有什么可以帮你的吗？");
-    t.words("bg1", "你不是手上进不来，上面都是锁了。那那个钥匙呢？");
-    t.calls("bg1", "Find the key");
-    t.done("bg1");
+    t.turn("ko0");
+    t.speaks("ko0", "네, 잘 들려요.");
+    t.words("ko0", "안녕, 내 말 들려?");
+    t.done("ko0");
     await flush();
-    expect(t.audio).toEqual([]);
-    expect(t.s.sent.filter((e) => e.type === "response.cancel").length).toBeGreaterThan(0);
-    expect(t.tools).toEqual([]);
-    expect(t.outputs()).toEqual([NOT_A_REQUEST_OUTPUT.not_user]);
-    expect(t.heard).toEqual([]);
-    expect(t.traces).toContain("voice.not_addressed");
-    expect(t.traces).toContain("voice.refused_forward");
+    expect(t.audio).toEqual(["AAAA"]);
+    expect(t.heard).toEqual([["안녕, 내 말 들려?"]]);
   });
 
-  it("no tool runs for it either (ending voice, stopping the task, moving tabs)", async () => {
+  it("is the user's: the request goes out with the words as said", async () => {
     const t = client();
-    t.turn("bg2");
-    t.words("bg2", "请你做饭了。");
-    for (const name of ["end_voice", "stop_task", "use_this_tab"]) t.s.event({ type: "response.function_call_arguments.done", call_id: `c_${name}`, name, arguments: "{}" });
+    t.turn("ko1");
+    t.words("ko1", "이 페이지가 무슨 내용인지 알려줘.");
+    t.calls("ko1", "이 페이지가 무슨 내용인지 알려줘");
+    t.done("ko1");
     await flush();
-    expect(t.tools).toEqual([]);
-    expect(t.outputs()).toEqual([NOT_A_REQUEST_OUTPUT.not_user, NOT_A_REQUEST_OUTPUT.not_user, NOT_A_REQUEST_OUTPUT.not_user]);
+    expect(t.tools.map((x) => [x[1], x[3]])).toEqual([[{ text: "이 페이지가 무슨 내용인지 알려줘" }, ["이 페이지가 무슨 내용인지 알려줘."]]]);
+    expect(t.traces).not.toContain("voice.refused_forward");
+  });
+
+  it("its tools run as the user's (ending voice)", async () => {
+    const t = client();
+    t.turn("ko2");
+    t.words("ko2", "이제 그만 듣고 꺼줘.");
+    t.s.event({ type: "response.function_call_arguments.done", call_id: "c_end", name: "end_voice", arguments: "{}" });
+    await flush();
+    expect(t.tools.map((x) => x[0])).toEqual(["end_voice"]);
   });
 
   it("the user's own language is theirs: a Chinese speaker's request goes out", async () => {
@@ -200,7 +204,7 @@ describe("the narrator passing on its own update (the owner's trace, turn 5)", (
     const t = client();
     t.c.say("question", "Should I post it?");
     t.turn("in1");
-    t.words("in1", "yes, post it");
+    t.words("in1", "yes, post it.");
     t.calls("in1", "Yes, post it");
     await flush();
     expect(t.tools.map((x) => x[1])).toEqual([{ text: "Yes, post it" }]);
@@ -243,7 +247,7 @@ describe("the microphone hearing the narrator (echo)", () => {
     t.s.event({ type: "response.output_audio.delta", item_id: "a_ours", response_id: "ours", delta: "AAAA" });
     t.s.event({ type: "response.done", response: { id: "ours", status: "completed" } });
     t.turn("echo1");
-    t.words("echo1", "opening the home timeline");
+    t.words("echo1", "opening the home timeline.");
     t.calls("echo1", "Open the home timeline");
     t.done("echo1");
     await flush();
@@ -256,7 +260,7 @@ describe("the microphone hearing the narrator (echo)", () => {
   it("the parts of one reply are sentences apart (a real trace ran them together: 'exciting!I need')", () => {
     const shown: string[] = [];
     let socket!: FakeSocket;
-    const c = new RealtimeClient({ url: "wss://x", token: "t", open: () => (socket = new FakeSocket()), handlers: { onNarratorText: (x) => void shown.push(x) } });
+    const c = new RealtimeClient({ passOnEverything: false,  url: "wss://x", token: "t", open: () => (socket = new FakeSocket()), handlers: { onNarratorText: (x) => void shown.push(x) } });
     c.connect();
     socket.open();
     socket.event({ type: "response.created", response: { id: "r" } });
@@ -296,8 +300,11 @@ describe("small talk while the agent works", () => {
     expect(t.creates()).toEqual([]);
   });
 
-  it("the narrator is told to ignore speech not addressed to it", () => {
+  it("the narrator is told to ignore speech not addressed to it, and that the user may speak any language", () => {
     const t = client();
-    expect(t.s.sent[0]!.session.instructions).toContain("Speech that is not addressed to you, or is in another language than the user's, is not for you");
+    const instructions = t.s.sent[0]!.session.instructions as string;
+    expect(instructions).toContain("Speech that is plainly not addressed to you is not for you");
+    expect(instructions).toContain("The user may speak any language");
+    expect(instructions).not.toContain("in another language than the user's");
   });
 });

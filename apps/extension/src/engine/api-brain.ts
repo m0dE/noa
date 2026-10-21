@@ -39,20 +39,31 @@ export interface ApiBackend {
 }
 
 /**
- * The user's own Anthropic API key. Jev, when it is on: the Jev key set here, else Noa's cloud Jev while
- * `cloudJev` gives the account's session (jevSourceFor); a run it has no credit for goes on without it.
+ * The Jev of a brain that brings none of its own (the Claude API key), when Jev is on: the Jev key set
+ * here, else Noa's cloud Jev while `cloudJev` gives the account's session (jevSourceFor); a run it has no credit for
+ * goes on without it.
  */
-export function claudeApiBackend(core: Pick<CoreApi, "createJev">, fetchFn?: typeof fetch, cloudJev?: () => { token: string; apiBase: string } | null): ApiBackend {
+function ownJev(
+  core: Pick<CoreApi, "createJev">,
+  s: ExtensionSettings,
+  sessionId: string,
+  fetchFn?: typeof fetch,
+  cloudJev?: () => { token: string; apiBase: string } | null,
+): JevLike | null {
+  if (!s.jevEnabled) return null;
   const fetchOpt = fetchFn ? { fetch: fetchFn } : {};
+  if (s.jevApiKey) return core.createJev(s.jevApiKey, fetchFn ? fetchOpt : undefined);
+  const cloud = cloudJev?.();
+  return cloud ? withoutCreditPause(core.createJev(cloud.token, { endpoint: hostedJevEndpoint(cloud.apiBase), headers: { [SESSION_HEADER]: sessionId }, ...fetchOpt })) : null;
+}
+
+/** The user's own Anthropic API key, with ownJev. */
+export function claudeApiBackend(core: Pick<CoreApi, "createJev">, fetchFn?: typeof fetch, cloudJev?: () => { token: string; apiBase: string } | null): ApiBackend {
   return {
     kind: "claude-api",
     label: "Claude API",
     connect(s, sessionId) {
-      let jev: JevLike | null = null;
-      const cloud = s.jevEnabled && !s.jevApiKey ? cloudJev?.() : null;
-      if (s.jevEnabled && s.jevApiKey) jev = core.createJev(s.jevApiKey, fetchFn ? { fetch: fetchFn } : undefined);
-      else if (cloud) jev = withoutCreditPause(core.createJev(cloud.token, { endpoint: hostedJevEndpoint(cloud.apiBase), headers: { [SESSION_HEADER]: sessionId }, ...fetchOpt }));
-      return { agent: { apiKey: s.anthropicApiKey, model: s.anthropicModel }, jev };
+      return { agent: { apiKey: s.anthropicApiKey, model: s.anthropicModel }, jev: ownJev(core, s, sessionId, fetchFn, cloudJev) };
     },
   };
 }
@@ -63,7 +74,7 @@ export const API_IDLE_MS = 30 * 60_000;
 
 /** The agent loop inside the extension (core.startApiAgent), on the backend's endpoint. */
 export class ApiBrain implements Brain {
-  readonly kind: "claude-api" | "noa";
+  readonly kind: ApiBackend["kind"];
   private readonly backend: ApiBackend;
   /** Conversation history lives here only: lost when the service worker restarts. */
   private readonly conversations = new Map<string, ApiConversation>();

@@ -79,6 +79,20 @@
                   <div class="srow-control"><span class="switch"><input id="f-bookmarkSync" type="checkbox" role="switch" /></span></div>
                 </div>
               </div>
+
+              <h3 class="group-title" id="h-phone">Your phone</h3>
+              <div class="box pad" id="phone-box">
+                <p class="hint">Start jobs from your phone: take a photo, say what to do, and Noa does it on this computer. Answer its questions and approvals from the phone too. What passes between the phone and this computer is end-to-end encrypted, so not even Noa's servers can read it.</p>
+                <ul id="phone-list" class="phone-list" hidden></ul>
+                <div id="phone-qr-wrap" class="phone-qr-wrap" hidden>
+                  <div id="phone-qr" class="phone-qr" role="img" aria-label="QR code that pairs your phone"></div>
+                  <p class="hint">Point your phone's camera at the code. It works once, for 10 minutes. <a id="phone-url" href="#" target="_blank" rel="noopener">Copy the link</a> instead.</p>
+                </div>
+                <div class="row">
+                  <button id="phone-pair" type="button" class="primary">Pair a phone</button>
+                  <span id="phone-msg" class="msg" role="status"></span>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -97,39 +111,6 @@
             <h3 class="group-title" id="h-brain">Source</h3>
             <p class="group-hint">Which Claude runs your tasks.</p>
             <div class="box options" role="radiogroup" aria-labelledby="h-brain">
-              <div class="opt" data-brain="claude-code">
-                <label class="opt-head">
-                  <input type="radio" name="brain" value="claude-code" />
-                  <span class="opt-text"><b>Local Claude Code</b><small class="opt-detail"></small></span>
-                </label>
-                <div class="reveal"><div class="reveal-inner">
-                  <div class="helper" id="helper-box">
-                    <div class="helper-head">
-                      <span id="helper-dot" class="dot"></span>
-                      <b id="helper-headline">Helper</b>
-                      <span class="spacer"></span>
-                      <button id="helper-connect" type="button" class="small">Connect</button>
-                    </div>
-                    <ul id="helper-details" class="helper-details"></ul>
-                    <p id="helper-msg" class="msg" role="status"></p>
-                    <ol id="helper-install" class="steps" hidden>
-                      <li id="helper-step-claude">Install <a href="https://claude.com/claude-code" target="_blank" rel="noopener">Claude Code</a> and sign in to it once.</li>
-                      <li id="helper-step-terminal"><span id="helper-open-terminal">Open Terminal: press <b>⌘ Space</b>, type <b>Terminal</b>, press <b>Return</b>.</span></li>
-                      <li id="helper-step-command">Click <b>Copy</b>, paste it into <span id="helper-app-name">Terminal</span> (<b id="helper-paste-key">⌘ V</b>) and press <b id="helper-enter-key">Return</b>. It takes about a minute and ends with “Done”.
-                        <div class="cmd-row">
-                          <code id="helper-command" class="cmd"></code>
-                          <button id="helper-copy" type="button" class="small primary">Copy</button>
-                        </div>
-                      </li>
-                      <li id="helper-step-repo" hidden><span id="helper-repo-why">The installer for this version of Noa is not on noa.bot yet, so there is nothing to run right now.</span> Click <b class="helper-recheck-name">Connect</b> again in a few minutes.
-                        <p class="hint" style="margin-top: 4px">Only if you build Noa from its source code: in that folder run <code>pnpm install</code> and <code>pnpm build</code>, then <code>node apps/helper/dist/install.js</code></p>
-                      </li>
-                      <li id="helper-step-back">Come back to this page. It connects by itself; if not, click <b id="helper-connect-name">Connect</b>.</li>
-                    </ol>
-                  </div>
-                </div></div>
-              </div>
-
               <div class="opt" data-brain="noa">
                 <label class="opt-head">
                   <input type="radio" name="brain" value="noa" aria-describedby="hosted-aside" />
@@ -148,6 +129,45 @@
                 </div>
               </div>
 
+              <div class="opt" data-brain="claude-code">
+                <label class="opt-head">
+                  <input type="radio" name="brain" value="claude-code" />
+                  <span class="opt-text"><b>Local Claude Code</b><small class="opt-detail"></small></span>
+                </label>
+                <div class="reveal"><div class="reveal-inner">
+                  <div class="helper" id="helper-box">
+                    <div class="helper-head">
+                      <span id="helper-dot" class="dot"></span>
+                      <b id="helper-headline">Helper</b>
+                      <span class="spacer"></span>
+                      <button id="helper-connect" type="button" class="small">Connect</button>
+                    </div>
+                    <ul id="helper-details" class="helper-details"></ul>
+                    <p id="helper-no-claude" class="msg" data-tone="bad" hidden>Claude Code doesn't seem to be installed on this computer (the Claude desktop app is not enough: Claude Code is a separate install). <a href="https://code.claude.com/docs/en/setup" target="_blank" rel="noopener">Download Claude Code</a>, sign in to it once, then click <b>Re-check</b>.</p>
+                    <details id="helper-debug" class="helper-debug" hidden>
+                      <summary>Details for the developer</summary>
+                      <pre id="helper-debug-text" class="cmd"></pre>
+                      <button id="helper-debug-copy" type="button" class="small">Copy details</button>
+                    </details>
+                    <p id="helper-msg" class="msg" role="status"></p>
+                    <ol id="helper-install" class="steps" hidden>
+                      <li id="helper-step-claude">Install <a href="https://code.claude.com/docs/en/setup" target="_blank" rel="noopener">Claude Code</a> and sign in to it once.</li>
+                      <li id="helper-step-terminal"><span id="helper-open-terminal">Open Terminal: press <b>⌘ Space</b>, type <b>Terminal</b>, press <b>Return</b>.</span></li>
+                      <li id="helper-step-command">Click <b>Copy</b>, paste it into <span id="helper-app-name">Terminal</span> (<b id="helper-paste-key">⌘ V</b>) and press <b id="helper-enter-key">Return</b>. It takes about a minute and ends with “Done”.
+                        <div class="cmd-row">
+                          <code id="helper-command" class="cmd"></code>
+                          <button id="helper-copy" type="button" class="small primary">Copy</button>
+                        </div>
+                      </li>
+                      <li id="helper-step-repo" hidden><span id="helper-repo-why">The installer for this version of Noa is not on noa.bot yet, so there is nothing to run right now.</span> Click <b class="helper-recheck-name">Connect</b> again in a few minutes.
+                        <p class="hint" style="margin-top: 4px">Only if you build Noa from its source code: in that folder run <code>pnpm install</code> and <code>pnpm build</code>, then <code>node apps/helper/dist/install.js</code></p>
+                      </li>
+                      <li id="helper-step-back">Come back to this page. It connects by itself; if not, click <b id="helper-connect-name">Connect</b>.</li>
+                    </ol>
+                  </div>
+                </div></div>
+              </div>
+
               <div class="opt" data-brain="claude-api">
                 <label class="opt-head">
                   <input type="radio" name="brain" value="claude-api" />
@@ -160,6 +180,40 @@
                     <button id="test-claude" type="button" class="small">Test key</button>
                     <span id="test-claude-msg" class="msg" role="status"></span>
                   </div>
+                </div></div>
+              </div>
+
+              <div class="opt" data-brain="local">
+                <label class="opt-head">
+                  <input type="radio" name="brain" value="local" />
+                  <span class="opt-text"><b>Local model</b><small class="opt-detail"></small></span>
+                </label>
+                <div class="reveal"><div class="reveal-inner">
+                  <div class="local-field">
+                    <label for="f-localModelUrl">Server address</label>
+                    <input id="f-localModelUrl" type="url" spellcheck="false" placeholder="http://localhost:11434" aria-describedby="err-localModelUrl local-url-hint" />
+                    <small id="local-url-hint" class="field-hint">Ollama: http://localhost:11434 · LM Studio: http://localhost:1234 · llama.cpp: http://localhost:8080</small>
+                    <small id="err-localModelUrl" class="field-error"></small>
+                  </div>
+                  <div class="local-field">
+                    <label for="f-localModel">Model</label>
+                    <input id="f-localModel" type="text" spellcheck="false" list="local-models" placeholder="e.g. qwen3:8b or hermes3:8b" aria-describedby="err-localModel" />
+                    <datalist id="local-models"></datalist>
+                    <small id="err-localModel" class="field-error"></small>
+                  </div>
+                  <p id="local-model-missing" class="field-hint" hidden>Pick a model: click Find models to list the ones your server has.</p>
+                  <div class="row">
+                    <button id="test-local" type="button" class="small">Find models</button>
+                    <span id="test-local-msg" class="msg" role="status"></span>
+                  </div>
+                  <div class="local-setup">
+                    <p class="field-hint">Set it up with one command in <span class="local-app-name">Terminal</span>: it installs Ollama if you have none, downloads a model and gives Noa's helper OpenCode, an open-source agent with web search, web pages and skills that runs the model with Noa's browser tools.</p>
+                    <div class="cmd-row">
+                      <code id="local-command" class="cmd"></code>
+                      <button id="local-copy" type="button" class="small primary">Copy</button>
+                    </div>
+                  </div>
+                  <p class="field-hint">The model runs on your computer, and it also writes the chat titles and memory notes. Jev, if it is on (the Jev tab), runs in the cloud and sees the pages it picks clicks on. Turn it off to keep the pages here too.</p>
                 </div></div>
               </div>
             </div>
@@ -337,6 +391,21 @@
             </div>
           </dialog>
 
+          <div class="group" id="tabs-group">
+            <h3 class="group-title" id="h-tabs">Your tabs</h3>
+            <p class="group-hint">What Noa may do with the tabs of the window it works in.</p>
+            <div class="box">
+              <div class="srow" id="tab-switching-row">
+                <label class="srow-label" for="f-autoTabSwitching"><b>Auto tab switching</b><small>Noa switches to its tab when it needs to see the page (to take a screenshot) or needs you there (a sign-in, a code), so a tab may come to the front while you work. Off: Noa asks first before a screenshot, and without your OK it can't see tabs you're not looking at, which limits what it can do; when it needs you, the "Noa needs you" pill on your tab opens its chat.</small></label>
+                <div class="srow-control"><span class="switch"><input id="f-autoTabSwitching" type="checkbox" role="switch" /></span></div>
+              </div>
+              <div class="srow" id="share-tabs-row">
+                <label class="srow-label" for="f-shareOtherTabs"><b>Use my other tabs</b><small>A chat you start from a tab is told about your other tabs in that window (their titles and addresses, without the part after "?" or "#") and can read them. Off: Noa only sees the tab you start from and the tabs it opens.</small></label>
+                <div class="srow-control"><span class="switch"><input id="f-shareOtherTabs" type="checkbox" role="switch" /></span></div>
+              </div>
+            </div>
+          </div>
+
           <div class="group" id="schedule-group">
             <h3 class="group-title" id="h-scheduled-automation">Scheduled jobs</h3>
             <p class="group-hint">What a scheduled job may do without asking you when Full autonomy is off, and when scheduled jobs run.</p>
@@ -387,14 +456,6 @@
               <div class="srow">
                 <label class="srow-label" for="f-showControlOverlay"><b>Show when Noa controls a tab</b><small>A glow around the page and a "Noa is working" bar with Stop. The Noa tab group always shows it.</small></label>
                 <div class="srow-control"><span class="switch"><input id="f-showControlOverlay" type="checkbox" role="switch" /></span></div>
-              </div>
-              <div class="srow" id="tab-switching-row">
-                <label class="srow-label" for="f-autoTabSwitching"><b>Auto tab switching</b><small>Noa switches to its tab when it needs to see the page (to take a screenshot), so a tab may come to the front while you work. Off: Noa asks first, and without your OK it can't see tabs you're not looking at, which limits what it can do.</small></label>
-                <div class="srow-control"><span class="switch"><input id="f-autoTabSwitching" type="checkbox" role="switch" /></span></div>
-              </div>
-              <div class="srow" id="share-tabs-row">
-                <label class="srow-label" for="f-shareOtherTabs"><b>Use my other tabs</b><small>A chat you start from a tab is told about your other tabs in that window (their titles and addresses, without the part after "?" or "#") and can read them. Off: Noa only sees the tab you start from and the tabs it opens.</small></label>
-                <div class="srow-control"><span class="switch"><input id="f-shareOtherTabs" type="checkbox" role="switch" /></span></div>
               </div>
             </div>
           </div>
@@ -486,10 +547,15 @@
                 <div class="srow-control"><span class="switch"><input id="memory-on" type="checkbox" role="switch" /></span></div>
               </div>
               <p id="memory-paused-note" class="mem-paused" role="status" hidden></p>
-              <p id="memory-sync" class="mem-sync" role="status" hidden></p>
-              <div id="memory-sync-actions" class="mem-sync-actions" hidden></div>
               <p id="memory-backfill" class="mem-sync" role="status" hidden></p>
             </div>
+          </div>
+          <div class="group" id="memory-where-group">
+            <h3 class="group-title" id="h-memory-where">Where memory is kept</h3>
+            <!-- Filled from memory-view.ts (whereView) by memory-section.ts. -->
+            <div class="box options" id="memory-where" role="radiogroup" aria-labelledby="h-memory-where"></div>
+            <p id="memory-sync" class="mem-sync" role="status" hidden></p>
+            <div id="memory-sync-actions" class="mem-sync-actions" hidden></div>
           </div>
           <div class="group">
             <h3 class="group-title">What it remembers</h3>
@@ -510,6 +576,38 @@
                 <div class="srow-control"><div class="row"><button id="memory-forget" type="button" class="small danger">Forget everything</button><button id="memory-forget-cancel" type="button" class="small ghost" hidden>Cancel</button></div></div>
               </div>
               <p id="memory-forget-question" class="mem-question" role="status"></p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Storage (storage-section.ts) -->
+        <section class="panel" id="panel-storage" role="tabpanel" aria-labelledby="tab-storage" tabindex="-1" hidden>
+          <div class="group">
+            <h3 class="group-title">Cloud files</h3>
+            <p class="group-hint">Files in your Noa account: the ones Noa keeps for you (invoices, documents, pictures it saves or makes) and the ones you upload. Every computer you sign in on has them, and Noa can find and attach any of them.</p>
+            <div class="box">
+              <div class="srow">
+                <div class="srow-label"><b>Your cloud files</b><small id="storage-cloud" role="status"></small><div id="storage-meter" class="meter" role="img" hidden><span id="storage-meter-fill" class="meter-fill"></span></div></div>
+                <div class="srow-control"><div class="row"><button id="storage-browse" type="button" class="small" hidden>Browse cloud files</button><button id="storage-action" type="button" class="small" hidden></button></div></div>
+              </div>
+              <span id="storage-msg" class="msg" role="status"></span>
+            </div>
+          </div>
+          <div class="group">
+            <h3 class="group-title" id="h-storage-where">Where Noa keeps files</h3>
+            <p class="group-hint">The files Noa saves for you and the pictures it makes. Noa finds and attaches your files wherever they are.</p>
+            <!-- Filled from storage-view.ts by storage-section.ts. -->
+            <div class="box options" id="storage-where" role="radiogroup" aria-labelledby="h-storage-where"></div>
+            <p id="storage-where-note" class="group-hint" role="status"></p>
+          </div>
+          <div class="group">
+            <h3 class="group-title">On this computer</h3>
+            <p class="group-hint">The Noa folder, in your downloads folder. Noa can attach any file you put there, and keeps its files there when set to This computer or Both.</p>
+            <div class="box">
+              <div class="srow">
+                <div class="srow-label"><b>Noa folder</b><small id="storage-folder" role="status"></small></div>
+                <div class="srow-control"><button id="storage-open" type="button" class="small">Open folder</button></div>
+              </div>
             </div>
           </div>
         </section>

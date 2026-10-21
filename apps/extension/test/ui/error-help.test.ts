@@ -1,7 +1,7 @@
 /** Errors in plain words with the button that fixes them (error-help.ts), and a failed turn shown once in the chat. */
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { HOSTED_AI_UNAVAILABLE, OUT_OF_CREDIT, PLAN_REQUIRED_MESSAGES, SCHEDULE_PLAN_REQUIRED, SCHEDULE_SIGN_IN, type AgentEvent } from "@noa/shared";
-import { CLAUDE_CODE_GONE, HOSTED_SIGN_IN } from "../../src/engine/brain-resolver.js";
+import { HOSTED_AI_UNAVAILABLE, hostedAiUnavailableText, OUT_OF_CREDIT, PLAN_REQUIRED_MESSAGES, SCHEDULE_PLAN_REQUIRED, SCHEDULE_SIGN_IN, type AgentEvent } from "@noa/shared";
+import { HOSTED_SIGN_IN } from "../../src/engine/brain-resolver.js";
 import { errorHelp, FIXES } from "../../src/sidepanel/error-help.js";
 import { setErrorFixes } from "../../src/sidepanel/error-view.js";
 import { describeEvent, turnError } from "../../src/sidepanel/event-format.js";
@@ -27,7 +27,6 @@ describe("errorHelp", () => {
     [SCHEDULE_SIGN_IN, "You're not logged in.", ["Log in"], false],
     ["Helper not installed", "The Claude Code helper isn't installed.", ["Set up Claude Code"], false],
     ["helper disconnected: Native host has exited.", "Local Claude Code isn't connected.", ["Set up Claude Code", "Use Noa AI"], true],
-    [CLAUDE_CODE_GONE, "Local Claude Code isn't connected.", ["Set up Claude Code", "Use Noa AI"], true],
     ["No Claude API key set", "No Claude API key is set.", ["Add API key"], false],
     ["Claude API key rejected (HTTP 401: authentication_error: invalid x-api-key)", "Your Claude API key was refused.", ["Add API key"], false],
     ["No AI set up. Install the helper, add a Claude API key, or log in.", "AI model not detected.", ["Set up AI"], false],
@@ -45,6 +44,16 @@ describe("errorHelp", () => {
     // The technical text stays reachable behind Details.
     if (text !== help.message && `${text}.` !== help.message) expect(help.details).toBe(text);
     else expect(help.details).toBeUndefined();
+  });
+
+  it("says why Noa AI is unavailable, with the server's status and words behind Details", () => {
+    const text = hostedAiUnavailableText("Anthropic refused Noa's requests (HTTP 403: Request not allowed)");
+    expect(errorHelp(text)).toMatchObject({ message: "Noa AI is unavailable right now.", hint: "Anthropic refused Noa's requests.", details: text, retry: true });
+    expect(errorHelp(hostedAiUnavailableText("Noa's Anthropic account is out of API credit")).hint).toBe("Noa's Anthropic account is out of API credit.");
+    // Jev's error, which carries the same reason after its status.
+    expect(errorHelp(`Jev HTTP 502: ${hostedAiUnavailableText("Jev rejected Noa's API key (HTTP 401: invalid api key)")}`).hint).toBe("Jev rejected Noa's API key.");
+    // An older server without a reason.
+    expect(errorHelp(HOSTED_AI_UNAVAILABLE).hint).toBe("Try again later, or use your own Claude.");
   });
 
   it("says how long to wait when the server said so", () => {

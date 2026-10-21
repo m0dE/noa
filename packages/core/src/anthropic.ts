@@ -3,8 +3,8 @@
  * https://docs.anthropic.com/en/api/messages, tool use and prompt caching.
  */
 import { z } from "zod";
-import { ANTHROPIC_API_VERSION, ANTHROPIC_MESSAGES_URL, errorMessage, HOSTED_AI_UNAVAILABLE, toolArgsSchema, toolDescription, type ToolName, type ToolResult } from "@noa/shared";
-import { errorDetail, isHostedAiUnavailable, outOfCreditError, type CreditShortfall } from "./api-errors.js";
+import { ANTHROPIC_API_VERSION, ANTHROPIC_MESSAGES_URL, errorMessage, toolArgsSchema, toolDescription, type ToolName, type ToolResult } from "@noa/shared";
+import { errorDetail, hostedAiUnavailable, outOfCreditError, type CreditShortfall } from "./api-errors.js";
 import { MessageAccumulator, StreamError, readSse } from "./sse.js";
 import type { ReasoningParams, ThinkingParam } from "./reasoning.js";
 
@@ -142,6 +142,8 @@ export type PostResult =
   | { kind: "transient"; reason: string; retryAfterMs?: number }
   /** 401/403. */
   | { kind: "auth"; reason: string }
+  /** 400 from a hosted AI server older than the request: it does not forward an option sent (stream, thinking.display). */
+  | { kind: "unsupported"; reason: string }
   | { kind: "error"; reason: string };
 
 /**
@@ -160,9 +162,10 @@ export interface MessagesTransport {
   label?: string;
 }
 
-/** Streaming: text as it is written (`messageId:index` names the text block), and the start of a tool call. */
+/** Streaming: text as it is written (`messageId:index` names the text block), the thinking's summary as it is written, and the start of a tool call. */
 export interface StreamOptions {
   onText(messageId: string, index: number, text: string): void;
+  onThinking?(messageId: string, index: number, text: string): void;
   onToolStart?(): void;
 }
 
@@ -224,12 +227,14 @@ export async function postMessages(
     if (credit.shortfall) r.shortfall = credit.shortfall;
     return r;
   }
-  // The hosted AI's own credentials were refused: retrying will not help, and there is nothing technical to show.
-  if (isHostedAiUnavailable(text)) return { kind: "error", reason: HOSTED_AI_UNAVAILABLE };
+  // The hosted AI's own credentials or account were refused: retrying will not help; the reason says why.
+  const unavailable = hostedAiUnavailable(text);
+  if (unavailable) return { kind: "error", reason: unavailable };
   const detail = errorDetail(text);
   const status = `(HTTP ${s}${detail ? `: ${detail}` : ""})`;
   const rejected = transport.auth === "bearer" ? `${label} rejected the sign-in` : `${label} key rejected`;
   if (s === 401 || s === 403) return { kind: "auth", reason: `${rejected} ${status}` };
+  if (s === 400 && transport.auth === "bearer" && /not supported by hosted AI/i.test(detail)) return { kind: "unsupported", reason: `${label} error ${status}` };
   const transient = (reason: string): PostResult => {
     const after = retryAfterMs(res.headers);
     return after === undefined ? { kind: "transient", reason } : { kind: "transient", reason, retryAfterMs: after };
@@ -267,6 +272,13 @@ async function readStream(body: ReadableStream<Uint8Array>, stream: StreamOption
     () => {
       try {
         stream.onToolStart?.();
+      } catch {
+        /* a listener must not break the stream */
+      }
+    },
+    (id, i, t) => {
+      try {
+        stream.onThinking?.(id, i, t);
       } catch {
         /* a listener must not break the stream */
       }

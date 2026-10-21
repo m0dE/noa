@@ -1,9 +1,20 @@
-import { MAX_CONTEXT_TEXT, MAX_SNAPSHOT_AREAS, MAX_SNAPSHOT_CONTEXTS, MAX_SNAPSHOT_ELEMENTS, MAX_SNAPSHOT_OPTIONS, MAX_SNAPSHOT_TEXT, type PageSnapshot } from "@noa/shared";
+import {
+  MAX_CONTEXT_TEXT,
+  MAX_SNAPSHOT_AREAS,
+  MAX_SNAPSHOT_CONTEXTS,
+  MAX_SNAPSHOT_ELEMENTS,
+  MAX_SNAPSHOT_OPTIONS,
+  MAX_SNAPSHOT_PICTURES,
+  MAX_SNAPSHOT_TEXT,
+  MIN_PICTURE_SIDE,
+  type PagePicture,
+  type PageSnapshot,
+} from "@noa/shared";
 import { PAGE_MARKS, type PageMarks } from "./driver-common.js";
 
 /** The Runtime.evaluate expression that runs snapshotPage in the page. */
 export function snapshotExpression(): string {
-  return `(${snapshotPage.toString()})(${JSON.stringify(PAGE_MARKS)}, ${MAX_SNAPSHOT_TEXT}, ${MAX_SNAPSHOT_ELEMENTS}, ${MAX_SNAPSHOT_OPTIONS}, ${MAX_CONTEXT_TEXT}, ${MAX_SNAPSHOT_CONTEXTS}, ${MAX_SNAPSHOT_AREAS})`;
+  return `(${snapshotPage.toString()})(${JSON.stringify(PAGE_MARKS)}, ${MAX_SNAPSHOT_TEXT}, ${MAX_SNAPSHOT_ELEMENTS}, ${MAX_SNAPSHOT_OPTIONS}, ${MAX_CONTEXT_TEXT}, ${MAX_SNAPSHOT_CONTEXTS}, ${MAX_SNAPSHOT_AREAS}, ${MAX_SNAPSHOT_PICTURES}, ${MIN_PICTURE_SIDE})`;
 }
 
 /**
@@ -11,7 +22,17 @@ export function snapshotExpression(): string {
  * no imports, no references to module scope, plain ES2020, because it is
  * serialized with Function.prototype.toString.
  */
-export function snapshotPage(marks: PageMarks, maxText: number, maxElements: number, maxOptions: number, maxContextText = 160, maxContexts = 60, maxAreas = 8): PageSnapshot {
+export function snapshotPage(
+  marks: PageMarks,
+  maxText: number,
+  maxElements: number,
+  maxOptions: number,
+  maxContextText = 160,
+  maxContexts = 60,
+  maxAreas = 8,
+  maxPictures = 15,
+  minPictureSide = 48,
+): PageSnapshot {
   var ATTR = marks.attr;
   var w = window as unknown as Record<string, Element[] | undefined>;
   var old: Element[] = Array.prototype.slice.call(document.querySelectorAll("[" + ATTR + "]")).concat(w[marks.shadow] || []);
@@ -326,6 +347,26 @@ export function snapshotPage(marks: PageMarks, maxText: number, maxElements: num
   function inDialog(e: Element): boolean {
     return anyDialog && !!e.closest(DIALOG);
   }
+  // Open popups: what an expanded control that opens one (aria-haspopup, a combobox) or whose target is a list, menu,
+  // tree or grid points to (aria-controls, aria-owns): a dropdown's options. Such a list is often mounted at the end of
+  // the page, outside the dialog it belongs to. An expanded accordion's panel is no popup.
+  var popups: Element[] = [];
+  for (var pr = 0; pr < roots.length; pr++) {
+    var openers = roots[pr]!.querySelectorAll('[aria-expanded="true"][aria-controls], [aria-expanded="true"][aria-owns]');
+    for (var po = 0; po < openers.length; po++) {
+      var opener = openers[po]!;
+      var opens = (opener.getAttribute("aria-haspopup") || "false") !== "false" || opener.getAttribute("role") === "combobox";
+      var ids = ((opener.getAttribute("aria-controls") || "") + " " + (opener.getAttribute("aria-owns") || "")).split(/\s+/);
+      for (var pi = 0; pi < ids.length; pi++) {
+        var target = ids[pi] ? (opener.getRootNode() as Document | ShadowRoot).getElementById(ids[pi]!) : null;
+        if (target && (opens || /^(listbox|menu|tree|grid)$/.test(target.getAttribute("role") || ""))) popups.push(target);
+      }
+    }
+  }
+  function inPopup(e: Element): boolean {
+    for (var pp = 0; pp < popups.length; pp++) if (within(popups[pp]!, e)) return true;
+    return false;
+  }
   var topModal = topmostModal(modals);
   function inModal(e: Element): boolean {
     return !!topModal && within(topModal, e);
@@ -379,19 +420,20 @@ export function snapshotPage(marks: PageMarks, maxText: number, maxElements: num
   var truncated = head.length > maxElements;
   var nodes = head;
   if (truncated) {
-    // Too many to list: an open dialog's controls first (it covers the page, and a dialog mounted at the end of the
-    // page would otherwise be cut), then those in view, then the rest in page order; numbered in page order. Past the
-    // head only those two kinds are checked, and the head alone has enough of the rest.
+    // Too many to list: an open dialog's or popup's controls first (it covers the page, and a dialog or a dropdown's
+    // list mounted at the end of the page would otherwise be cut, its options scrolled out of its box too), then those
+    // in view, then the rest in page order; numbered in page order. Past the head only those kinds are checked, and
+    // the head alone has enough of the rest.
     var first: Element[] = [];
     var second: Element[] = [];
     var sort = function (e: Element) {
-      if (inDialog(e)) first.push(e);
+      if (inDialog(e) || inPopup(e)) first.push(e);
       else if (inView(boxOf(e))) second.push(e);
     };
     for (var h = 0; h < head.length; h++) sort(head[h]!);
     for (; n < all.length; n++) {
       var e = all[n]!;
-      if ((inDialog(e) || inView(boxOf(e))) && listable(e)) sort(e);
+      if ((inDialog(e) || inPopup(e) || inView(boxOf(e))) && listable(e)) sort(e);
     }
     var keep = new Set<Element>();
     var tiers = [first, second, head];
@@ -614,9 +656,77 @@ export function snapshotPage(marks: PageMarks, maxText: number, maxElements: num
     }
     if (!sameSite) frames.push({ url: src.slice(0, 200), title: clean(frame.title || frame.getAttribute("aria-label"), 80) });
   }
+  /**
+   * The page's pictures shown at least minPictureSide on both sides, largest first: their address (the srcset's
+   * largest, else what is shown, else a lazy page's data-src), text, own and shown size, and the link they are in.
+   */
+  function pictures(): PagePicture[] {
+    // Big enough by their boxes, largest first; only those are looked at closely, until enough are found.
+    var big: { img: HTMLImageElement; r: DOMRect }[] = [];
+    var imgs = document.images;
+    for (var n = 0; n < imgs.length; n++) {
+      var box = boxOf(imgs[n]!);
+      if (box.width >= minPictureSide && box.height >= minPictureSide) big.push({ img: imgs[n]!, r: box });
+    }
+    big.sort(function (x, y) {
+      return y.r.width * y.r.height - x.r.width * x.r.height;
+    });
+    var out: PagePicture[] = [];
+    var seen: Record<string, boolean> = {};
+    for (var k = 0; k < big.length && out.length < maxPictures; k++) {
+      var img = big[k]!.img;
+      var r = big[k]!.r;
+      if (!isVisible(img)) continue;
+      var url = "";
+      var best = 0;
+      (img.getAttribute("srcset") || "").split(/,\s+/).forEach(function (cand) {
+        var bits = cand.trim().split(/\s+/);
+        var w = parseFloat(bits[1] || "1");
+        if (bits[0] && w > best) {
+          best = w;
+          url = bits[0];
+        }
+      });
+      var shown = img.currentSrc || img.src || "";
+      // A lazy loader's address is the picture's until it is swapped in: what is shown before is a placeholder (a
+      // data: URL or a tiny image of its own).
+      var lazy = img.getAttribute("data-src") || img.getAttribute("data-lazy-src") || img.getAttribute("data-original") || "";
+      if (!url) url = lazy || shown;
+      try {
+        url = new URL(url, document.baseURI).href;
+      } catch (e) {
+        continue;
+      }
+      if (!/^https?:/i.test(url) || seen[url]) continue;
+      seen[url] = true;
+      // Its own size: the loaded picture's when that is the one listed, a larger srcset candidate's from its width
+      // (same shape), else unknown (0: a lazy page's placeholder says nothing about the picture).
+      var width = 0;
+      var height = 0;
+      if (img.naturalWidth && url === shown && !lazy) {
+        width = img.naturalWidth;
+        height = img.naturalHeight;
+      } else if (img.naturalWidth && best > 10) {
+        width = Math.round(best);
+        height = Math.round((best * img.naturalHeight) / img.naturalWidth);
+      }
+      var fig = img.closest("figure");
+      var cap = fig ? fig.querySelector("figcaption") : null;
+      var text = clean(img.alt || img.title || (cap ? cap.textContent : "") || img.getAttribute("aria-label"), 120);
+      var p: PagePicture = { url: url.slice(0, 500), width: width, height: height, shownWidth: Math.round(r.width), shownHeight: Math.round(r.height) };
+      if (text) p.text = text;
+      var a = img.closest("a[href]") as HTMLAnchorElement | null;
+      if (a && a.href) p.link = a.href.slice(0, 500);
+      out.push(p);
+    }
+    return out;
+  }
+
   var areas = scrollAreas();
+  var pics = pictures();
   var snap: PageSnapshot = { url: location.href, title: document.title, text: text, elements: elements, truncated: truncated };
   if (areas.length) snap.areas = areas;
+  if (pics.length) snap.pictures = pics;
   if (allText.length > maxText) snap.textCut = true;
   if (frames.length) snap.frames = frames;
   if (contexts.length) snap.contexts = contexts;

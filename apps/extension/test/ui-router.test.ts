@@ -11,7 +11,7 @@ import { TraceStore } from "../src/engine/trace-store.js";
 import { LocalTodo } from "../src/account/todo-source.js";
 import { ApiRequestError, NotSignedInError } from "../src/http-client.js";
 import { UiHub } from "../src/engine/ui-hub.js";
-import { UiRouter, type RouterRunner, type UiRouterDeps } from "../src/engine/ui-router.js";
+import { HELPER_RESTARTED, UiRouter, type RouterRunner, type UiRouterDeps } from "../src/engine/ui-router.js";
 import { TabChats } from "../src/tab-chats.js";
 import { applySettingsPatch } from "../src/settings-store.js";
 import { WrongPassphraseError } from "../src/vault.js";
@@ -33,6 +33,7 @@ function setup() {
     continueSession: vi.fn(async (_id: string, _note?: string) => ({ sessionId: "cont-1" })),
     message: vi.fn(async (sessionId: string | undefined, _text: string) => ({ sessionId: sessionId ?? "new-1", mode: sessionId ? ("turn" as const) : ("new" as const) })),
     newChat: vi.fn(async (_id?: string) => ({ ok: true })),
+    openChat: vi.fn(async () => ({ sessionId: "s-open", source: "adhoc" as const, title: "Voice chat", brain: "noa" as const, jev: false, startedAt: "2026-10-21T00:00:00.000Z", empty: true as const })),
     stop: vi.fn(() => true),
     say: vi.fn(async () => true),
     runTask: vi.fn(async (_id: string) => ({ sessionId: "S-task" })),
@@ -72,6 +73,7 @@ function setup() {
     brainStatus: (s) => resolveBrain({ settings: s, helper: helper.info, helperError: helper.lastError }),
     nextRunAt: async () => "2026-09-24T10:15:00.000Z",
     testClaude: async () => ({ ok: true, detail: "Key accepted" }),
+    testLocalModel: async () => ({ ok: true, detail: "Connected: 1 model; qwen3 is there.", models: ["qwen3"] }),
     // Echoes the resolved brain it was given: the router must pass the settings' brain status.
     testJev: async (_s, brain) => ({ ok: false, detail: `No Jev key set (brain: ${brain.effective ?? "none"})` }),
     vault,
@@ -111,6 +113,7 @@ describe("UiRouter", () => {
 
   it("settings tests pass through", async () => {
     const t = setup();
+    expect(await t.req({ type: "settings.testLocalModel" })).toEqual({ ok: true, detail: "Connected: 1 model; qwen3 is there.", models: ["qwen3"] });
     expect(await t.req({ type: "settings.testClaude" })).toEqual({ ok: true, detail: "Key accepted" });
     expect(await t.req({ type: "settings.testJev" })).toEqual({ ok: false, detail: "No Jev key set (brain: claude-api)" });
   });
@@ -122,6 +125,16 @@ describe("UiRouter", () => {
     expect(s.brain).toMatchObject({ effective: "claude-code", helper: INFO });
     t.helper.connect.mockRejectedValueOnce(new Error("nope"));
     await expect(t.req({ type: "helper.connect" })).resolves.toHaveProperty("brain");
+  });
+
+  it("helper.connect restarts a helper that found no Claude Code, so it looks again (installed since)", async () => {
+    const t = setup();
+    t.helper.info = INFO;
+    await t.req({ type: "helper.connect" });
+    expect(t.helper.disconnect).not.toHaveBeenCalled();
+    t.helper.info = { ...INFO, claudePath: null };
+    await t.req({ type: "helper.connect" });
+    expect(t.helper.disconnect).toHaveBeenCalledWith(HELPER_RESTARTED);
   });
 
   it("run.* requests go to the runner", async () => {

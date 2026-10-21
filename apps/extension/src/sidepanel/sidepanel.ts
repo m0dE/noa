@@ -78,6 +78,11 @@ let ownSeen: string | null | undefined;
 let runSeen: string | null = null;
 
 const nav = new JobNav(storedView(sessionStorage));
+/**
+ * A touch screen only (the panel on a phone): the panel does not put the cursor in a box by itself, since that opens
+ * the on-screen keyboard over what the user came to see.
+ */
+const touchOnly = matchMedia("(pointer: coarse)").matches && !matchMedia("(any-pointer: fine)").matches;
 const data = new JobData(uiRequest, (err) => console.warn(`[noa] jobs not loaded: ${errorMessage(err)}`));
 const listView = $("view-list");
 const jobView = $("view-job");
@@ -97,13 +102,13 @@ function showJob(key: string): void {
 function back(focus = true): void {
   const place = nav.back();
   list.show(place);
-  if (focus && !place.focusKey) $<HTMLInputElement>("job-search").focus({ preventScroll: true });
+  if (focus && !place.focusKey && !touchOnly) $<HTMLInputElement>("job-search").focus({ preventScroll: true });
 }
 
 /** A row was picked: its page. Its conversation is bound to this tab, unless it is running in another one. */
 function openJob(job: Job): void {
   nav.open(job.key, list.place(job.key));
-  composer.focus();
+  if (!touchOnly) composer.focus();
   const s = job.session;
   if (!s || activeTab === null) return;
   const where = state ? tabOfSession(s.sessionId, state) : null;
@@ -220,7 +225,6 @@ const voice = initVoiceInput({
   composer,
   mic: { ...micAccess, watch: (onChange) => watchMicPermission(onChange) },
   openBilling: billing,
-  host: document.body,
 });
 /**
  * Hands-free voice's chat for a tab: in the panel's tab, the job shown (the list: a new job, as the box would
@@ -287,6 +291,23 @@ const handsFree = initHandsFree({
     return t ? { title: t.title ?? null, url: t.url ?? t.pendingUrl ?? null } : null;
   },
   goToTab: (tabId) => void goToTab(tabId).catch((err: unknown) => composer.showError(err)),
+  openChat: async (tab) => {
+    const r = await uiRequest({ type: "chat.open", ...(tab === null ? {} : { tabId: tab }), ...composer.memory.forNewChat(tab) });
+    const id = r.session.sessionId;
+    // Shown at once where the user looks; a tab not shown has it as its chat once the state says so.
+    if (tab === null || tab === activeTab) startedHere(id);
+    else pending = { tab, sessionId: id };
+    return id;
+  },
+  dropChat: (sessionId) => {
+    // Its page goes with it, before voice can start again: voice turned on there would talk into a chat that is gone.
+    if (nav.view.kind === "job" && page.sessionId() === sessionId) back(false);
+    void uiRequest({ type: "session.delete", sessionId }).then(
+      () => data.loadSessions(),
+      (err: unknown) => console.warn(`[noa] removing the empty voice chat failed: ${errorMessage(err)}`),
+    );
+  },
+  onHearing: (line) => chat.setHearing(line),
   onSpeaking: (line) => chat.setSpeaking(line),
   // Noa's own lines (progress, approvals) in the language picked in Settings; the agent writes its own in it.
   localize: (text) => localizeLine(text, chosenLanguage(state?.settings.language)?.code),
@@ -675,6 +696,9 @@ function onPush(msg: UiPush): void {
     case "tasks.changed":
       void data.loadTasks();
       break;
+    case "sessions.changed":
+      void data.loadSessions();
+      break;
     case "panel.focus":
     case "panel.restore":
       // The keyboard shortcut: the cursor in the box, in the view shown (a panel it recreated gets the text its box
@@ -719,6 +743,8 @@ window.addEventListener("blur", reportDocumentFocus);
 
 /** The keyboard shortcuts as Chrome assigned them (null: none is set), for the list's hint and the mic's tooltip. */
 async function loadShortcuts(): Promise<void> {
+  // A page with no keyboard shortcuts (the panel on a phone): nothing to show or offer.
+  if (!chrome.commands) return;
   const [open, talk] = await Promise.all([readShortcut(OPEN_CHAT_COMMAND), readShortcut(VOICE_COMMAND)]);
   list.setShortcuts({ open, voice: talk });
   voice.setShortcut(talk);
@@ -736,10 +762,13 @@ async function loadState(): Promise<void> {
 
 void data.load();
 void trackTabs();
-// Every (re)connect: say which window this is, and fetch the state.
+// Every (re)connect: say which window this is, and fetch the state. Connected again (the background restarted, or on a
+// phone the link to the computer came back), the jobs are loaded again too: pushes sent meanwhile did not come.
+let connects = 0;
 const port = connectBackground(onPush, () => {
   hello();
   void loadState();
+  if (connects++ > 0) void data.load();
 });
 void loadShortcuts();
 // Back from the dashboard's Billing page: a new plan or credit shows without Refresh (the push brings it).
@@ -748,7 +777,7 @@ refreshOnReturn(() => void uiRequest({ type: "account.refresh", force: true }).t
 window.addEventListener("focus", () => void loadShortcuts());
 // Opened (by the shortcut or the toolbar button): the list, with the cursor in the box.
 list.show(nav.listPlace());
-composer.focus();
+if (!touchOnly) composer.focus();
 setInterval(() => {
   data.tick();
   if (state) header.render(state);

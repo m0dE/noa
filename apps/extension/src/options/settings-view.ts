@@ -9,6 +9,7 @@ import {
   ExtensionSettings,
   formatCents,
   isClaudeModel,
+  localServerUrl,
   OUT_OF_CREDIT,
   PERMISSION_TITLE,
   planName,
@@ -30,14 +31,16 @@ export const SECTIONS = [
   { id: "tasks", label: "Tasks" },
   { id: "logins", label: "Site logins" },
   { id: "memory", label: "Memory" },
+  { id: "storage", label: "Storage" },
   { id: "advanced", label: "Advanced" },
 ] as const;
 export type SectionId = (typeof SECTIONS)[number]["id"];
 
 /**
  * Other names a link may use for a section (options.html#jev opens AI, on its Speed tab). "speed" was Jev's own tab;
- * automation (with approvals) was on AI and the schedule on Tasks before they moved to Permission. API keys had
- * their own section; they are made on the dashboard now, so an old link lands on Account.
+ * automation (with approvals) was on AI, and the schedule and the tab toggles (Auto tab switching, Use my other
+ * tabs) on Tasks, before they moved to Permission. API keys had their own section; they are made on the dashboard
+ * now, so an old link lands on Account.
  */
 const SECTION_ALIASES: Record<string, SectionId> = {
   source: "ai",
@@ -58,9 +61,12 @@ const SECTION_ALIASES: Record<string, SectionId> = {
   images: "ai",
   vault: "logins",
   memories: "memory",
+  files: "storage",
+  "cloud-files": "storage",
+  folder: "storage",
   cloud: "advanced",
   "self-hosting": "advanced",
-  "tab-switching": "tasks",
+  "tab-switching": "permission",
 };
 
 const hashName = (hash: string | null | undefined) => (hash ?? "").replace(/^#/, "").trim().toLowerCase();
@@ -148,7 +154,7 @@ export interface SettingsView {
   options: BrainOption[];
   /**
    * The source whose radio is checked. The saved "auto" (the default, never picked on this page; there is no Auto
-   * radio) shows the source it runs on right now, or Local Claude Code while nothing works yet.
+   * radio) shows the source it runs on right now; while nothing works yet, Noa AI when signed in, else Local Claude Code.
    */
   shownBrain: Exclude<BrainMode, "auto">;
   /** Under Noa AI when signed in: plan, credit, what to buy. */
@@ -160,6 +166,8 @@ export interface SettingsView {
   showApiKey: boolean;
   /** Claude API selected without a key. */
   apiKeyMissing: boolean;
+  /** Local model selected without a model picked. */
+  localModelMissing: boolean;
   showModel: boolean;
   model: ModelChoice;
   /** Under Reasoning: what the chosen level does. */
@@ -213,7 +221,7 @@ function modelChoice(draft: Draft): ModelChoice {
   const id = draft.anthropicModel.trim();
   const known = isClaudeModel(id);
   const selected = known ? id : CUSTOM_MODEL;
-  let hint = "Used by every source. You can also switch it from the side panel.";
+  let hint = "Used by every Claude source. You can also switch it from the side panel.";
   if (draft.brain === "noa") {
     hint = known || !id ? "Noa AI runs this model." : `Noa AI does not offer this model, so it runs ${modelLabel(DEFAULT_MODEL)}.`;
   }
@@ -226,14 +234,14 @@ export function settingsView(input: ViewInput): SettingsView {
   const acct = brainAccount(account);
   const signedIn = acct.signedIn;
 
-  // Not picked yet ("auto"): the source the runner's own resolver runs on right now, else Local Claude Code.
+  // Not picked yet ("auto"): the source the runner's own resolver runs on right now, else Noa AI when signed in, else Local Claude Code.
   const auto = resolveBrain({
     settings: { ...settings, brain: "auto" },
     helper: brain.helper,
     helperError: brain.helperError ?? null,
     account: acct,
   });
-  const running = auto.effective === "noa" || auto.effective === "claude-api" ? auto.effective : "claude-code";
+  const running = auto.effective === "noa" || auto.effective === "claude-api" ? auto.effective : auto.effective || !signedIn ? "claude-code" : "noa";
   const shownBrain = input.draft.brain === "auto" ? running : input.draft.brain;
   const draft: Draft = { ...input.draft, brain: shownBrain };
 
@@ -253,14 +261,20 @@ export function settingsView(input: ViewInput): SettingsView {
   // Local Claude Code and the Claude API say what is missing in their own inline sections.
 
   const options: BrainOption[] = [
-    { value: "claude-code", label: "Local Claude Code", detail: "Runs on the Claude subscription you already pay for, through the helper app. A fraction of the cost of Noa AI or the Claude API.", enabled: true },
     {
       value: "noa",
       label: "Noa AI",
       detail: signedIn ? "Hosted by Noa, paid from your usage credit. Nothing to set up." : "Hosted by Noa. Needs an account.",
       enabled: signedIn,
     },
+    { value: "claude-code", label: "Local Claude Code", detail: "Runs on the Claude subscription you already pay for, through the helper app. A fraction of the cost of Noa AI or the Claude API.", enabled: true },
     { value: "claude-api", label: "Claude API", detail: "Your Anthropic API key, straight from Chrome.", enabled: true },
+    {
+      value: "local",
+      label: "Local model",
+      detail: "A model you run on your own computer, such as Qwen or Hermes, through Ollama, LM Studio or llama.cpp. Free and private; how well it works depends on the model.",
+      enabled: true,
+    },
   ];
 
   // Which Jev the draft's brain picks elements with, and which the approval checks use (brain-resolver's order).
@@ -287,8 +301,9 @@ export function settingsView(input: ViewInput): SettingsView {
     brainProblem,
     showApiKey: draft.brain === "claude-api",
     apiKeyMissing: draft.brain === "claude-api" && !settings.anthropicApiKey,
-    // Every brain runs the chosen model (the hosted AI only its own list).
-    showModel: true,
+    localModelMissing: draft.brain === "local" && !settings.localModel.trim(),
+    // Every Claude brain runs the chosen model (the hosted AI only its own list); the local model is picked in its own section.
+    showModel: draft.brain !== "local",
     model: modelChoice(draft),
     reasoningHint: REASONING_LEVELS.find((r) => r.id === (draft.reasoning ?? settings.reasoning))?.detail ?? "",
     showReasoningAutoRaise: (draft.reasoning ?? settings.reasoning) === "fast",
@@ -325,7 +340,7 @@ export const NUMBER_FIELDS = [
   "pauseRetryMinutes",
   "maxConsecutiveFailures",
 ] as const satisfies readonly (keyof ExtensionSettings)[];
-export const TEXT_FIELDS = ["anthropicModel", "accountApiBase"] as const satisfies readonly (keyof ExtensionSettings)[];
+export const TEXT_FIELDS = ["anthropicModel", "accountApiBase", "localModelUrl", "localModel"] as const satisfies readonly (keyof ExtensionSettings)[];
 export const BOOL_FIELDS = ["jevEnabled", "reasoningAutoRaise", "showControlOverlay", "autoTabSwitching", "shareOtherTabs"] as const satisfies readonly (keyof ExtensionSettings)[];
 export type NumberField = (typeof NUMBER_FIELDS)[number];
 export type TextField = (typeof TEXT_FIELDS)[number];
@@ -386,6 +401,9 @@ export function validateForm(v: FormValues): Partial<Record<NumberField | TextFi
   else if (/\s/.test(v.anthropicModel.trim())) errors.anthropicModel = "A model id has no spaces.";
   if (!v.accountApiBase.trim()) errors.accountApiBase = "Enter the account server's address.";
   else if (!isHttpUrl(v.accountApiBase.trim())) errors.accountApiBase = "Enter a full address starting with https://";
+  // Only the local model needs its server (another source's page keeps the field closed); a bad address is never saved (parseForm).
+  if (v.brain === "local" && !localServerUrl(v.localModelUrl)) errors.localModelUrl = "Enter the server's address, for example http://localhost:11434";
+  if (/\s/.test(v.localModel.trim())) errors.localModel = "A model id has no spaces.";
   return errors;
 }
 
@@ -397,6 +415,12 @@ export function parseForm(v: FormValues): Partial<Omit<ExtensionSettings, "anthr
   for (const k of TEXT_FIELDS) {
     if (errors[k]) continue;
     const t = v[k].trim();
+    if (k === "localModelUrl") {
+      // Saved as the server's address (a pasted /v1 dropped); one that is not an address keeps the saved value.
+      const server = localServerUrl(t);
+      if (server) out[k] = server;
+      continue;
+    }
     out[k] = k === "accountApiBase" ? t.replace(/\/+$/, "") : t;
   }
   for (const k of BOOL_FIELDS) out[k] = v[k];

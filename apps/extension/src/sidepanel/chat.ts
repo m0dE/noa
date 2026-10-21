@@ -58,6 +58,12 @@ export interface ChatView {
    * chat until its kept copy (a "spoken" event) takes its place.
    */
   setSpeaking(line: { sessionId: string; text: string } | null): void;
+  /**
+   * Hands-free voice hears the user in a chat: their words so far show as their message at the end of that chat,
+   * growing as they speak, until the kept copy (the request's user_message, or a heard event) takes its place; null:
+   * none (it was not them).
+   */
+  setHearing(line: { sessionId: string; text: string } | null): void;
 }
 
 export interface ChatOptions {
@@ -108,8 +114,6 @@ function eventNode(
   if (e.type === "approval_resolved") return null;
   // An undo or redo changes its memory note (see markMemoryUndone).
   if (e.type === "memory_undone" || e.type === "memory_redone") return null;
-  // Words that led to no request are kept for the record (Raw), not shown.
-  if (e.type === "heard") return null;
   const s = e.type === "task_end" && session?.sessionId === e.sessionId ? session : null;
   const canContinue = !!on.onContinue && e.type === "task_end" && isContinuableOutcome(e.outcome) && s?.source !== "cloud";
   const undone = (taskId: string) => events.some((x) => x.type === "task_unscheduled" && x.taskId === taskId);
@@ -180,7 +184,25 @@ export function initChat(opts: ChatOptions = {}): ChatView {
 
   /** Text Claude is still writing, and its elements while its conversation is shown. */
   const live = new LiveTexts();
-  const liveEls = new Map<string, { el: HTMLElement; view: MarkdownView }>();
+  /** Live texts on screen; a thinking one writes into `body`, under its label. */
+  type LiveEl = { el: HTMLElement; view: MarkdownView; body?: HTMLElement };
+  const liveEls = new Map<string, LiveEl>();
+  /** Takes live texts off the screen. */
+  const dropLive = (ids: string[]) => {
+    for (const id of ids) {
+      liveEls.get(id)?.el.remove();
+      liveEls.delete(id);
+    }
+  };
+  /** A live text's element: the answer as it is written, or a thought under a "Thinking" label. */
+  const liveEl = (id: string): LiveEl => {
+    if (!live.isThinking(id)) {
+      const el = h("div.ev-text.md.streaming", { "data-stream": id });
+      return { el, view: new MarkdownView(el) };
+    }
+    const body = h("div.ev-thinking-text.md.streaming");
+    return { el: h("div.ev-thinking", { "data-stream": id }, h("span.ev-thinking-label", null, "Thinking"), body), view: new MarkdownView(body), body };
+  };
   let paintQueued = false;
 
   /**
@@ -270,6 +292,27 @@ export function initChat(opts: ChatOptions = {}): ChatView {
 
   /** The line hands-free voice is saying now (in any chat). */
   let speaking: { sessionId: string; text: string } | null = null;
+  /** What hands-free voice hears the user say now (in any chat), and its message at the end of the log. */
+  let hearing: { sessionId: string; text: string } | null = null;
+  let hearingEl: HTMLElement | null = null;
+
+  /** The user's words being heard, as their message at the end of the chat they are said in. */
+  function showHearing(): void {
+    const line = hearing && current?.sessionId === hearing.sessionId && !backfilling ? hearing : null;
+    if (!line?.text.trim()) {
+      hearingEl?.remove();
+      hearingEl = null;
+      return;
+    }
+    const follow = isNearBottom(log);
+    const el = renderEvent({ kind: "user", text: line.text, voice: true });
+    el.classList.add("hearing");
+    log.querySelector(":scope > p.empty")?.remove();
+    if (hearingEl?.isConnected) hearingEl.replaceWith(el);
+    else log.append(el);
+    hearingEl = el;
+    if (follow) log.scrollTop = log.scrollHeight;
+  }
   /** Live copies of lines said in the chat shown, oldest first: the one playing, and said ones waiting for their kept copy. */
   let lives: HTMLElement[] = [];
 
@@ -320,13 +363,14 @@ export function initChat(opts: ChatOptions = {}): ChatView {
         if (!text.trim()) continue;
         let e = liveEls.get(id);
         if (!e?.el.isConnected) {
-          const el = h("div.ev-text.md.streaming", { "data-stream": id });
-          e = { el, view: new MarkdownView(el) };
+          e = liveEl(id);
           liveEls.set(id, e);
           log.querySelector(":scope > p.empty")?.remove();
-          log.append(el);
+          log.append(e.el);
         }
         e.view.update(text, true);
+        // A long thought shows its latest lines.
+        if (e.body) e.body.scrollTop = e.body.scrollHeight;
       }
       if (follow) log.scrollTop = log.scrollHeight;
     });
@@ -341,9 +385,9 @@ export function initChat(opts: ChatOptions = {}): ChatView {
    */
   function settleLive(ev: StampedAgentEvent): boolean {
     const r = live.settle(ev);
-    for (const id of r.drop) liveEls.get(id)?.el.remove();
+    dropLive(r.drop);
     for (const id of r.freeze) liveEls.get(id)?.el.classList.remove("streaming");
-    for (const id of [...r.drop, ...r.freeze]) liveEls.delete(id);
+    for (const id of r.freeze) liveEls.delete(id);
     if (!r.replaces) return false;
     const e = liveEls.get(r.replaces);
     liveEls.delete(r.replaces);
@@ -370,11 +414,30 @@ export function initChat(opts: ChatOptions = {}): ChatView {
       return;
     }
     lives = [];
-    resetLog(renderOpeningOf(current), renderSessionHead(current));
-    events.forEach((ev, i) => renderOne(ev, i));
+    hearingEl = null;
+    // The first message goes where it was asked: after what was said in a chat voice opened before it (an empty
+    // chat has none yet).
+    const askedAt = current.firstStartedAt ?? current.startedAt;
+    // An empty chat has no first message and no agent yet: what is said shows from the top.
+    if (current.empty) {
+      resetLog();
+      events.forEach((ev, i) => renderOne(ev, i));
+    } else {
+      const firstAsked = events.findIndex((e) => e.ts >= askedAt);
+      const split = firstAsked < 0 ? events.length : firstAsked;
+      if (split === 0) resetLog(renderOpeningOf(current), renderSessionHead(current));
+      else resetLog();
+      events.forEach((ev, i) => {
+        if (i === split && split > 0) log.append(renderOpeningOf(current!), renderSessionHead(current!));
+        renderOne(ev, i);
+      });
+      if (split === events.length && split > 0) log.append(renderOpeningOf(current), renderSessionHead(current));
+    }
     liveEls.clear();
     showSpeaking();
-    if (!events.length && !live.of(current.sessionId).some(([, t]) => t.trim())) log.append(h("p.empty", null, "Waiting for the agent…"));
+    showHearing();
+    if (!events.length && !live.of(current.sessionId).some(([, t]) => t.trim()))
+      log.append(h("p.empty", null, current.empty ? "Listening · what you say shows here" : "Waiting for the agent…"));
     pruneContinue(log);
     paintLive();
     if (!atTop) log.scrollTop = log.scrollHeight;
@@ -455,6 +518,11 @@ export function initChat(opts: ChatOptions = {}): ChatView {
     }
     // A turn's end, or a new message: a card its run paused at can be decided, or not any more.
     if (ev.type === "task_end" || ev.type === "user_message") refreshApprovals();
+    // The user's words heard by voice are kept now: their kept message takes the live one's place.
+    if ((ev.type === "user_message" || ev.type === "heard") && hearingEl) {
+      hearing = null;
+      showHearing();
+    }
     const follow = isNearBottom(log);
     log.querySelector(":scope > p.empty")?.remove();
     // The final text of a streamed block takes the place of its live text.
@@ -508,7 +576,7 @@ export function initChat(opts: ChatOptions = {}): ChatView {
     onEvent(ev) {
       raw.touched(ev.sessionId);
       if (ev.type === "assistant_text_delta") {
-        live.add(ev);
+        dropLive(live.add(ev).drop);
         if (shownId && ev.sessionId === shownId) paintLive();
         return;
       }
@@ -521,7 +589,14 @@ export function initChat(opts: ChatOptions = {}): ChatView {
     onSession(s) {
       raw.touched(s.sessionId);
       if (s.sessionId !== shownId) return;
+      // A chat voice opened gets its first message: drawn where it was asked.
+      const opened = !!current?.empty && !s.empty;
       current = s;
+      // Its first message is the words being heard, kept: drawn in their place.
+      if (opened) {
+        hearing = null;
+        return void render();
+      }
       refreshHead(current);
       if (s.endedAt) log.scrollTop = log.scrollHeight;
       opts.onFocus?.(current);
@@ -563,6 +638,10 @@ export function initChat(opts: ChatOptions = {}): ChatView {
     setRaw,
     get rawOpen() {
       return raw.shown !== null;
+    },
+    setHearing(line) {
+      hearing = line;
+      showHearing();
     },
     setSpeaking(line) {
       speaking = line;

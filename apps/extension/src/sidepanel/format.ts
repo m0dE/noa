@@ -148,6 +148,8 @@ export interface ModelChipInfo {
   label: string;
   /** The hosted Noa AI runs (or would run) the next task: only its models are offered. */
   hosted: boolean;
+  /** The local model runs (or would run) the next task: it is the only one offered (Settings picks another). */
+  local: boolean;
   /** Hosted: the account's credit ("$4.21 left"), when known. */
   credit?: string;
   outOfCredit: boolean;
@@ -163,13 +165,15 @@ export interface ModelChipInfo {
 /** What the composer's model chip shows: the model that will run, and whether Jev helps. */
 export function modelChip(state: Pick<UiState, "settings" | "brain" | "account">): ModelChipInfo {
   const hosted = state.brain.effective === "noa" || (!state.brain.effective && state.settings.brain === "noa");
+  const local = state.brain.effective === "local" || (!state.brain.effective && state.settings.brain === "local");
   const setting = state.settings.anthropicModel;
-  const model = hosted ? hostedModel(setting) : setting;
+  const model = local ? state.settings.localModel.trim() : hosted ? hostedModel(setting) : setting;
   const jevActive = !!state.brain.effective && state.brain.jevActive;
   const noCredit = outOfCredit(state);
   const info: ModelChipInfo = {
-    label: noCredit ? OUT_OF_CREDIT : modelLabel(model) + (jevActive ? " · Jev" : ""),
+    label: noCredit ? OUT_OF_CREDIT : (local && !model ? "No local model" : modelLabel(model)) + (jevActive ? " · Jev" : ""),
     hosted,
+    local,
     outOfCredit: noCredit,
     model,
     jevActive,

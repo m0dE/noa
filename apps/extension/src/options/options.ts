@@ -12,14 +12,16 @@ import { connectBackground } from "../sidepanel/port.js";
 import { createAccountMenu } from "../ui/account-menu.js";
 import { $, busy, closeMenusOnOutsideClick, find, flash, h } from "../ui/dom.js";
 import { initAccountSection } from "./account-section.js";
+import { initPhoneSection } from "./phone-section.js";
 import { initAutomationSection } from "./automation-section.js";
 import { initImagesSection } from "./images-section.js";
 import { initMemorySection } from "./memory-section.js";
+import { initStorageSection } from "./storage-section.js";
 import { SaveQueue } from "./autosave.js";
 import { initSecretFields } from "./secret-field.js";
 import { initVaultSection } from "./vault-section.js";
 import { initVoiceSection } from "./voice-section.js";
-import { adjustedFields, buildSettingsPatch, helperInstallCommand, helperInstallCommandWindows, helperNeedsInstall, helperStatus } from "./settings-patch.js";
+import { adjustedFields, buildSettingsPatch, helperInstallCommand, helperInstallCommandWindows, helperDiagnostics, helperNeedsInstall, helperStatus, localSetupCommand } from "./settings-patch.js";
 import {
   anchorFromHash,
   BOOL_FIELDS,
@@ -68,6 +70,8 @@ $("head-version").textContent = `v${chrome.runtime.getManifest().version}`;
 
 let state: UiState | null = null;
 let saved: ExtensionSettings | null = null;
+/** The local model's server was asked for its models since the page opened. */
+let localModelsAsked = false;
 
 // The number fields take the settings schema's range.
 for (const k of NUMBER_FIELDS) {
@@ -268,6 +272,12 @@ function render(): void {
   problem.textContent = v.brainProblem ?? "";
 
   $("api-key-missing").hidden = !v.apiKeyMissing;
+  $("local-model-missing").hidden = !v.localModelMissing;
+  // Local model shown: list its server's models once, for the model field's suggestions.
+  if (v.shownBrain === "local" && !localModelsAsked) {
+    localModelsAsked = true;
+    findLocalModels(true).catch((err) => flash(localMsg, errorMessage(err), "bad"));
+  }
   $("model-group").hidden = !v.showModel;
   const custom = modelSelect.value === CUSTOM_MODEL;
   input("anthropicModel").hidden = !custom;
@@ -289,6 +299,7 @@ function renderState(s: UiState): void {
   imagesSection.render(s);
   automationSection.render(s);
   memorySection.render(s);
+  storageSection.render(s);
   accountMenu.render(s.account);
   const b = s.brain;
 
@@ -296,6 +307,20 @@ function renderState(s: UiState): void {
   $("helper-dot").dataset.tone = hs.tone;
   $("helper-headline").textContent = hs.headline;
   $("helper-details").replaceChildren(...hs.details.map((d) => h("li", null, d)));
+  $("helper-no-claude").hidden = !hs.claudeMissing;
+  // Not connected for a reason: what to send a developer (our words, Chrome's, versions, and a command for the PC).
+  const debugText = !b.helper && b.helperError ? helperDiagnostics({
+    error: b.helperError,
+    chromeError: b.helperErrorDetail ?? null,
+    extensionVersion: chrome.runtime.getManifest().version,
+    extensionId: chrome.runtime.id,
+    userAgent: navigator.userAgent,
+    at: new Date(),
+    // Not onWindows/onMac: they are declared further down, after the first render may have run.
+    os: /Windows/.test(navigator.userAgent) ? "windows" : /Macintosh|Mac OS X/.test(navigator.userAgent) ? "mac" : "linux",
+  }) : "";
+  $("helper-debug").hidden = !debugText;
+  $("helper-debug-text").textContent = debugText;
   // Not connected, or an installed helper that is out of date: the install command (again) updates it.
   $("helper-install").hidden = !!b.helper && !helperNeedsInstall(b.helper);
   $("helper-connect").textContent = b.helper ? "Re-check" : "Connect";
@@ -319,6 +344,7 @@ function applyState(s: UiState): void {
 }
 
 const accountSection = initAccountSection({ onState: (s) => renderState(s) });
+initPhoneSection();
 // The header's account avatar and menu (the side panel's, see ui/account-menu.ts); what fails says so in the save notice.
 const accountMenu = createAccountMenu({
   id: "menu-acct",
@@ -341,6 +367,7 @@ const voiceSection = initVoiceSection({ onState: (s) => applyState(s) });
 const imagesSection = initImagesSection({ onState: (s) => applyState(s) });
 const automationSection = initAutomationSection({ onState: (s) => applyState(s) });
 const memorySection = initMemorySection({ onState: (s) => applyState(s) });
+const storageSection = initStorageSection({ onState: (s) => applyState(s), signIn: (b, note) => accountSection.signIn(b, note) });
 const hostedSignIn = $<HTMLButtonElement>("hosted-signin");
 hostedSignIn.addEventListener("click", () => accountSection.signIn(hostedSignIn, $("hosted-signin-msg")));
 // Get a plan / Top up under Noa AI: the dashboard's Billing page.
@@ -367,6 +394,27 @@ function testButton(id: string, type: "settings.testClaude" | "settings.testJev"
   );
 }
 testButton("test-claude", "settings.testClaude");
+
+const localBtn = $<HTMLButtonElement>("test-local");
+const localMsg = $("test-local-msg");
+/**
+ * Asks the local model's server for its models (settings.testLocalModel): they become the model field's suggestions,
+ * and with none picked yet the first is picked. quiet: on its own when the section opens, saying only what is wrong.
+ */
+async function findLocalModels(quiet = false): Promise<void> {
+  if (!quiet) flash(localMsg, "Asking the server…");
+  if (!(await saves.flush())) return flash(localMsg, "Save failed; fix the settings first.", "bad");
+  const res = await uiRequest({ type: "settings.testLocalModel" });
+  $("local-models").replaceChildren(...res.models.map((id) => h("option", { value: id })));
+  const field = input("localModel");
+  if (!field.value.trim() && res.models.length) {
+    field.value = res.models[0]!;
+    await saveChanged();
+    return flash(localMsg, `Picked ${field.value}, the first of ${res.models.length}. Choose another in the Model field if you like.`, "ok", { keep: true });
+  }
+  if (!quiet || !res.ok) flash(localMsg, res.detail, res.ok ? "ok" : "bad", { keep: true });
+}
+localBtn.addEventListener("click", () => void busy(localBtn, () => findLocalModels(), localMsg));
 testButton("test-jev", "settings.testJev");
 
 const connectBtn = $<HTMLButtonElement>("helper-connect");
@@ -402,6 +450,14 @@ $("helper-app-name").textContent = SHELL.name;
 $("helper-paste-key").textContent = SHELL.paste;
 $("helper-enter-key").textContent = SHELL.enter;
 $("helper-command").textContent = (onWindows ? helperInstallCommandWindows : helperInstallCommand)(chrome.runtime.id);
+for (const el of document.querySelectorAll(".local-app-name")) el.textContent = SHELL.name;
+$("local-command").textContent = localSetupCommand(chrome.runtime.id);
+$("local-copy").addEventListener("click", () =>
+  void navigator.clipboard.writeText($("local-command").textContent ?? "").then(
+    () => flash(localMsg, `Copied. Paste it into ${SHELL.name}, press ${SHELL.enter}, then click Find models when it says it is ready.`, "ok", { keep: true }),
+    () => flash(localMsg, "Could not copy; select the command and copy it by hand.", "bad"),
+  ),
+);
 /** The install command once the site serves this version's installer; else why there is none (not served, or no site). */
 function showInstallSteps(installer: "online" | "missing" | "unreachable"): void {
   const online = installer === "online";
@@ -429,6 +485,12 @@ $("helper-copy").addEventListener("click", () =>
       flash(helperMsg, `Copied. Now paste it into ${SHELL.name} and press ${SHELL.enter}.`, "ok", { keep: true });
     },
     () => flash(helperMsg, "Could not copy; select the command and copy it by hand.", "bad"),
+  ),
+);
+$("helper-debug-copy").addEventListener("click", () =>
+  void navigator.clipboard.writeText($("helper-debug-text").textContent ?? "").then(
+    () => flash(helperMsg, "Copied. Send it to the developer, with what the command in it prints.", "ok", { keep: true }),
+    () => flash(helperMsg, "Could not copy; select the details and copy them by hand.", "bad"),
   ),
 );
 window.addEventListener("focus", () => {

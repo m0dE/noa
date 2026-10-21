@@ -317,6 +317,74 @@ describe("startApiAgent", () => {
     expect(jev.goals).toEqual([]);
   });
 
+  describe("the thinking's summary, live", () => {
+    const thinking = (t: string): Block => ({ type: "thinking", thinking: t, signature: "sig-1" });
+    const deltasOf = (events: AgentEvent[]) => events.filter((e) => e.type === "assistant_text_delta") as Extract<AgentEvent, { type: "assistant_text_delta" }>[];
+
+    it("streams the thinking as thinking deltas of its own block; it never becomes assistant_text, and the block goes back unchanged", async () => {
+      const x = new FakeX({ url: "https://x.com/home" });
+      const { session, server, events } = start(x, [msg(thinking("Comparing the channels by cost per user."), text("Start with clinics."), tool("read_page")), msg(tool("task_complete", { summary: "done" }))], {
+        config: { reasoning: "thorough" },
+      });
+      await session.done;
+      expect(server.requests[0]!.body.thinking).toEqual({ type: "adaptive", display: "summarized" });
+      const deltas = deltasOf(events);
+      const thought = deltas.filter((d) => d.thinking);
+      expect(thought.map((d) => d.text).join("")).toBe("Comparing the channels by cost per user.");
+      expect(new Set(thought.map((d) => d.id)).size).toBe(1);
+      expect(thought[0]!.id).toMatch(/^msg_\d+:0$/);
+      // The answer text keeps its own block id and is not marked thinking.
+      const answer = deltas.filter((d) => !d.thinking);
+      expect(answer.map((d) => d.text).join("")).toBe("Start with clinics.");
+      expect(answer.every((d) => d.id.endsWith(":1"))).toBe(true);
+      expect(events.filter((e) => e.type === "assistant_text").map((e: any) => e.text)).toEqual(["Start with clinics."]);
+      expect(server.requests[1]!.body.messages[1].content[0]).toEqual({ type: "thinking", thinking: "Comparing the channels by cost per user.", signature: "sig-1" });
+    });
+
+    function hosted(replies: FakeReplySource[]) {
+      const x = new FakeX({ url: "https://x.com/home" });
+      const server = fakeMessagesServer(replies);
+      const { events, onEvent } = collect();
+      const session = startApiAgentWith(
+        {
+          sessionId: "S1", apiKey: "session-token", model: "claude-opus-5-5", baseUrl: "https://api.noa.test/v1/ai", auth: "bearer", label: "Noa AI",
+          task: { id: "T1", instructions: "Plan the launch", account: null }, mediaPaths: [], config: CONFIG, browser: x.caller(), jev: null, onEvent, fetch: server.fetchImpl,
+        },
+        { sleep: noSleep },
+      );
+      return { session, server, events };
+    }
+
+    it("the hosted AI streams too: its thinking and text show as they are written", async () => {
+      const { session, server, events } = hosted([msg(thinking("Sizing the market first."), text("Here is the plan."), tool("task_complete", { summary: "planned" }))]);
+      expect(await session.done).toMatchObject({ outcome: "done" });
+      expect(server.requests[0]!.url).toBe("https://api.noa.test/v1/ai/messages");
+      expect(server.requests[0]!.body).toMatchObject({ stream: true, thinking: { type: "adaptive", display: "summarized" } });
+      expect(deltasOf(events).filter((d) => d.thinking).map((d) => d.text).join("")).toBe("Sizing the market first.");
+      expect(events.find((e) => e.type === "assistant_text")).toEqual({ type: "assistant_text", text: "Here is the plan.", id: expect.stringMatching(/:1$/) });
+    });
+
+    it("a hosted AI server from before streaming (400 not supported by hosted AI): asks again as it used to, and keeps to that", async () => {
+      const refused = { status: 400, body: { error: "streaming is not supported by hosted AI; send stream: false" } };
+      const { session, server, events } = hosted([refused, msg(text("Reading."), tool("read_page")), msg(tool("task_complete", { summary: "done" }))]);
+      expect(await session.done).toMatchObject({ outcome: "done" });
+      expect(server.requests.map((r) => [r.body.stream, r.body.thinking])).toEqual([
+        [true, { type: "adaptive", display: "summarized" }],
+        [undefined, { type: "adaptive" }],
+        [undefined, { type: "adaptive" }],
+      ]);
+      expect(events.some((e) => e.type === "error")).toBe(false);
+      expect(events.find((e) => e.type === "assistant_text")).toEqual({ type: "assistant_text", text: "Reading." });
+    });
+
+    it("the same 400 once the conversation already asks as it used to is a plain error", async () => {
+      const refused = { status: 400, body: { error: "not supported by hosted AI: thinking.display" } };
+      const { session, server } = hosted([refused, refused]);
+      expect(await session.done).toMatchObject({ outcome: "failed", reason: expect.stringContaining("not supported by hosted AI") });
+      expect(server.requests).toHaveLength(2);
+    });
+  });
+
   describe("a user message while the model is still writing", () => {
     /**
      * A Messages endpoint whose first reply streams `first` and then stalls (until it is aborted, or `release()`),
@@ -513,13 +581,24 @@ describe("startApiAgent", () => {
     expect(await session.done).toEqual({ outcome: "failed", reason: "Claude API error (HTTP 400: invalid_request_error: bad tool)" });
   });
 
-  it("enforces maxToolCalls: an error at the limit, then a hard stop", async () => {
+  it("enforces maxToolCalls: a round that got nowhere new gets an error at the limit, then a hard stop", async () => {
     const x = new FakeX();
     const { session, server } = start(x, [msg(tool("read_page"))], { config: { maxToolCalls: 5 } });
     const r = await session.done;
-    expect(r).toEqual({ outcome: "failed", reason: "Tool call limit exceeded (5 calls)" });
+    expect(r).toEqual({ outcome: "failed", reason: "Tool call limit: the last 5 tool calls got almost nowhere new" });
     expect(x.calls).toHaveLength(5);
-    expect(lastUser(server.requests.at(-1)!).content[0].content[0].text).toMatch(/Tool call limit of 5 reached/);
+    expect(lastUser(server.requests.at(-1)!).content[0].content[0].text).toMatch(/^Tool call limit reached: the last 5 tool calls got almost nowhere new\. Call task_fail now/);
+  });
+
+  it("maxToolCalls is a round: a turn that keeps getting somewhere runs past it", async () => {
+    const x = new FakeX();
+    let n = 0;
+    // 17 actions, each opening a page not seen before, then the result: more than three rounds of 5.
+    const { session } = start(x, [() => (++n <= 17 ? msg(tool("navigate", { url: `https://x.com/statements/${n}` })) : msg(tool("task_complete", { summary: "all 17 kept" })))], {
+      config: { maxToolCalls: 5 },
+    });
+    expect(await session.done).toMatchObject({ outcome: "done", summary: "all 17 kept" });
+    expect(x.calls.filter((c) => c.method === "browser.navigate")).toHaveLength(17);
   });
 
   it("enforces maxTaskMinutes", async () => {
@@ -693,7 +772,7 @@ describe("startApiAgent: conversation (continueWith)", () => {
 
 describe("startApiAgent: reasoning (Fast, auto-raise, Thorough)", () => {
   const OFF = { type: "disabled" };
-  const ADAPTIVE = { type: "adaptive" };
+  const ADAPTIVE = { type: "adaptive", display: "summarized" };
 
   it("Fast on Sonnet 5 sends thinking off; a tool failing 3 times in a row raises the next requests (with the note after the tool results) until a page-changing step works", async () => {
     const traces: TraceDraft[] = [];

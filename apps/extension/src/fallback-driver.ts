@@ -17,6 +17,7 @@ import {
 import { parseKeyCombo } from "./keys.js";
 import { clickInPage, insertTextInPage, pressKeyInPage, scrollViewInPage, viewportInPage } from "./page-input.js";
 import { foreignExtensionInPage, loadProbeInPage, waitForUsablePage, type LoadProbe } from "./page-load.js";
+import { enteredFieldsInPage } from "./page-entered.js";
 import { FIND_LIMITS, findTextInPage } from "./page-find.js";
 import { snapshotPage } from "./page-snapshot.js";
 import { waitInPage, type PageWait, type PageWaitArgs } from "./page-wait.js";
@@ -87,6 +88,16 @@ export class FallbackDriver {
     } catch {
       // A loaded page no script may enter (e.g. an error page): usable as it is.
       return tab.status === "complete" ? { doc: -1, state: "complete", controls: 0, text: 0, foreignFrame: false } : null;
+    }
+  }
+
+  /** Form fields holding what was entered (page-entered.ts); 0 when no script may enter the page. */
+  async enteredFields(tabId: number): Promise<number> {
+    try {
+      const [res] = await chrome.scripting.executeScript({ target: { tabId }, func: enteredFieldsInPage });
+      return typeof res?.result === "number" ? res.result : 0;
+    } catch {
+      return 0;
     }
   }
 

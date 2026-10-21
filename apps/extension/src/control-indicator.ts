@@ -54,6 +54,7 @@ const TOOL_STEPS: Record<ToolName, string> = {
   get_credential: "Signing in",
   list_files: "Looking through your files",
   save_file: "Saving a file",
+  view_file: "Looking at a picture",
   generate_image: "Making an image",
   schedule_task: "Scheduling a task",
   list_scheduled_tasks: "Checking your scheduled tasks",

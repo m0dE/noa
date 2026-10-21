@@ -3,8 +3,8 @@
  * button start and end it): runs the state machine (voice/hands-free.ts) on
  * what the engine hears, carries out its effects (send the message, say a
  * line, stop talking), and shows it: the voice bar at the top of the panel
- * (voice-bar.ts) all along, the orb until something was sent, and the mic
- * button and the box (voice-input.ts). While it is on, the toolbar button of
+ * (voice-bar.ts), and the mic button, the box and the lines above it
+ * (voice-input.ts); nothing covers the chat. While it is on, the toolbar button of
  * its tab has a badge (the background sets it, from onActive), and a soft
  * sound marks the microphone going live and off (Settings > Voice > Sounds).
  *
@@ -28,7 +28,12 @@
  * which repeat the tool rows) is kept in its chat as a "spoken" event, shown
  * playing while it is said. With Realtime, what the user said is kept too,
  * word for word (a "heard" event), with the request the narrator sent for it;
- * the request itself goes out at once and the box is left alone. Standard
+ * the request itself goes out at once and the box is left alone. Words that
+ * led to no request show in the chat too, as the user's messages.
+ * Voice on a tab with no chat opens one at once (chat.open), so the whole
+ * conversation is in a chat from the first word: the user's words show there
+ * as their message while they speak (gpt-live-transcribe streams them), and
+ * Noa's lines as it says them. Standard
  * shows the user's words in the box while they speak, then sends them after
  * a short window in which "cancel" or Esc takes them back.
  *
@@ -55,10 +60,10 @@
  * It says it listens only once it does. Starting (the microphone check, the
  * connection, the microphone opening) every surface says it does not listen
  * yet and what it waits on: the strip in grey ("Voice starting ·
- * Connecting…"), the orb grey ("Not listening yet · …"), the box without
- * its glow, the Voice button unfilled. The moment the microphone's audio
- * reaches the engine (EngineEvents.capturing) it listens: the listen-on
- * sound, the strip and the orb turn live, "Listening · go ahead". A start
+ * Connecting…"), the box without its glow, the Voice button unfilled. The
+ * moment the microphone's audio reaches the engine (EngineEvents.capturing)
+ * it listens: the listen-on sound, the strip and the box turn live,
+ * "Listening · go ahead". A start
  * that takes START_SLOW_MS says "Still …"; one not listening after
  * START_TIMEOUT_MS ends with what went wrong and Try again. A dropped
  * Realtime connection is "Reconnecting…" (not listening) until the new
@@ -102,15 +107,9 @@ import { VoiceError } from "../voice/transcribe.js";
 import { MicError } from "../voice/mic-errors.js";
 import { errorHelp } from "./error-help.js";
 import { Earcons, type Earcon } from "../voice/earcons.js";
-import { isMuteKey, LISTENING_CAPTION, notListeningCaption, remoteBarView, VoiceActivity, voiceBarView, type StartStep, type VoiceBarView } from "../voice/voice-bar-view.js";
+import { isMuteKey, remoteBarView, VoiceActivity, voiceBarView, type StartStep, type VoiceBarView } from "../voice/voice-bar-view.js";
 import { initVoiceBar } from "./voice-bar.js";
 import { errorTip, type HandsFreeControl, type VoiceInput, type VoiceTip } from "./voice-input.js";
-
-/** Under the orb while muted (and nothing is being said). */
-const MUTED_CAPTION = "Microphone muted · Unmute to talk";
-
-/** A said line stays under the orb this long after it. */
-const CAPTION_LINGER_MS = 4_000;
 
 /** Notices about the engine (why it cannot start, the cost) go under this key, apart from voice's others. */
 const ENGINE_NOTICE = "voice.engine";
@@ -181,6 +180,12 @@ export interface HandsFreeDeps {
   onSpeaking(line: { sessionId: string; text: string } | null): void;
   /** A line to say, in the language picked in Settings (phrases.ts localizeLine); absent: as it is. */
   localize?(text: string): string;
+  /** Opens a new, empty chat for a tab (chat.open) and shows it there; its id (null: none could be opened). */
+  openChat(tabId: number | null): Promise<string | null>;
+  /** Deletes a chat voice opened that nothing went into. */
+  dropChat(sessionId: string): void;
+  /** The user's words being heard, shown as their message at the end of that chat (null: none). */
+  onHearing(line: { sessionId: string; text: string } | null): void;
   /** Keeps a said line in its chat. */
   keepSpoken(sessionId: string, text: string): void;
   /** Keeps what the user said (Realtime) that led to no request in its chat, for the record (not shown). */
@@ -253,7 +258,7 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
   let timer: ReturnType<typeof setInterval> | null = null;
   let running: ReadonlySet<string> = new Set();
   let working = false;
-  /** Something was sent this session (the orb then gives way to the chat). */
+  /** Something was sent this session. */
   let sent = false;
   /** The tab the session belongs to, and its title and address (for the bar, and the notes). */
   let tab: number | null = null;
@@ -278,9 +283,9 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
   /** The box's text before the session wrote the user's words into it; whether the box shows them. */
   let boxBase = "";
   let wroteBox = false;
-  /** Under the orb (before anything was sent): what is being said. */
-  let caption = "";
-  let captionTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The chat this session opened (chat.open) because its tab had none; whether anything went into it. */
+  let openedChat: string | null = null;
+  let openedChatUsed = false;
   let line: Line | null = null;
   /** Lines said aloud lately, with when: the microphone hearing one of them is not the user (echoesSpoken). */
   const saidAloud: { text: string; at: number }[] = [];
@@ -398,14 +403,8 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     deps.bar.dataset.phase = phase ?? (reconnecting ? "reconnecting" : "starting");
     deps.bar.dataset.chat = chatNow() ?? "";
     deps.bar.dataset.tabs = [...ownTabs].join(",");
-    // The orb veils the session's own tab until something was sent; its caption carries the words.
-    const orb = !sent && phase !== "working" && !elsewhere;
-    // Not listening yet: the orb says so, and what it waits on.
-    const waiting = !phase ? notListeningCaption(reconnecting ? "reconnecting" : step, slow) : null;
+    // Nothing covers the chat: the strip says the state; what is said shows in the chat.
     deps.voice.showHandsFree({
-      orb,
-      phase: phase ?? "opening",
-      caption: waiting ?? (phase === "sending" ? "Sending…" : caption || (muted() ? MUTED_CAPTION : LISTENING_CAPTION)),
       elsewhere,
       listening: !!phase && !muted(),
       muted: muted(),
@@ -449,16 +448,7 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
 
   function showLine(): void {
     if (!line) return;
-    setCaption(line.text);
     if (line.keep && line.sessionId) deps.onSpeaking({ sessionId: line.sessionId, text: line.text });
-  }
-
-  /** The orb's caption; a said line lingers there a little. */
-  function setCaption(text: string, linger = false): void {
-    if (captionTimer) clearTimeout(captionTimer);
-    captionTimer = linger ? setTimeout(() => setCaption(""), CAPTION_LINGER_MS) : null;
-    if (!linger) caption = text;
-    render();
   }
 
   /** The line is over (said, cut off, or the session ended): its chat keeps it. */
@@ -467,10 +457,12 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     line = null;
     if (!l) return;
     if (l.text.trim()) saidAloud.push({ text: l.text, at: now() });
-    setCaption(l.text, true);
     if (!l.keep || !l.sessionId) return;
     deps.onSpeaking(null);
-    if (l.text.trim()) deps.keepSpoken(l.sessionId, l.text.trim());
+    if (l.text.trim()) {
+      if (l.sessionId === openedChat) openedChatUsed = true;
+      deps.keepSpoken(l.sessionId, l.text.trim());
+    }
   }
 
   function run(effect: HandsFreeEffect): void {
@@ -567,11 +559,14 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     syncChat();
   }
 
-  /** What the user said (Realtime) that led to no request: kept in the session's chat for the record (none yet: let go). */
+  /** What the user said (Realtime) that led to no request: shown in the session's chat as not sent (no chat yet: the line above the box keeps it). */
   async function keepWords(words: readonly string[]): Promise<void> {
     if (startingChat) await startingChat;
     const chat = state.phase === "off" ? null : chatNow();
-    if (chat && words.length) deps.keepHeard(chat, words.join(" "));
+    if (chat && words.length) {
+      if (chat === openedChat) openedChatUsed = true;
+      deps.keepHeard(chat, words.join(" "));
+    }
   }
 
   /** The user's words so far (Standard), in the box (after what was typed there) while the session's tab is shown. */
@@ -615,7 +610,15 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
             wroteBox = false;
           }
         })(),
-      partial: (text) => alive(() => showWords(text))(),
+      partial: (text, final) =>
+        alive(() => {
+          // Realtime leaves the box alone: the words show in the chat as the user's message, growing as they speak
+          // (the kept request or heard words take its place; "" final: it was not them).
+          if (final !== undefined) {
+            const chat = chatNow();
+            deps.onHearing(chat && text ? { sessionId: chat, text } : null);
+          } else showWords(text);
+        })(),
       level: (l) => onLevel(l),
       openingMic: () => {
         if (!on() || ready) return;
@@ -636,11 +639,20 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
       narratorText: (t) => alive(() => narratorWords(t))(),
       forward: (text, heard) =>
         alive(() => {
+          // The words go with the request: its message takes the place of the words being heard.
+          deps.onHearing(null);
+          // A plain yes or no while the chat waits for an approval answers that card (as with Standard).
+          if (answerByVoice(text)) return;
           // Realtime sends at once (no sending window).
           trace?.record({ t: Date.now(), cat: "voice", name: "voice.forward", cid: trace.utterance(), data: { chars: text.length } });
           dispatch({ type: "forward", text, ...(heard?.length ? { heard } : {}), now: now() });
         })(),
-      userWords: (words) => alive(() => void keepWords(words))(),
+      userWords: (words) =>
+        alive(() => {
+          // Kept as heard: that message takes the place of the words being heard.
+          deps.onHearing(null);
+          void keepWords(words);
+        })(),
       stopTask: () => deps.stopTask(chatNow()),
       answerApproval: async (allow) => {
         const chat = chatNow();
@@ -808,6 +820,22 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     // Realtime connects first; the others only open the microphone.
     notReady(isRealtimeEngine(id) ? "connecting" : "microphone");
     bind(deps.activeTab());
+    // Its tab has no chat: one opens now, so the conversation is in a chat from the first word (sending waits for it).
+    if (chatNow() === null) {
+      const forTab = tab;
+      const opening = deps.openChat(forTab).then((id) => {
+        if (gen !== session || !id) return;
+        chatId = id;
+        openedChat = id;
+        render();
+      });
+      const waiting: Promise<void> = opening
+        .catch((err: unknown) => trace?.record({ t: Date.now(), cat: "error", name: "voice.open_chat_failed", data: { error: errorMessage(err).slice(0, 160) } }))
+        .finally(() => {
+          if (startingChat === waiting) startingChat = null;
+        });
+      startingChat = waiting;
+    }
     render();
     report();
     trace?.record({ t: Date.now(), cat: "voice", name: "voice.start", data: { engine: id, why: picked ? (takeover ? "taken over" : "chosen") : "settings", ...(takeover ? { takeover } : {}) } });
@@ -920,7 +948,11 @@ export function initHandsFree(deps: HandsFreeDeps): HandsFree {
     ready = opened = capturing = false;
     endLine();
     passing.clear();
-    setCaption("");
+    deps.onHearing(null);
+    // A chat voice opened that nothing went into is not kept.
+    if (openedChat && !openedChatUsed && !sent) deps.dropChat(openedChat);
+    openedChat = null;
+    openedChatUsed = false;
     if (state.phase !== "off") state = { ...initialHandsFree() };
     if (wroteBox && !sent) deps.composer.setDraft(boxBase);
     wroteBox = false;

@@ -364,7 +364,7 @@ describe("AccountService cloud files", () => {
     const t = setup({ plan: PLUS_PLAN });
     t.api.on("POST /v1/files", { status: 201, body: { id: "f1", name: "cat.png", folder: "images", contentType: "image/png", size: 3, createdAt: "2026-09-24T12:00:00.000Z" } });
     await t.account.signIn();
-    expect(await t.account.keepInCloud(png(), "cat.png", "images")).toBe(true);
+    expect(await t.account.keepInCloud(png(), "cat.png", "images")).toMatchObject({ id: "f1", name: "cat.png", folder: "images" });
     const [call] = filesCalls(t);
     expect(call!.method).toBe("POST");
     expect(call!.headers.authorization).toBe("Bearer bt_s_abc");
@@ -372,9 +372,32 @@ describe("AccountService cloud files", () => {
 
   it("sends nothing signed out or on Free", async () => {
     const t = setup();
-    expect(await t.account.keepInCloud(png(), "cat.png", "images")).toBe(false);
+    expect(await t.account.keepInCloud(png(), "cat.png", "images")).toBeNull();
     await t.account.signIn();
-    expect(await t.account.keepInCloud(png(), "cat.png", "images")).toBe(false);
+    expect(await t.account.keepInCloud(png(), "cat.png", "images")).toBeNull();
     expect(filesCalls(t)).toHaveLength(0);
+  });
+});
+
+describe("AccountService.realtimeSession: what the side panel offers the Realtime relay", () => {
+  it("a single-use ticket, asked for with the session token, never the session token itself", async () => {
+    const t = setup({ plan: PLUS_PLAN });
+    await t.account.signIn();
+    t.api.on("POST /v1/ai/realtime/ticket", { body: { ticket: "rt_u1_" + "ab".repeat(32) } });
+    expect(await t.account.realtimeSession()).toEqual({ apiBase: t.api.base, token: "rt_u1_" + "ab".repeat(32) });
+    expect(t.api.calls.find((c) => c.path === "/v1/ai/realtime/ticket")!.headers.authorization).toBe("Bearer bt_s_abc");
+  });
+
+  it("the session token from a server without tickets (404), so voice works until the server is updated", async () => {
+    const t = setup({ plan: PLUS_PLAN });
+    await t.account.signIn();
+    expect(await t.account.realtimeSession()).toEqual({ apiBase: t.api.base, token: "bt_s_abc" });
+  });
+
+  it("any other failure is the failure (the panel says why)", async () => {
+    const t = setup({ plan: PLUS_PLAN });
+    await t.account.signIn();
+    t.api.on("POST /v1/ai/realtime/ticket", { status: 503, body: { error: "unavailable" } });
+    await expect(t.account.realtimeSession()).rejects.toMatchObject({ status: 503 });
   });
 });

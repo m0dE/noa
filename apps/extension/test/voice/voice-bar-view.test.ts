@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { elapsedText, HEARING, isMuteKey, MUTE_KEY, notListeningCaption, NOT_HERE_TEXT, remoteBarView, startingText, VoiceActivity, voiceBarView, type VoiceBarInput } from "../../src/voice/voice-bar-view.js";
+import { elapsedText, HEARING, isMuteKey, MUTE_KEY, NOT_HERE_TEXT, remoteBarView, startingText, VoiceActivity, voiceBarView, type VoiceBarInput } from "../../src/voice/voice-bar-view.js";
 import { boxLook, type HandsFreeLook } from "../../src/sidepanel/voice-input.js";
 
 const base: VoiceBarInput = { phase: "listening", hearing: false, muted: false, engine: "realtime", elapsedMs: 42_000, where: null, elsewhere: false };
@@ -13,7 +13,7 @@ describe("the voice strip: it only tells", () => {
     });
     expect(rows).toEqual([
       ["starting", "Voice starting", "Opening the mic…", null, false, "Voice starting: Opening the mic…", "Not listening yet: wait for the sound, then talk"],
-      ["listening", "Voice on", "Listening", "0:42", true, "Voice on: Listening", "Realtime voice · Just talk · say “stop” to end"],
+      ["listening", "Voice on", "Listening", "0:42", true, "Voice on: Listening", "Realtime voice · Just talk · it goes out when you finish"],
       ["sending", "Voice on", "Sending", "0:42", true, "Voice on: Sending", "Realtime voice · Say “cancel” or press Esc to take it back"],
       ["working", "Voice on", "Agent working", "0:42", true, "Voice on: Agent working", "Realtime voice · Still listening: talk to add to the task"],
       ["speaking", "Voice on", "Speaking", "0:42", false, "Voice on: Speaking", "Realtime voice · Esc stops it, or just talk"],
@@ -49,11 +49,6 @@ describe("the voice strip: it only tells", () => {
     expect(view({ phase: "starting", step: "microphone", slow: true }).status).toBe("Still opening the mic…");
     // Muted while it starts: still starting (it is not on yet).
     expect(view({ phase: "starting", muted: true }).state).toBe("starting");
-    expect([notListeningCaption("connecting"), notListeningCaption("microphone", true), notListeningCaption("reconnecting")]).toEqual([
-      "Not listening yet · connecting…",
-      "Not listening yet · still opening the mic…",
-      "Not listening · reconnecting…",
-    ]);
     expect(startingText("microphone")).toBe("Opening the mic…");
   });
 
@@ -146,10 +141,10 @@ describe("VoiceActivity", () => {
 });
 
 describe("the box under a session (voice-input.ts boxLook)", () => {
-  const look = (patch: Partial<HandsFreeLook>): HandsFreeLook => ({ orb: true, caption: "", phase: "listening", elsewhere: false, listening: true, muted: false, mute: null, ...patch });
+  const look = (patch: Partial<HandsFreeLook>): HandsFreeLook => ({ elsewhere: false, listening: true, muted: false, mute: null, ...patch });
 
   it("says it listens only while it does: not while it starts or reconnects; muted and other tabs as before", () => {
-    expect([boxLook(null), boxLook(look({})), boxLook(look({ listening: false, phase: "opening" })), boxLook(look({ muted: true, listening: false })), boxLook(look({ elsewhere: true }))]).toEqual([
+    expect([boxLook(null), boxLook(look({})), boxLook(look({ listening: false })), boxLook(look({ muted: true, listening: false })), boxLook(look({ elsewhere: true }))]).toEqual([
       "off",
       "listening",
       "starting",

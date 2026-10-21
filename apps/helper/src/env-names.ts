@@ -10,6 +10,10 @@ export const ENV = {
   thinking: "NOA_THINKING",
   /** Path of claude.exe, instead of looking it up. */
   claudePath: "NOA_CLAUDE_PATH",
+  /** Path of OpenCode (the Local model brain), instead of looking it up (opencode-process.ts). */
+  opencodePath: "NOA_OPENCODE_PATH",
+  /** API key the Local model's server wants, for servers started with one (vLLM --api-key, LM Studio's); Ollama needs none. */
+  localModelKey: "NOA_LOCAL_MODEL_KEY",
   /** Jev key used when the extension sends none. */
   typesafeApiKey: "TYPESAFE_API_KEY",
   /** For the MCP server a task session's Claude Code starts: the helper's pipe. */

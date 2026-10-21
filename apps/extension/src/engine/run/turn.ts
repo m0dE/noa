@@ -4,7 +4,7 @@
  * brain's events into the session, and the checks on the result (X post
  * verification, failure classification). Next turns: conversation.ts.
  */
-import { automationPromptLine, bareToolName, effectiveLevel, errorMessage, isXStatusUrl, languagePromptLine, localTimeZone, traceStart, TURN_WALL_MINUTES, type AgentEvent, type AgentTask, type AttachmentRef, type ExtensionSettings, type RunConfig, type SessionInfo, type Sleep, type TaskAbout, type TaskRunResult, type TraceCategory, type TraceValue, type UserTab } from "@noa/shared";
+import { automationPromptLine, bareToolName, effectiveLevel, errorMessage, isXStatusUrl, languagePromptLine, localTimeZone, traceStart, TURN_WALL_MINUTES, type AgentEvent, type AgentTask, type AttachmentRef, type BrainKind, type ExtensionSettings, type RunConfig, type SessionInfo, type Sleep, type TaskAbout, type TaskRunResult, type TraceCategory, type TraceValue, type UserTab } from "@noa/shared";
 import type { AgentSlot } from "../../agent-slots.js";
 import { bytesToBase64 } from "../../base64.js";
 import type { AttachmentStore } from "../attachment-store.js";
@@ -16,7 +16,7 @@ import type { TabChatsLike } from "../../tab-chats.js";
 import { asksAboutThePage, isRestrictedUrl, RESTRICTED_STATUS } from "../../restricted.js";
 import type { ForcedStop } from "./active.js";
 import { timeLimitReached, verifySnippet } from "@noa/core";
-import { ABORT_GRACE_MS, ActiveClock, safetyTimeoutMinutes } from "./deadline.js";
+import { ABORT_GRACE_MS, ActiveClock, safetyTimeoutMinutes, TurnProgressClock } from "./deadline.js";
 import { mediaSources, type FirstJob } from "./jobs.js";
 import type { MemoryRun, MemoryService } from "../../memory/service.js";
 import type { JobReview } from "../task-review.js";
@@ -60,6 +60,8 @@ export interface ActiveSession {
   attachments?: AttachmentRef[];
   /** When the turn's wall-time ceiling ends it (epoch ms, TURN_WALL_MINUTES): an approval waits at most until shortly before. */
   turnEndsAt?: number;
+  /** Whether the running turn is getting somewhere (fed its brain's events): its time limit runs on while it is. */
+  progress?: TurnProgressClock;
   /**
    * Ends the approvals waiting now (approval/gate.ts GateContext.interrupt): aborted with "stop" when the session
    * is stopped, with "message" when the user writes to the agent (then replaced, for the approvals after it).
@@ -110,9 +112,9 @@ export function typedTextsOf(e: AgentEvent): string[] {
   return [];
 }
 
-/** The model setting, when one is set (both brains use it). */
-export function modelOf(settings: ExtensionSettings): string | undefined {
-  return settings.anthropicModel.trim() || undefined;
+/** The model setting, when one is set (every Claude brain uses it; the local model has its own). */
+export function modelOf(settings: ExtensionSettings, brain?: BrainKind): string | undefined {
+  return (brain === "local" ? settings.localModel : settings.anthropicModel).trim() || undefined;
 }
 
 export function runConfig(settings: ExtensionSettings, isRetry: boolean): RunConfig {
@@ -401,6 +403,8 @@ export class TurnRunner {
   async drive(active: ActiveSession, run: BrainRun, settings: ExtensionSettings, cleanups: Cleanup[], throwEnded = false): Promise<TaskRunResult> {
     active.run = run;
     active.turnEndsAt = Date.now() + TURN_WALL_MINUTES * 60_000;
+    const progress = new TurnProgressClock();
+    active.progress = progress;
     const forced = active.forced;
     if (forced) run.abort(forced.reason, forced.outcome);
     // What the user said while the run was starting (already in the thread; the brain's echo is dropped).
@@ -409,9 +413,10 @@ export class TurnRunner {
       void run.sendUserMessage(text).then((ok) => ok || this.deps.log(`the agent did not take a message sent while it started (${active.session.sessionId})`));
     }
     try {
-      return await withTimeLimits(run, active.slot, settings, cleanups, throwEnded);
+      return await withTimeLimits(run, active.slot, settings, cleanups, throwEnded, progress);
     } finally {
       if (active.run === run) active.run = null;
+      if (active.progress === progress) delete active.progress;
     }
   }
 
@@ -457,6 +462,7 @@ export class TurnRunner {
   private onBrainEvent(active: ActiveSession, e: AgentEvent): void {
     // The runner emits the one final task_end after verification and classification.
     if (e.type === "task_end") return;
+    active.progress?.observe(e);
     active.typed.push(...typedTextsOf(e));
     if (e.type === "user_message") {
       const i = active.said.indexOf(e.text.trim());
@@ -477,10 +483,10 @@ export function userTabOf(page: TabPage, picked: number, others: UserTab["others
 
 /**
  * The brain's result, or the turn stopped by its limits: the user's time limit in active time (the slot's waits
- * left out, ActiveClock), and the safety timer on wall time. Either aborts the brain and waits ABORT_GRACE_MS for
- * its result.
+ * left out, ActiveClock; run on by another limit's worth each time the turn got somewhere since, `progress`), and the
+ * safety timer on wall time. Either aborts the brain and waits ABORT_GRACE_MS for its result.
  */
-function withTimeLimits(run: BrainRun, slot: AgentSlot, settings: ExtensionSettings, cleanups: Cleanup[], throwEnded: boolean): Promise<TaskRunResult> {
+function withTimeLimits(run: BrainRun, slot: AgentSlot, settings: ExtensionSettings, cleanups: Cleanup[], throwEnded: boolean, progress: TurnProgressClock): Promise<TaskRunResult> {
   const minutes = safetyTimeoutMinutes();
   const safety = new Promise<TaskRunResult>((resolve) => {
     let stopped = false;
@@ -491,7 +497,7 @@ function withTimeLimits(run: BrainRun, slot: AgentSlot, settings: ExtensionSetti
       const t2 = setTimeout(() => resolve({ outcome: "failed", reason }), ABORT_GRACE_MS);
       cleanups.push(() => clearTimeout(t2));
     };
-    const clock = new ActiveClock(settings.maxTaskMinutes * 60_000, () => stop(timeLimitReached(settings.maxTaskMinutes)));
+    const clock = new ActiveClock(settings.maxTaskMinutes * 60_000, () => stop(timeLimitReached(settings.maxTaskMinutes)), Date.now, () => progress.progressed());
     const unwatch = slot.onWait(() => clock.wait());
     const t1 = setTimeout(() => stop(`No result after ${minutes} minutes`), minutes * 60_000);
     cleanups.push(() => clearTimeout(t1), () => clock.stop(), unwatch);

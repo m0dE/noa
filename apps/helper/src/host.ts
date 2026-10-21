@@ -24,6 +24,7 @@ import {
   type HelperMethods,
   type HelperNotifications,
   type RpcMessage,
+  type RunConfig,
 } from "@noa/shared";
 import { createJev, createToolExecutor, withoutCreditPause, type JevLike } from "@noa/core";
 import { HELPER_CODE, HELPER_VERSION, helperInstall, loadConfig } from "./config.js";
@@ -35,20 +36,31 @@ import { INTERACTIVE_TASK_ID } from "./mcp-tools.js";
 import { AttachmentInbox } from "./session/attachments.js";
 import { TaskRunner } from "./task-runner.js";
 import { ClaudeCodeBrain } from "./brains/claude-code.js";
+import { OpencodeBrain } from "./brains/opencode.js";
+import { OPENCODE_NOT_FOUND, resolveOpencodePath } from "./opencode-process.js";
 import { apiBillingVarsIn, CLAUDE_NOT_FOUND, resolveClaudePath } from "./claude-process.js";
 import { ScriptedBrain } from "./brains/scripted.js";
 import type { Brain } from "./brains/brain.js";
 import { SelfTestCache } from "./self-test.js";
-import { runMemorySummarize } from "./memory-summarize.js";
-import { listFolder, readChunk } from "./noa-files.js";
+import { localSummarize, runMemorySummarize } from "./memory-summarize.js";
+import { ENV } from "./env-names.js";
+import { listFolder, noteFile, readChunk } from "./noa-files.js";
 import { pruneRuns, readRunLog } from "./run-log.js";
 import { removeHelperFile, writeHelperFile } from "./helper-file.js";
+import { CHECK_FLAG, checkReport } from "./check.js";
 
 /** On shutdown, how long the sessions get to stop their Claude Code processes before the helper exits anyway. */
 const SHUTDOWN_WAIT_MS = 5000;
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  if (process.argv.includes(CHECK_FLAG)) {
+    const claudePath = config.brain === "scripted" ? null : resolveClaudePath(config.env);
+    process.stdout.write(
+      checkReport({ version: HELPER_VERSION, code: HELPER_CODE, nodePath: process.execPath, nodeVersion: process.version, claudePath, logDir: config.logDir }) + "\n",
+    );
+    return;
+  }
   const live = new LiveLog(config.logDir);
   redirectConsole(live);
   const logLine = (line: string) => live.write(`helper ${line}`);
@@ -82,8 +94,16 @@ async function main(): Promise<void> {
   // resolveClaudePath honours NOA_CLAUDE_PATH (from .env or the environment).
   const claudePath = scripted ? null : resolveClaudePath(config.env);
 
-  const makeBrain = (): Brain => {
+  // Looked up when asked: `npx noa-local-llm` may install it while the helper runs.
+  const opencodePath = () => (scripted ? null : resolveOpencodePath(config.env, config.baseDir));
+  const makeBrain = (run: RunConfig): Brain => {
     if (scripted) return new ScriptedBrain((t, n, a) => router.call(t, n, a));
+    if (run.local) {
+      const path = opencodePath();
+      if (!path) throw new Error(OPENCODE_NOT_FOUND);
+      const apiKey = config.env[ENV.localModelKey]?.trim();
+      return new OpencodeBrain({ opencodePath: path, serverUrl: run.local.serverUrl, model: run.model?.trim() ?? "", ...(apiKey ? { apiKey } : {}) });
+    }
     if (!claudePath) throw new Error(CLAUDE_NOT_FOUND);
     // Headless stream-json with stdin kept open: structured events, and follow-up turns in the same session.
     return new ClaudeCodeBrain({ claudePath, model: config.model, ...(config.thinking === null ? {} : { thinking: config.thinking }), persistent: true });
@@ -171,6 +191,7 @@ async function main(): Promise<void> {
       jevAvailable: config.typesafeApiKey !== null,
       brain: config.brain,
       claudePath,
+      opencodePath: opencodePath(),
       logDir: config.logDir,
       openSessions: runner.openSessions,
       selfTest: st,
@@ -211,9 +232,10 @@ async function main(): Promise<void> {
   peer.handle("helper.getLog", ({ lines }) => ({ text: live.tail(lines) }));
   peer.handle("helper.runLog", ({ path, maxBytes }) => readRunLog(config.runsDir, path, maxBytes));
   // list_files: the extension knows where the Noa folder is, but cannot list a folder.
-  peer.handle("files.list", ({ folder, search }) => {
+  peer.handle("files.list", ({ folder, search, max }) => {
     if (!isAbsolute(folder)) throw new RpcError("folder must be an absolute path", "invalid_params");
-    return listFolder(folder, search ? { search } : {});
+    if (max !== undefined && (!Number.isInteger(max) || max < 1)) throw new RpcError("max must be a whole number", "invalid_params");
+    return listFolder(folder, { ...(search ? { search } : {}), ...(max ? { max } : {}) });
   });
   // save_file: the extension cannot read a file on this computer.
   peer.handle("files.read", ({ path, offset, length }) => {
@@ -221,8 +243,18 @@ async function main(): Promise<void> {
     if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(length) || length < 0) throw new RpcError("offset and length must be whole numbers", "invalid_params");
     return readChunk(path, offset, length);
   });
+  peer.handle("files.note", ({ folder, path, meta }) => {
+    if (!isAbsolute(folder) || !isAbsolute(path)) throw new RpcError("folder and path must be absolute", "invalid_params");
+    noteFile(folder, path, meta);
+    return { ok: true as const };
+  });
   // The background memory writer on Claude Code: run in the helper's runs folder, so no project's files are read.
-  peer.handle("memory.summarize", async ({ system, prompt }) => {
+  peer.handle("memory.summarize", async ({ system, prompt, local }) => {
+    if (local) {
+      const r = await localSummarize({ ...local, system, prompt, apiKey: config.env[ENV.localModelKey]?.trim() });
+      logLine(`memory.summarize local chars=${prompt.length}`);
+      return r;
+    }
     if (!claudePath) throw new Error(scripted ? "The scripted brain has no memory writer" : CLAUDE_NOT_FOUND);
     mkdirSync(config.runsDir, { recursive: true });
     const r = await runMemorySummarize({ claudePath, system, prompt, cwd: config.runsDir });

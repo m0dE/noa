@@ -24,6 +24,7 @@ export const FRESH_SESSION_STATUS = "The earlier agent session has ended; starti
 const SAME_SESSION: Record<string, string> = {
   "claude-code": "Continuing the same Claude Code session",
   "claude-api": "Continuing the same Claude API conversation",
+  local: "Continuing the same local model conversation",
 };
 
 /** Why "Continue" cannot apply to this session, or null when it can. */

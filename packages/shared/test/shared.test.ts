@@ -8,6 +8,7 @@ import {
   chipHint,
   PAUSED_BY_USER,
   failureHoldReason,
+  shortPauseReason,
   resumedNotBefore,
   ACCOUNT_API_BASE,
   BatchCreateInput,
@@ -102,6 +103,10 @@ describe("settings", () => {
     expect(parseSettings({ speakNotifications: false }).notificationVoice).toBe("off");
     expect(parseSettings({ speakNotifications: true }).notificationVoice).toBe("same");
     expect(parseSettings({ speakNotifications: false, notificationVoice: "chime" }).notificationVoice).toBe("chime");
+    // "Keep copies in the cloud" turned off: this computer, unless a choice was made since.
+    expect(parseSettings({ cloudCopies: false }).fileStorage).toBe("local");
+    expect(parseSettings({ cloudCopies: true }).fileStorage).toBeNull();
+    expect(parseSettings({ cloudCopies: false, fileStorage: "cloud" }).fileStorage).toBe("cloud");
     const s = parseSettings({ delayMinSec: 100, delayMaxSec: 10 });
     expect(s.delayMaxSec).toBe(100);
   });
@@ -377,6 +382,8 @@ describe("pausing a job (task-view, schedule)", () => {
     expect(isOnHold({ status: "paused", pauseReason: PAUSED_BY_USER, retryAfter: null })).toBe(true);
     expect(isOnHold({ status: "paused", pauseReason: failureHoldReason(3, "boom"), retryAfter: null })).toBe(true);
     expect(failureHoldReason(3, "boom")).toBe("Paused after 3 failed runs in a row. Last: boom");
+    expect(shortPauseReason(failureHoldReason(3, "boom: Last: x"))).toBe("boom: Last: x");
+    expect(shortPauseReason("Sign in to x.com")).toBe("Sign in to x.com");
     expect(isOnHold({ status: "paused", pauseReason: "Log in to X", retryAfter: null })).toBe(false);
     expect(isOnHold({ status: "paused", pauseReason: PAUSED_BY_USER, retryAfter: "2026-09-28T10:00:00Z" })).toBe(false);
     expect(isOnHold({ status: "pending", pauseReason: PAUSED_BY_USER })).toBe(false);

@@ -126,6 +126,23 @@ describe("HelperLink", () => {
     expect(link.lastError).toBe("Helper not installed");
   });
 
+  it("keeps Chrome's own words behind a crash for the developer details, until it connects", async () => {
+    let crash = true;
+    chrome.runtime.onConnectNative = (port) =>
+      crash ? queueMicrotask(() => port.hostDisconnect("Error when communicating with the native messaging host.")) : answerHello(port);
+    const link = new HelperLink({ registerHandlers: () => {} });
+    await expect(link.connect()).rejects.toThrow("Helper crashed");
+    expect(link.lastError).toBe("Helper crashed");
+    expect(link.lastErrorDetail).toBe("Error when communicating with the native messaging host.");
+    crash = false;
+    await link.connect();
+    expect(link.lastErrorDetail).toBeNull();
+    // Closed by us, not Chrome: no words of Chrome's.
+    link.disconnect();
+    expect(link.lastError).toBe("Helper disconnected");
+    expect(link.lastErrorDetail).toBeNull();
+  });
+
   it("call() fails fast when not connected", async () => {
     const link = new HelperLink({ registerHandlers: () => {} });
     await expect(link.call("helper.getLog", { lines: 10 })).rejects.toThrow(/not connected/i);

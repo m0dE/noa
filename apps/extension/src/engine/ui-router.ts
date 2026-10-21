@@ -6,7 +6,7 @@ import { ApprovalAnswer, type ApprovalAnsweredBy, cleanUserTitle, errorMessage, 
 import type { AccountService } from "../account/account.js";
 import { LocalTodo, type TodoSource } from "../account/todo-source.js";
 import { HELPER_CALL_TIMEOUT_MS } from "../helper-link.js";
-import type { BrainStatus, TraceEnv, UiRequest, UiResponse, UiResults, UiState } from "../ui-protocol.js";
+import type { BrainStatus, StorageSummary, TraceEnv, UiRequest, UiResponse, UiResults, UiState } from "../ui-protocol.js";
 import { realtimeTicketForPanel, speakForPanel, voiceEnginesForPanel, type RealtimeAccount, type SpeakAccount } from "../voice/realtime-access.js";
 import { transcribeForPanel, type VoiceAccount } from "../voice/transcribe.js";
 import type { LocalStore } from "./local-store.js";
@@ -18,20 +18,20 @@ import type { Runner } from "./runner.js";
 import type { SessionStore } from "./sessions.js";
 import type { ChatTitler } from "./chat-titles.js";
 import type { JobDismissals } from "../job-dismissals.js";
-import type { TestResult } from "./settings-tests.js";
+import type { LocalModelTestResult, TestResult } from "./settings-tests.js";
 import { WrongPassphraseError, type Vault } from "../vault.js";
 import { isMemoryRequest, type MemoryService } from "../memory/service.js";
 import { reportedHelper } from "./brain-resolver.js";
 import { HELPER_CODE } from "../build-config.js";
 import { helperOutdated } from "../options/settings-patch.js";
 
-/** Why an out-of-date helper's connection was closed (a turn it was running ends with it). */
-export const HELPER_RESTARTED = "the helper was out of date and restarts with its new version";
+/** Why a helper's connection was closed by Re-check (a turn it was running ends with it). */
+export const HELPER_RESTARTED = "the helper restarts to load its new version or look for Claude Code again";
 
 /** The runner as the router uses it. */
 export type RouterRunner = Pick<
   Runner,
-  "running" | "runningSessions" | "state" | "runDue" | "runTask" | "runAdhoc" | "continueSession" | "message" | "newChat" | "stop" | "say"
+  "running" | "runningSessions" | "state" | "runDue" | "runTask" | "runAdhoc" | "continueSession" | "message" | "newChat" | "openChat" | "stop" | "say"
 >;
 
 export type RouterVault = Pick<Vault, "unlock" | "lock" | "list" | "set" | "delete" | "reset">;
@@ -56,8 +56,12 @@ export interface UiRouterDeps {
   testNotification?(): Promise<void>;
   /** The user's Noa folder (noa-folder.ts). Absent: it cannot be opened. */
   folder?: { open(): Promise<string> };
+  /** Settings > Storage's summary (background.ts). */
+  storage?: { summary(): Promise<StorageSummary> };
   localStore: LocalStore;
   sessions: SessionStore;
+  /** The user deleted a conversation (the account's chat history deletes it too, chat-sync.ts). */
+  onSessionDeleted?(sessionId: string): void;
   /** Conversations with an open agent session (both brains). */
   openConversations(): string[];
   helper: {
@@ -72,6 +76,7 @@ export interface UiRouterDeps {
   /** The old pause of every scheduled run, while it is not converted into paused jobs (pause-migration.ts). Absent: none. */
   pauseMigration?: { pending(): Promise<string | null>; retry(): Promise<void> };
   testClaude(settings: ExtensionSettings): Promise<TestResult>;
+  testLocalModel(settings: ExtensionSettings): Promise<LocalModelTestResult>;
   /** Tests the Jev that `brain` (the settings resolved) would use. */
   testJev(settings: ExtensionSettings, brain: BrainStatus): Promise<TestResult>;
   vault: RouterVault;
@@ -228,6 +233,8 @@ export class UiRouter {
         return this.getState();
       case "settings.testClaude":
         return d.testClaude(await d.loadSettings()) satisfies Promise<UiResults["settings.testClaude"]>;
+      case "settings.testLocalModel":
+        return d.testLocalModel(await d.loadSettings()) satisfies Promise<UiResults["settings.testLocalModel"]>;
       case "settings.testJev": {
         // The account first, as for state.get: the brain status reads its cached session.
         await d.account?.view().catch(() => undefined);
@@ -238,8 +245,10 @@ export class UiRouter {
         // Connects (or reconnects) and re-runs the Claude Code self-test.
         // Failure is not an error: the state carries brain.helperError.
         // An out-of-date helper is let go first: Chrome then starts the helper as it is on disk now (rebuilt or
-        // reinstalled), where saying hello again would only ask the old process.
-        if (d.helper.info && helperOutdated(d.helper.info, HELPER_CODE)) d.helper.disconnect(HELPER_RESTARTED);
+        // reinstalled), where saying hello again would only ask the old process. So is one that found no Claude Code:
+        // it looks for it only as it starts, and the user may have installed it since.
+        const info = d.helper.info;
+        if (info && (helperOutdated(info, HELPER_CODE) || (info.brain !== "scripted" && !info.claudePath))) d.helper.disconnect(HELPER_RESTARTED);
         await d.helper.connect(undefined, { selfTest: true }).catch(() => undefined);
         return this.getState();
       case "run.adhoc": {
@@ -300,6 +309,10 @@ export class UiRouter {
         if (tab === undefined) throw new Error("tabId is required");
         return { ok: d.focusTab ? await d.focusTab(tab) : false } satisfies UiResults["tab.focus"];
       }
+      case "chat.open": {
+        const tab = optTab(msg.tabId);
+        return { session: await d.runner.openChat({ ...(tab === undefined ? {} : { tabId: tab }), ...(msg.memoryOff === true ? { memoryOff: true } : {}) }) } satisfies UiResults["chat.open"];
+      }
       case "chat.bind": {
         const sessionId = optId(msg.sessionId);
         const tab = optTab(msg.tabId);
@@ -356,6 +369,10 @@ export class UiRouter {
       case "folder.open": {
         if (!d.folder) throw new Error("The Noa folder cannot be opened here");
         return { path: await d.folder.open() } satisfies UiResults["folder.open"];
+      }
+      case "storage.summary": {
+        if (!d.storage) throw new Error("Storage cannot be summed up here");
+        return d.storage.summary() satisfies Promise<UiResults["storage.summary"]>;
       }
       case "run.say":
         return { ok: await d.runner.say(String(msg.text ?? ""), optId(msg.sessionId)) } satisfies UiResults["run.say"];
@@ -431,7 +448,9 @@ export class UiRouter {
         // No tab keeps it, and its kept-open agent session and tabs close.
         if (d.tabChats) for (const [tab, id] of Object.entries(await d.tabChats.all())) if (id === sessionId) await d.tabChats.unbind(Number(tab), sessionId);
         await d.runner.newChat(sessionId);
-        return { ok: await d.sessions.delete(sessionId) } satisfies UiResults["session.delete"];
+        const ok = await d.sessions.delete(sessionId);
+        if (ok) d.onSessionDeleted?.(sessionId);
+        return { ok } satisfies UiResults["session.delete"];
       }
       case "sessions.events": {
         const session = await d.sessions.get(msg.sessionId);

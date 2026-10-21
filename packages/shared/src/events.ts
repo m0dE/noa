@@ -36,9 +36,11 @@ export type AgentEvent =
    * Live text as Claude writes it: `text` is appended to the block `id`
    * ("<message id>:<block index>"). Transient: shown in the chat while it
    * grows, never stored or written to run logs. The block's final
-   * assistant_text (same id) replaces it.
+   * assistant_text (same id) replaces it. thinking: the summary of Claude's
+   * thinking (a thinking block), shown while it is the latest thing the run
+   * did; it has no final assistant_text.
    */
-  | { type: "assistant_text_delta"; id: string; text: string }
+  | { type: "assistant_text_delta"; id: string; text: string; thinking?: true }
   | { type: "tool_call"; id: string; name: string; args: unknown }
   | {
       type: "tool_result";
@@ -133,12 +135,13 @@ export type AgentEvent =
    */
   | { type: "limited_mode"; tab?: string; url?: string; extensionId?: string }
   /**
-   * Auto tab switching brought a tab of the run to the front, so the agent could see it (a screenshot): the chat
-   * says so once per conversation, with how to turn it off. tab: the run's short id of the tab; url: its page.
+   * Auto tab switching brought a tab of the run to the front, so the agent could see it (a screenshot), or, with why
+   * "needs_you", so the user finds the page the run ended needing them on (a sign-in, a code): the chat says so once
+   * per conversation and reason, with how to turn it off. tab: the run's short id of the tab; url: its page.
    * full: it switched because the chat runs under full autonomy (which never asks), whatever the setting says.
    * Written by the extension, never by a brain.
    */
-  | { type: "auto_tab_switching"; tab?: string; url?: string; full?: true }
+  | { type: "auto_tab_switching"; tab?: string; url?: string; full?: true; why?: "needs_you" }
   /**
    * The agent's memory changed from this conversation (remember, forget, a task's run note): the chat shows
    * "Remembered: ..." with Undo. before / after: the entry before and after the change (null: it did not exist /
@@ -183,8 +186,8 @@ export function picksText(p: ElementPicks): string {
 
 export type StampedAgentEvent = AgentEvent & { ts: string; sessionId: string };
 
-/** noa: the hosted "Noa AI" (Claude through the account's usage credit). */
-export type BrainKind = "claude-code" | "claude-api" | "scripted" | "noa";
+/** noa: the hosted "Noa AI" (Claude through the account's usage credit). local: a model on the user's own computer (local-model.ts). */
+export type BrainKind = "claude-code" | "claude-api" | "scripted" | "noa" | "local";
 
 /**
  * One conversation with the agent: a queued task or a one-off "do this now"
@@ -227,6 +230,11 @@ export interface SessionInfo {
   instructions?: string;
   /** The account the run acts as (every source), so a later turn in a fresh session acts as it too. */
   account?: string;
+  /**
+   * Opened by hands-free voice before anything was asked: the chat shows what is said in it from the start, and its
+   * first message starts its first turn here (no instructions, title or run yet).
+   */
+  empty?: true;
   /** The first message was spoken (hands-free voice), not typed. */
   voice?: true;
   /** The user's words for the first message, word for word (see the user_message event's heard). */
@@ -271,7 +279,7 @@ export function streamMessageOf(id: string): string {
  * first sends what is pending, so the order of events is kept.
  */
 export class DeltaBatcher {
-  private pending: { id: string; text: string } | null = null;
+  private pending: { id: string; text: string; thinking?: true } | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
@@ -279,11 +287,11 @@ export class DeltaBatcher {
     private readonly ms = DELTA_BATCH_MS,
   ) {}
 
-  delta(id: string, text: string): void {
+  delta(id: string, text: string, thinking?: true): void {
     if (!text) return;
     if (this.pending && this.pending.id !== id) this.flush();
     if (this.pending) this.pending.text += text;
-    else this.pending = { id, text };
+    else this.pending = thinking ? { id, text, thinking } : { id, text };
     if (!this.timer) this.timer = setTimeout(() => this.flush(), this.ms);
   }
 
@@ -298,7 +306,7 @@ export class DeltaBatcher {
     this.timer = null;
     const p = this.pending;
     this.pending = null;
-    if (p) this.out({ type: "assistant_text_delta", id: p.id, text: p.text });
+    if (p) this.out({ type: "assistant_text_delta", ...p });
   }
 
   /** Drops pending text (the stream was abandoned). */

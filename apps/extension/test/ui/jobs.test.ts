@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chipHint, taskChip, USER_STOP_REASON, whenText, type SessionInfo } from "@noa/shared";
+import { chipHint, taskChip, USER_STOP_REASON, whenParts, whenText, type SessionInfo } from "@noa/shared";
 import { APPROVAL_REASON, STALE_NEEDS_MS, UPCOMING_ON_HOME, buildJobs, distinctTitle, groupJobs, jobKeyOf, jobRow, jobSubtitle, scheduleRow, viewLayout, type JobInputs, type JobTask } from "../../src/sidepanel/jobs.js";
 
 const NOW = Date.parse("2026-09-27T12:00:00Z");
@@ -178,15 +178,48 @@ describe("jobs: groups and order", () => {
 });
 
 describe("jobs: rows and subtitles in words", () => {
-  it("a scheduled repeating job: its rule under the title, the next run on the right", () => {
-    const [j] = jobs({ tasks: [task("t", { notBefore: at(60), repeat: DAILY })] });
+  it("a scheduled repeating job: the next run's clock on the left, its account under the title, its cadence as a pill", () => {
+    const [j] = jobs({ tasks: [task("t", { notBefore: at(60), repeat: DAILY, account: "noa" })] });
     const row = jobRow(j!, NOW);
-    expect(row.meta).toBe("Daily at 9:00 AM");
-    // Today: the time alone; later days say which.
-    expect(row.when).toMatch(/^(Tomorrow )?\d{1,2}:\d\d/);
+    expect(row.clock).toEqual({ time: expect.stringMatching(/^\d{1,2}:\d\d/), day: expect.stringMatching(/^(Today|Tmrw)$/), words: expect.stringMatching(/^(Today|Tomorrow) \d{1,2}:\d\d/) });
+    expect(row.when).toBe("");
+    expect(row.meta).toBe("@noa");
+    expect(row.pill).toBe("Daily");
     expect(row.label).toContain("Task t, Scheduled, Daily at 9:00 AM, next");
+    expect(row.label).toContain("@noa");
     // Inside a line "today" and "tomorrow" are lower case; only the line starts with a capital.
     expect(jobSubtitle(j!, NOW)).toMatch(/^Daily at 9:00 AM · next (today|tomorrow) /);
+    // A title that names the account already does not get it again underneath.
+    const [named] = jobs({ tasks: [task("n", { notBefore: at(60), repeat: DAILY, account: "@noa", instructions: "Post a tip" })] });
+    expect(named!.title).toBe("@noa · Post a tip");
+    expect(jobRow(named!, NOW)).toMatchObject({ meta: "", pill: "Daily" });
+    // Without an account the site goes under the title; a one-off has no pill.
+    const [once] = jobs({ tasks: [task("o", { notBefore: at(60) })], sessions: [session("r", -30, { source: "local", taskId: "o", seriesId: "o", url: "https://x.com/home" })] });
+    expect(jobRow(once!, NOW)).toMatchObject({ meta: "x.com", pill: "", when: "" });
+    expect(jobRow(once!, NOW).clock?.time).toMatch(/^\d{1,2}:\d\d/);
+  });
+
+  it("the clock reads the next run in this runtime's zone, days away by name, far off by date", () => {
+    const clockAt = (min: number) => jobRow(jobs({ tasks: [task("t", { notBefore: at(min) })] })[0]!, NOW).clock;
+    const wall = (min: number) => new Date(NOW + min * 60_000);
+    const hm = (d: Date) => `${d.getHours() % 12 || 12}:${String(d.getMinutes()).padStart(2, "0")} ${d.getHours() < 12 ? "AM" : "PM"}`;
+    const dayOf = (d: Date) => Math.floor((d.getTime() - d.getTimezoneOffset() * 60_000) / 86_400_000);
+    const tomorrow = [60, 24 * 60].find((m) => dayOf(wall(m)) === dayOf(wall(0)) + 1)!;
+    expect(clockAt(tomorrow)).toEqual({ time: hm(wall(tomorrow)), day: "Tmrw", words: `Tomorrow ${hm(wall(tomorrow))}` });
+    expect(clockAt(3 * 24 * 60)).toEqual({ time: hm(wall(3 * 24 * 60)), day: expect.stringMatching(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$/), words: expect.any(String) });
+    expect(clockAt(30 * 24 * 60)).toEqual({ time: hm(wall(30 * 24 * 60)), day: expect.stringMatching(/^[A-Z][a-z]{2} \d{1,2}$/), words: expect.stringMatching(/^[A-Z][a-z]{2} \d{1,2}, /) });
+  });
+
+  it("rows that do not wait have no clock: needs you, running, recent, and the held ones of Scheduled", () => {
+    const j = byKey({
+      sessions: [session("c", -5), session("r", -1, { source: "local", taskId: "run", seriesId: "run", outcome: undefined, endedAt: undefined })],
+      tasks: [task("run", { status: "running", repeat: DAILY }), task("held", { status: "paused", pauseReason: "Paused by you", repeat: DAILY }), task("done", { status: "done" })],
+      running: [session("r", -1, { source: "local", taskId: "run", seriesId: "run", outcome: undefined, endedAt: undefined })],
+    });
+    for (const key of ["chat:c", "task:run", "task:done"]) expect(jobRow(j.get(key)!, NOW).clock, key).toBeNull();
+    for (const key of ["task:run", "task:held"]) expect(scheduleRow(j.get(key)!, NOW).clock, key).toBeNull();
+    expect(scheduleRow(j.get("task:held")!, NOW).when).toBe("Paused");
+    expect(scheduleRow(j.get("task:run")!, NOW).when).toBe("now");
   });
 
   it("a daily 9:00 series: the next run is its waiting row's 9:00, never an earlier run's time", () => {
@@ -205,23 +238,26 @@ describe("jobs: rows and subtitles in words", () => {
     const [j] = jobs({ tasks, sessions });
     expect(j!.next).toBe(next.toISOString());
     expect(jobSubtitle(j!, NOW)).toMatch(/^Daily at 9:00 AM · next (today|tomorrow) 9:00 AM$/);
-    expect(jobRow(j!, NOW).when).toMatch(/^(Tomorrow )?9:00 AM$/);
+    expect(jobRow(j!, NOW).clock).toMatchObject({ time: "9:00 AM", day: expect.stringMatching(/^(Today|Tmrw)$/) });
   });
 
   it("a one-off due now; a retry", () => {
     const j = byKey({ tasks: [task("due"), task("retry", { retryAfter: at(30) })] });
-    expect(jobRow(j.get("task:due")!, NOW).when).toBe("Due now");
+    expect(jobRow(j.get("task:due")!, NOW).clock).toEqual({ time: "Now", day: "Due", words: "Due now" });
+    expect(jobRow(j.get("task:retry")!, NOW).clock).toEqual({ time: expect.stringMatching(/^\d{1,2}:\d\d/), day: expect.stringMatching(/^(Today|Tmrw)$/), words: expect.stringMatching(/^Retries (today|tomorrow) /) });
+    expect(jobRow(j.get("task:due")!, NOW).when).toBe("");
     expect(jobSubtitle(j.get("task:due")!, NOW)).toBe("Due now");
-    expect(jobRow(j.get("task:retry")!, NOW).when).toMatch(/^Retries \d/);
+    expect(jobRow(j.get("task:retry")!, NOW).when).toBe("");
+    expect(jobRow(j.get("task:retry")!, NOW).label).toMatch(/, retries (today|tomorrow) /);
     expect(jobSubtitle(j.get("task:retry")!, NOW)).toMatch(/^Retries (today|tomorrow) /);
   });
 
-  it("needs you: the reason under the title; recent: the site and how long ago; running: now", () => {
+  it("needs you: the title alone, the reason in its label and subtitle; recent: the site and how long ago; running: now", () => {
     const j = byKey({
       sessions: [session("n", -40, { outcome: "paused", reason: "Pick a seat" }), session("d", -125, { url: "https://mail.google.com/x" }), session("r", -1, { endedAt: undefined, outcome: undefined })],
       running: [session("r", -1, { endedAt: undefined, outcome: undefined })],
     });
-    expect(jobRow(j.get("chat:n")!, NOW)).toMatchObject({ meta: "Pick a seat", when: "38 min ago" });
+    expect(jobRow(j.get("chat:n")!, NOW)).toMatchObject({ meta: "", when: "38 min ago", label: expect.stringContaining("Pick a seat") });
     expect(jobSubtitle(j.get("chat:n")!, NOW)).toBe("Needs you · Pick a seat");
     expect(jobRow(j.get("chat:d")!, NOW)).toMatchObject({ meta: "mail.google.com", when: "2 h ago", label: "Chat d, Done, 2 h ago, mail.google.com" });
     expect(jobSubtitle(j.get("chat:d")!, NOW)).toBe("Done · 2 h ago");
@@ -380,7 +416,7 @@ describe("jobs: the two views (Home and Scheduled)", () => {
     ];
     const j = byKey({ tasks });
     expect(j.get("task:mine")).toMatchObject({ state: "paused", group: "paused", held: true, scheduled: true, reason: "" });
-    expect(j.get("task:failing")).toMatchObject({ state: "needs", group: "needs", held: true, reason: "Paused after 3 failed runs in a row. Last: boom" });
+    expect(j.get("task:failing")).toMatchObject({ state: "needs", group: "needs", held: true, reason: "boom" });
     expect(view("home", { tasks }).groups).toEqual([["Needs you", ["task:failing"]]]);
     expect(view("scheduled", { tasks }).groups).toEqual([["Paused", ["task:failing", "task:mine"]]]);
     expect(jobSubtitle(j.get("task:mine")!, NOW)).toBe("Paused · Daily at 9:00 AM");
@@ -398,20 +434,61 @@ describe("jobs: the two views (Home and Scheduled)", () => {
         task("login", { status: "paused", pauseReason: "Log in to X", instructions: "Login" }),
       ],
     });
-    // Times read in this computer's zone (whenText).
+    // Times read in this computer's zone (whenText); a waiting row's next run is its clock on the left, not a time on the right.
     const tomorrow9 = whenText(at(21 * 60), NOW);
-    const soon = whenText(at(30), NOW).replace(/^Today /, "");
+    const soon = whenParts(at(30), NOW);
     expect(scheduleRow(j.get("task:daily")!, NOW)).toEqual({
       title: "Post the tip",
       meta: "Daily at 9:00 AM",
-      when: tomorrow9,
+      when: "",
+      clock: { time: tomorrow9.replace(/^\S+ /, ""), day: tomorrow9.startsWith("Tomorrow") ? "Tmrw" : "Today", words: tomorrow9 },
+      pill: "",
       label: `Post the tip, Scheduled, Daily at 9:00 AM, next ${tomorrow9.replace(/^(Today|Tomorrow)/, (w) => w.toLowerCase())}`,
       toggle: "pause",
     });
-    expect(scheduleRow(j.get("task:once")!, NOW)).toMatchObject({ meta: "Once", when: soon, toggle: "pause" });
-    expect(scheduleRow(j.get("task:mine")!, NOW)).toMatchObject({ meta: "Daily at 9:00 AM", when: "Paused", toggle: "resume", label: "Mine, Paused, Daily at 9:00 AM" });
-    expect(scheduleRow(j.get("task:failing")!, NOW)).toMatchObject({ meta: "Once · Paused after 3 failed runs in a row. Last: boom", when: "Paused", toggle: "resume" });
+    expect(scheduleRow(j.get("task:once")!, NOW)).toMatchObject({ meta: "Once", when: "", clock: { time: soon.time, day: soon.day === "Tomorrow" ? "Tmrw" : "Today", words: `${soon.day} ${soon.time}` }, toggle: "pause" });
+    expect(scheduleRow(j.get("task:mine")!, NOW)).toMatchObject({ meta: "Daily at 9:00 AM", when: "Paused", clock: null, toggle: "resume", label: "Mine, Paused, Daily at 9:00 AM" });
+    expect(jobRow(j.get("task:failing")!, NOW)).toMatchObject({ meta: "", label: expect.stringContaining("boom") });
+    expect(scheduleRow(j.get("task:failing")!, NOW)).toMatchObject({ meta: "Once · boom", when: "Paused", toggle: "resume" });
     // Needs the user for something else: neither (Resume on its page goes on from its run).
-    expect(scheduleRow(j.get("task:login")!, NOW)).toMatchObject({ meta: "Once · Log in to X", when: "Needs you", toggle: null });
+    expect(scheduleRow(j.get("task:login")!, NOW)).toMatchObject({ meta: "Once · Log in to X", when: "Needs you", clock: null, toggle: null });
+  });
+});
+
+describe("jobs: History", () => {
+  // NOW is 12:00 UTC; local days are counted in the test's time zone, so the times are read back the same way.
+  const day = (d: number, hour = 10) => {
+    const t = new Date(NOW);
+    t.setDate(t.getDate() - d);
+    t.setHours(hour, 0, 0, 0);
+    return Math.round((t.getTime() - NOW) / 60_000);
+  };
+
+  it("has every job that ran, those put away and the old ones too, newest first by day; a job that never ran is not there", () => {
+    const sessions = [
+      session("today", day(0, 0) + 1),
+      session("yesterday", day(1)),
+      session("week", day(4)),
+      session("month", day(20)),
+      session("old", day(200)),
+      session("run", day(2), { source: "local", taskId: "t1", seriesId: "t1" }),
+    ];
+    const tasks = [task("t1", { status: "done", updatedAt: at(day(2) + 3) }), task("waiting", { notBefore: at(600) })];
+    const dismissals = { "chat:week": { at: at(-1), archivedAt: at(-1) } };
+    const l = viewLayout("history", jobs({ sessions, tasks, dismissals }), "", NOW);
+    expect(l.groups.map((g) => [g.label, g.jobs.map((j) => j.key)])).toEqual([
+      ["Today", ["chat:today"]],
+      ["Yesterday", ["chat:yesterday"]],
+      ["Previous 7 days", ["task:t1", "chat:week"]],
+      ["Previous 30 days", ["chat:month"]],
+      ["Older", ["chat:old"]],
+    ]);
+    // Home leaves out what was put away; History keeps it.
+    expect(groupJobs(jobs({ sessions, tasks, dismissals })).flatMap((g) => g.jobs.map((j) => j.key))).not.toContain("chat:week");
+  });
+
+  it("searches its jobs", () => {
+    const sessions = [session("a", -60, { title: "Flights to Lisbon" }), session("b", -30, { title: "Inbox summary" })];
+    expect(viewLayout("history", jobs({ sessions }), "lisbon", NOW).groups.flatMap((g) => g.jobs.map((j) => j.key))).toEqual(["chat:a"]);
   });
 });

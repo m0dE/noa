@@ -7,8 +7,9 @@
  * what they need: Needs you (an approval or the user's answer waits, a task paused), Running, Upcoming (a task
  * waiting for its time; "scheduled" in the code), Recent (the rest, newest first).
  *
- * Two views (JobView): Home has those groups, Upcoming cut to its soonest UPCOMING_ON_HOME; Scheduled has every job
- * with a schedule (one row per series: waiting, running a repeat, or paused), soonest first, the paused ones last. A
+ * Three views (JobView): Home has those groups, Upcoming cut to its soonest UPCOMING_ON_HOME; Scheduled has every job
+ * with a schedule (one row per series: waiting, running a repeat, or paused), soonest first, the paused ones last;
+ * History has every job that ran (chats and tasks alike, put away or not), newest first, by day. A
  * job the user paused (state "paused": its task on hold with PAUSED_BY_USER) is only in Scheduled; one paused because
  * its runs kept failing needs the user (Needs you) and is among Scheduled's paused ones too.
  *
@@ -19,31 +20,39 @@
  * run again unnoticed).
  */
 import {
+  cadenceText,
   formatRelative,
   isOnHold,
   PAUSED_BY_USER,
   repeatLabel,
+  shortPauseReason,
   taskNextTime,
   USER_STOP_REASON,
+  whenParts,
   whenText,
   type LocalTask,
   type RepeatSchedule,
   type SessionInfo,
 } from "@noa/shared";
 import type { JobDismissal, LocalMediaInfo } from "../ui-protocol.js";
-import { firstLine } from "./format.js";
+import { accountLabel, firstLine } from "./format.js";
 
-/** Home's groups (needs, running, scheduled = Upcoming, recent), and the Scheduled view's (active, paused). */
-export type JobGroupId = "needs" | "running" | "scheduled" | "recent" | "active" | "paused";
+/** Home's groups (needs, running, scheduled = Upcoming, recent), the Scheduled view's (active, paused), and History's (by day). */
+export type JobGroupId = "needs" | "running" | "scheduled" | "recent" | "active" | "paused" | HistoryGroupId;
 
-/** The list's two views: Home (what needs you, runs, comes next and ran), and every scheduled job. */
-export type JobView = "home" | "scheduled";
+/** History's groups: when the job last did something. */
+export type HistoryGroupId = "today" | "yesterday" | "week" | "month" | "older";
+
+/** The list's three views: Home (what needs you, runs, comes next and ran), every scheduled job, and every job that ran. */
+export type JobView = "home" | "scheduled" | "history";
+export const JOB_VIEWS: readonly JobView[] = ["home", "scheduled", "history"];
 
 /** Home's Upcoming shows this many (the soonest); the Scheduled view shows them all. */
 export const UPCOMING_ON_HOME = 3;
 
 /** Where a job is: what its row's icon and its page's subtitle say. */
-export type JobState = "needs" | "running" | "due" | "scheduled" | "retry" | "paused" | "done" | "failed" | "stopped" | "cancelled" | "dismissed" | "lapsed";
+/** talk: a chat voice opened where nothing was asked yet (SessionInfo.empty). */
+export type JobState = "needs" | "running" | "due" | "scheduled" | "retry" | "paused" | "done" | "failed" | "stopped" | "cancelled" | "dismissed" | "lapsed" | "talk";
 
 /** A need nobody answered for this long goes to Recent by itself (see the top of this file). */
 export const STALE_NEEDS_MS = 24 * 60 * 60 * 1000;
@@ -106,6 +115,11 @@ export const GROUP_LABELS: Record<JobGroupId, string> = {
   recent: "Recent",
   active: "Next runs",
   paused: "Paused",
+  today: "Today",
+  yesterday: "Yesterday",
+  week: "Previous 7 days",
+  month: "Previous 30 days",
+  older: "Older",
 };
 const GROUP_ORDER: readonly JobGroupId[] = ["needs", "running", "scheduled", "recent"];
 
@@ -119,6 +133,7 @@ export const STATE_LABELS: Record<JobState, string> = {
   done: "Done",
   failed: "Failed",
   stopped: "Stopped",
+  talk: "Talking",
   cancelled: "Cancelled",
   dismissed: "Dismissed",
   lapsed: "Waited for you",
@@ -134,6 +149,7 @@ const GROUP_OF: Record<JobState, JobGroupId> = {
   done: "recent",
   failed: "recent",
   stopped: "recent",
+  talk: "recent",
   cancelled: "recent",
   dismissed: "recent",
   lapsed: "recent",
@@ -183,6 +199,8 @@ function currentTask(rows: readonly JobTask[]): JobTask {
 /** Where a conversation is, when its task (if any) does not say (also each run of a job's runs list, job-runs.ts). */
 export function sessionState(s: SessionInfo, running: boolean, awaiting: boolean): { state: JobState; reason: string } {
   if (running) return awaiting ? { state: "needs", reason: APPROVAL_REASON } : { state: "running", reason: "" };
+  // Voice opened it and nothing was asked yet: a conversation, not a stopped job.
+  if (s.empty) return { state: "talk", reason: "" };
   // Not running and never ended: its worker stopped under it.
   if (!s.endedAt) return { state: "stopped", reason: "" };
   switch (s.outcome) {
@@ -206,7 +224,8 @@ function taskState(t: JobTask, now: number): { state: JobState; reason: string }
     case "paused":
       // Paused by the user: it waits for them to resume it, it does not need them.
       if (t.pauseReason === PAUSED_BY_USER && !t.retryAfter) return { state: "paused", reason: "" };
-      return { state: "needs", reason: t.pauseReason ?? "" };
+      // Paused after failed runs: the row says what failed, not that it paused (its glyph and group say that).
+      return { state: "needs", reason: shortPauseReason(t.pauseReason ?? "") };
     case "pending": {
       if (t.retryAfter && Date.parse(t.retryAfter) > now) return { state: "retry", reason: t.failReason ?? "" };
       const next = taskNextTime(t);
@@ -351,6 +370,35 @@ export function groupJobs(jobs: readonly Job[], query = ""): JobGroup[] {
   })).filter((g) => g.jobs.length > 0);
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The History group of a time: the day it was on, counted in local days back from `now`. */
+function historyGroupOf(at: string, now: number): HistoryGroupId {
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const t = Date.parse(at);
+  if (t >= today.getTime()) return "today";
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (t >= yesterday.getTime()) return "yesterday";
+  if (t >= today.getTime() - 7 * DAY_MS) return "week";
+  if (t >= today.getTime() - 30 * DAY_MS) return "month";
+  return "older";
+}
+
+const HISTORY_ORDER: readonly HistoryGroupId[] = ["today", "yesterday", "week", "month", "older"];
+
+/**
+ * The History view: every job that ran (it has a conversation: chats, and tasks with a run) matching the search,
+ * those put away included, newest first, grouped by when it last did something (Today, Yesterday, Previous 7 days,
+ * Previous 30 days, Older).
+ */
+export function historyGroups(jobs: readonly Job[], query = "", now = Date.now()): JobGroup[] {
+  const words = searchWords(query);
+  const ran = jobs.filter((j) => j.runs.length > 0 && jobMatches(j, words)).sort(byLatest);
+  return HISTORY_ORDER.map((id) => ({ id, label: GROUP_LABELS[id], jobs: ran.filter((j) => historyGroupOf(j.at, now) === id) })).filter((g) => g.jobs.length > 0);
+}
+
 /** A view's groups, and what Home's Upcoming leaves to the Scheduled view. */
 export interface ViewLayout {
   groups: JobGroup[];
@@ -362,12 +410,13 @@ export interface ViewLayout {
 
 /**
  * What a view shows for a search. Home: groupJobs, Upcoming cut to its soonest UPCOMING_ON_HOME while nothing is
- * searched (a search shows every match). Scheduled: scheduledGroups.
+ * searched (a search shows every match). Scheduled: scheduledGroups. History: historyGroups.
  */
-export function viewLayout(view: JobView, jobs: readonly Job[], query = ""): ViewLayout {
+export function viewLayout(view: JobView, jobs: readonly Job[], query = "", now = Date.now()): ViewLayout {
   const scheduled = scheduledGroups(jobs, query);
   const scheduledCount = scheduled.reduce((n, g) => n + g.jobs.length, 0);
   if (view === "scheduled") return { groups: scheduled, upcomingHidden: 0, scheduledCount };
+  if (view === "history") return { groups: historyGroups(jobs, query, now), upcomingHidden: 0, scheduledCount };
   const cut = searchWords(query).length === 0;
   let upcomingHidden = 0;
   const groups = groupJobs(jobs, query).map((g) => {
@@ -406,33 +455,57 @@ export interface ScheduleRow extends JobRow {
   toggle: "pause" | "resume" | null;
 }
 
-/** Under the title its schedule ("Daily at 9:00 AM"; a one-off: "Once"), on the right when it runs next ("Paused" while on hold). */
+/**
+ * Under the title its schedule ("Daily at 9:00 AM"; a one-off: "Once"); a waiting job has its next run as the clock on
+ * the left, one on hold "Paused" on the right.
+ */
 export function scheduleRow(job: Job, now = Date.now()): ScheduleRow {
   const rule = repeatLabel(job.repeat) || "Once";
-  const when = job.held
-    ? STATE_LABELS.paused
-    : job.running
-      ? "now"
-      : job.group === "scheduled"
-        ? line(nextWords(job, now).replace(/^(retries )?today /, "$1"))
-        : STATE_LABELS[job.state];
+  const clock = nextClock(job, now);
+  const when = clock ? "" : job.held ? STATE_LABELS.paused : job.running ? "now" : STATE_LABELS[job.state];
   // A pause that needs the user says why (its runs kept failing, a login, ...).
   const why = job.state === "needs" || isLeftNeed(job) ? job.reason : "";
   const toggle = job.held ? "resume" : !job.running && job.task?.status === "pending" ? "pause" : null;
   const next = job.held || job.running || job.group !== "scheduled" ? "" : nextWords(job, now) === "due now" ? "due now" : `next ${nextWords(job, now)}`;
   const label = [job.title, job.held ? STATE_LABELS.paused : STATE_LABELS[job.state], rule, next, why].filter(Boolean).join(", ");
-  return { title: job.title, when, meta: line(rule, why), label, toggle };
+  return { title: job.title, when, clock, pill: "", meta: line(rule, why), label, toggle };
+}
+
+/** A waiting job's next run as its row's left column: the time over the day. */
+export interface JobClock {
+  /** "9:10 AM" (or "09:10"); "Now" when its time has come. */
+  time: string;
+  /** "Today", "Tmrw", "Fri", "Oct 12"; "Due" under "Now". */
+  day: string;
+  /** The same in words, as its tooltip: "Tomorrow 9:10 AM", "Retries today 3:00 PM", "Due now". */
+  words: string;
 }
 
 /** A row of the list, in words. */
 export interface JobRow {
   title: string;
-  /** Right side: when it ran, or when it runs next. */
+  /** Right side: when it ran ("" when the clock says when it runs). */
   when: string;
-  /** Under the title, quietly: why it needs you, its repeat rule, or its site ("" for none). */
+  /** Left side, in place of the state's glyph: when it runs next (null: the job does not wait, so its glyph shows). */
+  clock: JobClock | null;
+  /** Right side, in a pill: how often it repeats ("Daily"; "" for none). */
+  pill: string;
+  /** Under the title, quietly: why it needs you, its account, or its site ("" for none). */
   meta: string;
   /** Everything above in one sentence, for screen readers. */
   label: string;
+}
+
+/**
+ * The clock of a job that waits its turn (Upcoming, or Next runs of the Scheduled view): its next run's time over
+ * its day ("9:10 AM" / "Tmrw"), "Now" / "Due" once its time has come. Null for a job that runs, is on hold, needs
+ * the user or is over: its row shows its state's glyph instead.
+ */
+export function nextClock(job: Job, now = Date.now()): JobClock | null {
+  if (job.group !== "scheduled" || job.held || job.running) return null;
+  if (job.state === "due" || !job.next) return { time: "Now", day: "Due", words: "Due now" };
+  const { day, time } = whenParts(job.next, now);
+  return { time, day: day === "Tomorrow" ? "Tmrw" : day, words: line(nextWords(job, now)) };
 }
 
 /** Words joined into one line, which alone starts with a capital: "Daily at 9:00 AM · next tomorrow 9:00 AM". */
@@ -451,19 +524,27 @@ function nextWords(job: Job, now: number): string {
   return job.state === "retry" ? `retries ${at}` : at;
 }
 
+/**
+ * A row of Home. Upcoming: the next run's clock on the left, the account (or site) under the title, how often it
+ * repeats as a pill on the right; Needs you: the state's glyph and when it ran; the rest: the glyph, its site and when it ran.
+ */
 export function jobRow(job: Job, now = Date.now()): JobRow {
   const rule = repeatLabel(job.repeat);
-  // Standing alone on the right: today's time without "today".
-  const when =
-    job.group === "scheduled" ? line(nextWords(job, now).replace(/^(retries )?today /, "$1")) : job.state === "running" ? "now" : formatRelative(job.at, now);
+  const clock = nextClock(job, now);
+  const when = clock ? "" : job.state === "running" ? "now" : formatRelative(job.at, now);
   // A need that was left (dismissed, or it waited too long) still says what it was.
   const left = isLeftNeed(job);
-  const meta = job.group === "needs" ? job.reason : left ? line(job.state === "lapsed" && STATE_LABELS.lapsed, job.reason) || job.site : job.group === "scheduled" && rule ? rule : job.site;
+  // The account, unless the title names it already ("@noa · Post a tip", distinctTitle).
+  const handle = accountLabel(job.task?.account);
+  const account = handle && !job.title.toLowerCase().includes(handle.toLowerCase()) ? handle : "";
+  // A row that needs you is its title alone: its glyph and group say why, its page says the rest.
+  const meta = job.group === "needs" ? "" : left ? line(job.state === "lapsed" && STATE_LABELS.lapsed, job.reason) || job.site : job.group === "scheduled" ? account || job.site : job.site;
+  const pill = clock && job.repeat ? cadenceText(job.repeat) : "";
   const next = job.group !== "scheduled" ? when : nextWords(job, now) === "due now" ? "due now" : job.state === "retry" ? nextWords(job, now) : `next ${nextWords(job, now)}`;
-  const label = [job.title, STATE_LABELS[job.state], job.group === "scheduled" ? [rule, next].filter(Boolean).join(", ") : when, job.group === "needs" || left ? job.reason : job.site]
+  const label = [job.title, STATE_LABELS[job.state], job.group === "scheduled" ? [rule, next].filter(Boolean).join(", ") : when, job.group === "needs" || left ? job.reason : job.group === "scheduled" ? account || job.site : job.site]
     .filter(Boolean)
     .join(", ");
-  return { title: job.title, when, meta, label };
+  return { title: job.title, when, clock, pill, meta, label };
 }
 
 /** The job page's one line under its title: "Daily at 9:00 AM · next tomorrow 9:00 AM", "Done · 5 min ago", ... */

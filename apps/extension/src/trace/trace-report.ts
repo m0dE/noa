@@ -372,7 +372,7 @@ function eventRow(e: StampedAgentEvent, t: number, span: TraceEvent | undefined,
     case "limited_mode":
       return { ...base, label: "Limited mode", detail: join(e.tab && `tab ${e.tab}`, e.extensionId && `extension ${e.extensionId}`, e.url) };
     case "auto_tab_switching":
-      return { ...base, label: "Auto tab switching on", detail: join(e.tab && `tab ${e.tab}`, e.url) };
+      return { ...base, label: "Auto tab switching on", detail: join(e.why === "needs_you" && "needs the user there", e.tab && `tab ${e.tab}`, e.url) };
     case "task_end": {
       const text = e.summary ?? e.reason ?? "";
       const row: Omit<TraceRow, "rel"> = { ...base, label: `Result: ${e.outcome}`, text: clip(text, TEXT_LIMITS.answer) };

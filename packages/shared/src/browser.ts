@@ -92,7 +92,35 @@ export interface PageSnapshot {
    * draws only the rows in view. Absent when there are none.
    */
   areas?: ScrollArea[];
+  /**
+   * The page's pictures (<img>) that are shown at least MIN_PICTURE_SIDE px on both sides, largest first, at most
+   * MAX_SNAPSHOT_PICTURES: what save_file takes by url to keep one. Absent when there are none.
+   */
+  pictures?: PagePicture[];
 }
+
+/** A picture on the page (PageSnapshot.pictures). */
+export interface PagePicture {
+  /** Its address: the largest one its srcset offers, else a lazy loader's (data-src: the placeholder shown until then is not it), else the one it shows. */
+  url: string;
+  /** Its alt text, else its title or the caption of the figure it is in. */
+  text?: string;
+  /**
+   * Its own size in pixels (0 when unknown: not loaded yet, or a lazy page's placeholder is shown instead), and the
+   * size it is shown at (CSS pixels).
+   */
+  width: number;
+  height: number;
+  shownWidth: number;
+  shownHeight: number;
+  /** The link it is in, as its address. */
+  link?: string;
+}
+
+/** Pictures a snapshot lists at most (PageSnapshot.pictures). */
+export const MAX_SNAPSHOT_PICTURES = 15;
+/** Pictures shown smaller than this on either side (icons, avatars, spacers) are not listed. */
+export const MIN_PICTURE_SIDE = 48;
 
 /** A scrollable area of a PageSnapshot (PageSnapshot.areas). */
 export interface ScrollArea {
@@ -254,7 +282,11 @@ export interface Settled {
 export const SETTLE_REQUESTS_MAX_MS = 4000;
 
 export type BrowserMethods = {
-  "browser.navigate": { params: { url: string }; result: { url: string; title: string } };
+  /**
+   * kept: the current tab's page held what was entered in its form and the address is on another site, so that tab
+   * (kept, a short tab id) was left as it is and the address opened in a new tab (tab), now the current tab.
+   */
+  "browser.navigate": { params: { url: string }; result: { url: string; title: string; kept?: string; tab?: string } };
   /** tab: short tab id ("t2"); default the current tab. Reading never activates the tab. */
   "browser.readPage": { params: { tab?: string }; result: PageSnapshot };
   "browser.screenshot": { params: Record<string, never>; result: Screenshot };
@@ -341,6 +373,11 @@ export type BrowserMethods = {
    * in the account's cloud files (file-saver.ts). Rejects when the source cannot be read.
    */
   "files.save": { params: SaveFileParams; result: SavedFile };
+  /**
+   * view_file: a picture in the user's files (a path list_files or save_file gave; a cloud-only one is downloaded
+   * first), as a JPEG at most VIEW_FILE_MAX_SIDE on its longest side, with the picture's own size and the file's bytes.
+   */
+  "files.view": { params: { path: string }; result: { image: { base64: string; mimeType: string }; width: number; height: number; size: number } };
   "media.generateImage": {
     params: { prompt: string; name?: string; size?: ImageSize; quality?: ImageQuality; transparent?: boolean };
     result: { path: string; preview: { base64: string; mimeType: string }; size: ImageSize; quality: ImageQuality; chargedCents: number };

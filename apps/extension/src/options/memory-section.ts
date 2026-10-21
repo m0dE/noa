@@ -22,6 +22,7 @@ import {
   PIN_TEXT,
   RECORDS_PAGE,
   syncText,
+  whereView,
   type MemoryEntryView,
   type MemoryKindView,
   type MemoryTaskView,
@@ -37,6 +38,8 @@ export function initMemorySection(opts: { onState(state: UiState): void }): Memo
   const pausedNote = $("memory-paused-note");
   const syncNote = $("memory-sync");
   const syncActions = $("memory-sync-actions");
+  const whereGroup = $("memory-where-group");
+  const whereHost = $("memory-where");
   const backfill = $("memory-backfill");
   const search = $<HTMLInputElement>("memory-search");
   const found = $("memory-found");
@@ -50,6 +53,8 @@ export function initMemorySection(opts: { onState(state: UiState): void }): Memo
   let settings: Pick<ExtensionSettings, "memoryPaused" | "memoryKindsOff"> | null = null;
   let entries: MemoryEntry[] = [];
   let sync: MemorySyncStatus | undefined;
+  /** The signed-in account and plan the status was read for (render reads it again when they change). */
+  let accountKey: string | null = null;
   let loaded = false;
   /** The entry being edited (its row shows the editor). */
   let editing: string | null = null;
@@ -308,6 +313,30 @@ export function initMemorySection(opts: { onState(state: UiState): void }): Memo
     syncActions.hidden = false;
   }
 
+  /** This computer or the account: choosing saves at once (memory.where) and shows the new status. */
+  function drawWhere(): void {
+    const options = whereView(sync);
+    whereGroup.hidden = !options.length;
+    whereHost.replaceChildren(
+      ...options.map((o) => {
+        const input = h("input", { id: `memory-where-${o.id}`, type: "radio", name: "memoryWhere", value: o.id, checked: o.checked, disabled: o.disabled });
+        input.addEventListener("change", () => {
+          void (async () => {
+            try {
+              sync = (await uiRequest({ type: "memory.where", where: o.id })).sync;
+              if (o.id === "cloud") await load();
+              else draw();
+            } catch (err) {
+              flash(msg, `Not saved: ${errorMessage(err)}`, "bad");
+              draw();
+            }
+          })();
+        });
+        return h("div.opt", { "data-where": o.id }, h("label.opt-head", null, input, h("span.opt-text", null, h("b", null, o.label), h("small.opt-detail", null, o.detail))));
+      }),
+    );
+  }
+
   function draw(): void {
     if (!settings) return;
     const v = memoryPanel(entries, settings, new Date(), search.value);
@@ -319,6 +348,7 @@ export function initMemorySection(opts: { onState(state: UiState): void }): Memo
     syncNote.dataset.tone = st.tone;
     syncNote.hidden = !st.text;
     drawSyncActions(st);
+    drawWhere();
     empty.hidden = !loaded || !v.empty;
     search.hidden = v.empty;
     const searching = !!v.search.query;
@@ -372,8 +402,11 @@ export function initMemorySection(opts: { onState(state: UiState): void }): Memo
       const s = state.settings;
       const same = settings && s.memoryPaused === settings.memoryPaused && s.memoryKindsOff.join() === settings.memoryKindsOff.join();
       settings = { memoryPaused: s.memoryPaused, memoryKindsOff: [...s.memoryKindsOff] as MemoryKind[] };
-      // Signed in to another account (or the question was answered elsewhere): read the sync status again.
-      if (loaded && !!state.memoryQuestion !== (sync?.state === "ask")) void load();
+      // Signed in, out or to another account, a new plan, or the question answered elsewhere: read the sync status again.
+      const who = `${state.account?.signedIn ? (state.account.user?.email ?? "") : ""}|${state.account?.plan?.id ?? ""}`;
+      const accountChanged = accountKey !== null && accountKey !== who;
+      accountKey = who;
+      if (loaded && (accountChanged || !!state.memoryQuestion !== (sync?.state === "ask"))) void load();
       else if (!same) draw();
     },
   };

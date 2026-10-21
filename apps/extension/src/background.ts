@@ -4,7 +4,7 @@
  */
 import { z } from "zod";
 import * as core from "@noa/core";
-import { cloudFileName, errorMessage, FILE_READ_CHUNK_BYTES, formatBytes, SAVE_FILE_MAX_BYTES, type ExtensionSettings, type SessionInfo, type TodoToolName, type TodoToolResult } from "@noa/shared";
+import { cloudFileName, errorMessage, FILE_READ_CHUNK_BYTES, formatBytes, SAVE_FILE_MAX_BYTES, type CloudFile, type CloudFolder, type ExtensionSettings, type FileMeta, type FileStorage, fileStorageFor, type SessionInfo, type TodoToolName, type TodoToolResult } from "@noa/shared";
 import { AccountService, browserTimeZone, type AccountServiceDeps } from "./account/account.js";
 import type { AccountTaskList } from "./account/account-api.js";
 import { AccountTodo, LocalTodo, type TodoSource } from "./account/todo-source.js";
@@ -20,12 +20,12 @@ import { Cdp } from "./cdp.js";
 import { noaBrowserAwareDebugger } from "./noa-browser/host-debugger.js";
 import { agentGroupIds, agentGroupOf, applyGroupLook, tabUrl } from "./chrome-tabs.js";
 import { ControlIndicator } from "./control-indicator.js";
-import { GOOGLE_CLIENT_ID } from "./build-config.js";
+import { GOOGLE_CLIENT_ID, HELPER_CODE } from "./build-config.js";
 import { ApiBrain } from "./engine/api-brain.js";
 import { hostedBackend } from "./engine/hosted-brain.js";
 import { cloudJevUsable, needsHelper, reportedHelper, resolveBrain } from "./engine/brain-resolver.js";
 import { registerBrowserHandlers } from "./engine/browser-caller.js";
-import { ImageGenerator } from "./engine/image-generator.js";
+import { ImageGenerator, jpegView } from "./engine/image-generator.js";
 import type { Brain } from "./engine/brains.js";
 import { ClaudeCodeBrain } from "./engine/claude-code-brain.js";
 import { runConfig } from "./engine/run/turn.js";
@@ -45,10 +45,11 @@ import { MEMORY_SEARCH_LIMIT, MemoryService, type MemoryTool } from "./memory/se
 import { MemoryStore } from "./memory/store.js";
 import { MemorySync } from "./memory/sync.js";
 import { BOOKMARK_PULL_MINUTES, BOOKMARK_SYNC_ALARM, BookmarkSync, type BookmarksApi } from "./bookmarks/sync.js";
+import { CHAT_PULL_MINUTES, CHAT_SYNC_ALARM, ChatSync } from "./chat-sync.js";
 import { EPISODE_ALARM, EpisodeWriter } from "./memory/episodes.js";
 import { memorySummarizer } from "./memory/summarizers.js";
 import { ChatTitler } from "./engine/chat-titles.js";
-import { testClaude, testJev } from "./engine/settings-tests.js";
+import { testClaude, testJev, testLocalModel } from "./engine/settings-tests.js";
 import { UiHub } from "./engine/ui-hub.js";
 import { UiRouter, type ExtraRequest } from "./engine/ui-router.js";
 import { HELPER_CALL_TIMEOUT_MS, HelperLink } from "./helper-link.js";
@@ -58,13 +59,15 @@ import { noticePlayer } from "./voice/notice-voice.js";
 import { PanelCommands } from "./panel-command.js";
 import { INDICATOR_MESSAGE, isIndicatorMessage, pageIndicators } from "./page-indicator.js";
 import { ALARM_NAME, DUE_ALARM, ensureAlarm, getRunnerId, handleStorageChange, loadSettings, migrateStoredSettings, saveSettingsPatch } from "./settings-store.js";
-import type { UiPush, UiRequest } from "./ui-protocol.js";
+import type { StorageSummary, UiPush, UiRequest } from "./ui-protocol.js";
 import { VOICE_BADGES, VoiceSessions } from "./voice-session.js";
 import { TabBadges, type BadgeLook } from "./tab-badges.js";
 import { TabChats } from "./tab-chats.js";
 import { isChatTabsKey, keptChatTabs, TABS_STATE_KEY } from "./agent-tab.js";
 import { JobDismissals } from "./job-dismissals.js";
 import { Vault } from "./vault.js";
+import { PhoneLink, type LinkState } from "./phone-link/link.js";
+import { IndexedDbKeyVault } from "@noa/shared/phone-link";
 
 // MV3 forbids eval; stop zod from probing for it.
 z.config({ jitless: true });
@@ -112,6 +115,44 @@ const approvals = new ApprovalBroker({
   // How long each approval waited and what ended it (a card, a key, voice, Stop, a message, no answer), in the Raw view.
   trace: (sessionId, trace) => void sessions.append(sessionId, { type: "trace", trace }),
 });
+/** A whole file on this computer, read by the helper a piece at a time (save_file, view_file). */
+async function readWithHelper(path: string): Promise<Blob> {
+  await helper.connect(10_000);
+  const parts: Uint8Array<ArrayBuffer>[] = [];
+  for (let offset = 0; ; ) {
+    const r = await helper.call("files.read", { path, offset, length: FILE_READ_CHUNK_BYTES }, { timeoutMs: HELPER_CALL_TIMEOUT_MS });
+    if (r.size > SAVE_FILE_MAX_BYTES) throw new Error(`The file is ${formatBytes(r.size)}; files up to ${formatBytes(SAVE_FILE_MAX_BYTES)} can be read.`);
+    const bytes = base64ToBytes(r.dataBase64);
+    parts.push(bytes);
+    offset += bytes.length;
+    if (!bytes.length || offset >= r.size) break;
+  }
+  return new Blob(parts);
+}
+/** Keeps a note on a file in the Noa folder (the helper's files.note; the folder is the one NoaFolder finds). */
+async function noteWithHelper(path: string, meta: FileMeta): Promise<void> {
+  await helper.connect(10_000);
+  await helper.call("files.note", { folder: await noaFolder.path(), path, meta }, { timeoutMs: HELPER_CALL_TIMEOUT_MS });
+}
+/** Settings > Storage: the Noa folder, how many files it has (the helper reads it), and the cloud files' usage. */
+async function storageSummary(): Promise<StorageSummary> {
+  const out: StorageSummary = { folder: null, localFiles: null, cloud: null };
+  const [folder, cloud] = await Promise.allSettled([noaFolder.path(), account.cloudFiles()]);
+  if (folder.status === "fulfilled") {
+    out.folder = folder.value;
+    try {
+      await helper.connect(3_000);
+      out.localFiles = (await helper.call("files.list", { folder: folder.value, max: 1 }, { timeoutMs: HELPER_CALL_TIMEOUT_MS })).total;
+    } catch {
+      // No helper: the folder cannot be counted from here.
+    }
+  } else out.folderError = errorMessage(folder.reason);
+  if (cloud.status === "fulfilled") {
+    const c = cloud.value;
+    if (c) out.cloud = { files: c.files.length, usedBytes: c.usedBytes, quotaBytes: c.quotaBytes, locked: c.locked };
+  } else out.cloudError = errorMessage(cloud.reason);
+  return out;
+}
 // The user's Noa folder (Downloads/Noa): the folder button opens it, list_files lists it (read from disk by the helper,
 // connected for it when it is installed) with the account's cloud files; a cloud file the agent uploads is downloaded
 // into the folder first.
@@ -129,36 +170,45 @@ const noaFiles = new NoaFiles({
       const filename = [NOA_FOLDER, ...(file.folder ? [file.folder] : []), cloudFileName(file.name)].join("/");
       return writeDownload(chrome.downloads, { url, filename, headers }, () => {}, 5 * 60_000);
     },
+    search: (query) => account.searchCloudFiles(query),
   },
+  read: readWithHelper,
+  shrink: jpegView,
   log: logger("files"),
 });
-// save_file: kept in the Noa folder and, on a plan with cloud files, in the account's (engine/file-saver.ts).
+/** Where the files Noa saves and the pictures it makes go (Settings > Storage): the cloud by default when it can. */
+async function fileStorage(): Promise<FileStorage> {
+  const [settings] = await Promise.all([loadSettings(), account.load()]);
+  return fileStorageFor(settings.fileStorage, account.cloudFilesAllowed());
+}
+/** A copy in the account's cloud files (null: the plan has none); list_files reads them again next time. */
+async function keepInCloud(blob: Blob, name: string, folder: CloudFolder, meta: FileMeta | undefined): Promise<CloudFile | null> {
+  try {
+    return await account.keepInCloud(blob, name, folder, meta);
+  } finally {
+    noaFiles.cloudChanged();
+  }
+}
+// save_file: kept in the Noa folder, the account's cloud files or both, as Settings > Storage says (engine/file-saver.ts).
 const fileSaver = new FileSaver({
   writeLocal: downloadsWriter(chrome.downloads),
-  cloud: async (blob, name, folder) => {
+  where: fileStorage,
+  cloudPath: (file) => noaFiles.adopt(file),
+  cloud: async (blob, name, folder, meta) => {
+    let file: CloudFile | null;
     try {
-      if (await account.keepInCloud(blob, name, folder)) return { saved: true };
+      file = await keepInCloud(blob, name, folder, meta);
     } catch (err) {
       // An account server from before named folders: the copy goes to the top.
       if (!folder || !(err instanceof ApiRequestError) || err.status !== 400 || !/folder/i.test(err.message)) throw err;
-      await account.keepInCloud(blob, name, "");
-      return { saved: true, folder: "" };
+      file = await keepInCloud(blob, name, "", meta);
+      if (file) return { saved: true, file, folder: "" };
     }
+    if (file) return { saved: true, file };
     return { saved: false, why: account.session() ? "no-plan" : "signed-out" };
   },
-  readLocal: async (path) => {
-    await helper.connect(10_000);
-    const parts: Uint8Array<ArrayBuffer>[] = [];
-    for (let offset = 0; ; ) {
-      const r = await helper.call("files.read", { path, offset, length: FILE_READ_CHUNK_BYTES }, { timeoutMs: HELPER_CALL_TIMEOUT_MS });
-      if (r.size > SAVE_FILE_MAX_BYTES) throw new Error(`The file is ${formatBytes(r.size)}; save_file keeps files up to ${formatBytes(SAVE_FILE_MAX_BYTES)}.`);
-      const bytes = base64ToBytes(r.dataBase64);
-      parts.push(bytes);
-      offset += bytes.length;
-      if (!bytes.length || offset >= r.size) break;
-    }
-    return new Blob(parts);
-  },
+  readLocal: readWithHelper,
+  note: noteWithHelper,
   lastDownload: lastDownloadFinder(chrome.downloads as unknown as SaverDownloadsLike, chrome.runtime.id),
   folder: () => noaFolder.path(),
 });
@@ -187,10 +237,13 @@ const slots: AgentSlots = new AgentSlots(
   new ImageGenerator({
     settings: loadSettings,
     generate: (req, opts) => account.generateImage(req, opts),
-    keepInCloud: (png, name, folder) => account.keepInCloud(png, name, folder),
+    keepInCloud: (png, name, folder, meta) => keepInCloud(png, name, folder, meta),
+    where: fileStorage,
+    cloudPath: (file) => noaFiles.adopt(file),
+    note: noteWithHelper,
     onCloudError: (err) => logger("images")(`cloud copy of a generated image failed: ${errorMessage(err)}`),
   }),
-  { list: (p) => noaFiles.list(p), fetch: (paths) => noaFiles.fetch(paths), save: (p, ctx) => fileSaver.save(p, ctx) },
+  { list: (p) => noaFiles.list(p), fetch: (paths) => noaFiles.fetch(paths), save: (p, ctx) => fileSaver.save(p, ctx), view: (p) => noaFiles.view(p) },
   // Auto tab switching: a tab the agent needs to see for a screenshot comes to the front (off: the user is asked).
   async () => (await loadSettings()).autoTabSwitching,
 );
@@ -249,6 +302,13 @@ const claudeCodeBrain = new ClaudeCodeBrain(helper, {
   cloudJev: () => cloudJevSession(),
 });
 const apiBrain = new ApiBrain({ core, browser, todoTool, memoryTool, onSessionsChanged: () => hub.pushState(), cloudJev: () => cloudJevSession() });
+// The Local model: OpenCode in the helper, on the model of the user's own server.
+const localBrain = new ClaudeCodeBrain(helper, {
+  onSessionsChanged: () => hub.pushState(),
+  onLateTrace: (sessionId, trace) => void sessions.addTrace(sessionId, [trace]),
+  cloudJev: () => cloudJevSession(),
+  local: true,
+});
 /** The account's session while Noa's cloud Jev can be used (no Jev key: Claude Code and the Claude API use it too). */
 function cloudJevSession(): { token: string; apiBase: string } | null {
   return cloudJevUsable(account.brainAccount()) ? account.session() : null;
@@ -282,6 +342,19 @@ if (bookmarkSync) {
   void chrome.alarms.create(BOOKMARK_SYNC_ALARM, { periodInMinutes: BOOKMARK_PULL_MINUTES });
 }
 
+// Signed in, the chat history is kept in the account too, so another computer or a new install has it (chat-sync.ts).
+const chatSync = new ChatSync({
+  sessions,
+  account: async () => {
+    await account.load();
+    return account.session() ? { userId: account.session()!.user.id, api: await account.api() } : null;
+  },
+  running: () => runner.runningSessions.map((s) => s.sessionId),
+  onChanged: () => hub.push({ type: "sessions.changed" }),
+  log: logger("chats"),
+});
+void chrome.alarms.create(CHAT_SYNC_ALARM, { periodInMinutes: CHAT_PULL_MINUTES });
+
 // The Noa account: Google sign-in, the account's TODO list, billing and the hosted AI.
 const account = new AccountService({
   loadSettings,
@@ -298,13 +371,18 @@ const account = new AccountService({
     hub.push({ type: "tasks.changed" });
     // Signed in, out, or a new plan: memory syncs (or stops) accordingly.
     memorySync.schedule();
+    // Signed in or out: the phone link connects or stops (it belongs to the account it was paired under).
+    void phoneLink.start().catch(() => {});
     bookmarkSync?.schedule();
+    // Signed in: this browser's chats go to the account, and the account's come here.
+    chatSync.schedule(0);
   },
   log: logger("account"),
 });
 void account.load().catch(() => {});
 memorySync.schedule();
 bookmarkSync?.schedule();
+chatSync.schedule();
 const hostedBrain = new ApiBrain({
   core,
   browser,
@@ -321,10 +399,12 @@ const hostedBrain = new ApiBrain({
 });
 
 function brainStatus(settings: ExtensionSettings) {
-  return resolveBrain({ settings, helper: helper.info, helperError: helper.lastError, account: account.brainAccount() });
+  const status = resolveBrain({ settings, helper: helper.info, helperError: helper.lastError, account: account.brainAccount() });
+  const detail = helper.lastErrorDetail;
+  return status.helperError && detail ? { ...status, helperErrorDetail: detail } : status;
 }
 
-const brains = { "claude-code": claudeCodeBrain, "claude-api": apiBrain, noa: hostedBrain } as const;
+const brains = { "claude-code": claudeCodeBrain, "claude-api": apiBrain, noa: hostedBrain, local: localBrain } as const;
 
 /** The e2e suite's scripted brain (setBrainOverride); null: the real ones. */
 let brainOverride: ((settings: ExtensionSettings) => Promise<ResolvedBrain>) | null = null;
@@ -521,10 +601,11 @@ const runner = new Runner({
   // A scheduled job starts in its own tab while the user may be anywhere: a notification, said aloud.
   onScheduledStart: (job) => notify(`Started: ${job.title}`, "Working on it in the background. Open the side panel to watch or stop it.", `Noa started working on: ${job.title}`),
   // Its chat's tab is in front, in a window whose side panel is open: the panel shows that tab's job.
-  watching: async (sessionId) => {
+  watching: async (sessionId): Promise<boolean> => {
     const tabId = await tabChats.tabOf(sessionId);
     const tab = tabId === null ? undefined : await chrome.tabs.get(tabId).catch(() => undefined);
-    return !!tab?.active && panelCommands.isOpen(tab.windowId);
+    // Or a paired phone shows it (phone-link/link.ts).
+    return (!!tab?.active && panelCommands.isOpen(tab.windowId)) || phoneLink.isWatching(sessionId);
   },
   keepAlive: () => chrome.runtime.getPlatformInfo(),
   onStateChange: () => {
@@ -567,15 +648,19 @@ const router = new UiRouter({
   memoryBackfill: () => episodes.backfillProgress(),
   titles,
   showAgent: (sessionId) => slots.show(sessionId ?? runner.running?.sessionId),
+  storage: { summary: storageSummary },
   folder: noaFolder,
   localStore,
   sessions,
-  openConversations: () => [...claudeCodeBrain.openSessions(), ...apiBrain.openSessions()],
+  onSessionDeleted: (sessionId) => void chatSync.deleted(sessionId).catch(() => {}),
+  // Both helper brains hear the helper's one list of open sessions.
+  openConversations: () => [...new Set([...claudeCodeBrain.openSessions(), ...localBrain.openSessions()]), ...apiBrain.openSessions()],
   helper,
   brainStatus,
   nextRunAt,
   pauseMigration,
   testClaude: (s) => testClaude(s),
+  testLocalModel: (s) => testLocalModel(s),
   testNotification: () => notify("Started: Post a tip on X", "Working on it in the background.", "Noa started working on: Post a tip on X"),
   testJev: (s, brain) => testJev(s, brain, { core, hosted: account.session() }),
   vault,
@@ -636,8 +721,86 @@ sessions.subscribe({
     // An approval asked or answered: the jobs list moves the conversation in or out of Needs you (UiState.awaitingApproval).
     if (e.type === "approval_request" || e.type === "approval_resolved") hub.pushState();
   },
-  onSession: (s) => hub.session(s),
+  onSession: (s) => {
+    hub.session(s);
+    chatSync.onSession(s);
+  },
 });
+
+// The phone link (docs/MOBILE.md): a paired phone starts jobs here and follows them, end-to-end encrypted.
+const PHONE_LINK_KEY = "phoneLink";
+const PHONE_LINK_ALARM = "phone-link";
+const OS_NAMES: Record<string, string> = { win: "Windows", mac: "Mac", linux: "Linux", cros: "ChromeOS" };
+const phoneLink: PhoneLink = new PhoneLink({
+  session: async () => {
+    await account.load();
+    const s = account.session();
+    return s ? { token: s.token, apiBase: s.apiBase } : null;
+  },
+  loadState: async () => (await chrome.storage.local.get(PHONE_LINK_KEY))[PHONE_LINK_KEY] as LinkState | undefined,
+  saveState: (state) => (state ? chrome.storage.local.set({ [PHONE_LINK_KEY]: state }) : chrome.storage.local.remove(PHONE_LINK_KEY)),
+  vault: new IndexedDbKeyVault(),
+  fetch: (input, init) => fetch(input, init),
+  openSocket: (url, protocols) => new WebSocket(url, protocols),
+  handle: async (msg): Promise<unknown> => {
+    const res = await router.handle(msg as UiRequest);
+    if (!res.ok) throw new Error(res.error);
+    return res.data;
+  },
+  // The phone's side panel: the pushes a side panel gets (not the window's shortcuts: it is in no window here).
+  attachPanel: (port) => {
+    if (hub.attach(port)) port.postMessage({ type: "voice.session", session: voiceSessions.view() } satisfies UiPush);
+    else if (!hub.watch(port)) return;
+    void account.refresh().catch(() => {});
+  },
+  info: async () => ({
+    version: chrome.runtime.getManifest().version,
+    id: chrome.runtime.id,
+    userAgent: navigator.userAgent,
+    bookmarks: !!chrome.bookmarks,
+    helperCode: HELPER_CODE,
+    shortcuts: Object.fromEntries((await chrome.commands.getAll()).map((c) => [c.name ?? "", c.shortcut ?? ""])),
+  }),
+  stored: async (key) => (await chrome.storage.local.get(key))[key],
+  // Its own minimized window: the user's tabs stay as they are, and the job's tab is its window's active tab, which
+  // Chrome keeps painting (screenshots of background tabs are unreliable: driver.ts).
+  openTab: async () => {
+    const win = await chrome.windows.create({ url: "about:blank", focused: false, state: "minimized" });
+    const id = win?.tabs?.[0]?.id;
+    if (id === undefined) throw new Error("Could not open a window for the job");
+    return id;
+  },
+  screen: {
+    // The page's own overlay (the "Noa needs you" pill, page-indicator.ts) is hidden around each picture and each tap
+    // or key, as the drivers do: it is the desktop user's, not part of the page the phone's user works on.
+    send: (tabId, method, params) =>
+      method === "Page.captureScreenshot" || method.startsWith("Input.")
+        ? pageIndicators.hiddenDuring(tabId, method === "Page.captureScreenshot" ? "all" : "pill", () => cdp.sendTo(tabId, method, params))
+        : cdp.sendTo(tabId, method, params),
+    tabOf: async (sessionId) => (await tabChats.tabOf(sessionId)) ?? (await slots.tabsOf(sessionId))[0] ?? null,
+    makePaintable: async (tabId) => {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.active) return;
+      // Out of the user's window into a minimized one of its own, where it is the active tab.
+      await chrome.windows.create({ tabId, focused: false, state: "minimized" });
+    },
+    tabInfo: async (tabId) => {
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      return tab ? { url: tab.url ?? "", title: tab.title ?? "", ...(tab.favIconUrl ? { favIconUrl: tab.favIconUrl } : {}) } : null;
+    },
+  },
+  sessions,
+  running: () => runner.runningSessions.map((s) => s.sessionId),
+  awaiting: () => approvals.waitingSessions(),
+  // "Chrome on Windows", "Noa Browser on Mac": Noa Browser's copy of Noa has chrome.bookmarks (bookmark sync), Chrome's not.
+  desktopName: async () => {
+    const os = OS_NAMES[(await chrome.runtime.getPlatformInfo()).os] ?? "this computer";
+    return `${chrome.bookmarks ? "Noa Browser" : "Chrome"} on ${os}`;
+  },
+  onChange: () => void chrome.runtime.sendMessage({ type: "phone.changed" }).catch(() => {}),
+  log: logger("phone"),
+});
+sessions.subscribe({ onEvent: (e) => phoneLink.onEvent(e), onSession: () => phoneLink.onSession() });
 
 // Which tabs the agent controls shows in its tab group, the toolbar badge and on the page (control-indicator.ts).
 const controlIndicator = new ControlIndicator({
@@ -703,6 +866,9 @@ function onStart(): void {
   void runner.recover().catch(() => {});
   void episodes.resume();
   void scheduleDueAlarm().catch(() => {});
+  // The phone link reconnects; its alarm brings it back after the worker was stopped.
+  void phoneLink.start().catch(() => {});
+  void chrome.alarms.create(PHONE_LINK_ALARM, { periodInMinutes: 1 });
   // The dashboard's sign-in bridge, on the account server's pages (account/dashboard-sign-in.ts).
   void loadSettings().then((s) => syncDashboardBridge(s.accountApiBase)).catch(() => {});
 }
@@ -712,6 +878,8 @@ chrome.runtime.onStartup.addListener(() => onStart());
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (episodes.onAlarm(alarm.name)) return;
   if (bookmarkSync?.onAlarm(alarm.name)) return;
+  if (chatSync.onAlarm(alarm.name)) return;
+  if (alarm.name === PHONE_LINK_ALARM) return void phoneLink.start().catch(() => {});
   if (alarm.name === DUE_ALARM && accountNextDue !== null && accountNextDue <= Date.now()) accountNextDue = null;
   if (alarm.name === ALARM_NAME || alarm.name === DUE_ALARM) void pauseMigrationStarted.then(() => runner.runDue("alarm"));
 });
@@ -791,6 +959,18 @@ chrome.runtime.onMessage.addListener((msg: UiRequest | ExtraRequest, sender, sen
     return false;
   }
   if (!msg || typeof (msg as { type?: unknown }).type !== "string") return false;
+  // Settings > Account > Your phone (options/phone-section.ts).
+  const phoneMsg = msg as unknown as { type: string; id?: unknown };
+  if (phoneMsg.type === "phone.view" || phoneMsg.type === "phone.pair" || phoneMsg.type === "phone.unpair") {
+    const done =
+      phoneMsg.type === "phone.pair"
+        ? phoneLink.pair()
+        : phoneMsg.type === "phone.unpair"
+          ? phoneLink.unpair(String(phoneMsg.id ?? "")).then(() => ({ ok: true }))
+          : phoneLink.view();
+    void done.then(sendResponse, (e: unknown) => sendResponse({ error: errorMessage(e) }));
+    return true;
+  }
   void router.handle(msg).then(sendResponse);
   return true;
 });
@@ -842,6 +1022,7 @@ onStart();
   account,
   router,
   media: mediaFiles,
+  noaFiles,
   vault,
   cdp,
   tabDebugger,
@@ -851,6 +1032,7 @@ onStart();
   memory,
   memorySync,
   bookmarkSync,
+  chatSync,
   episodes,
   titles,
   scheduleDueAlarm,
@@ -859,6 +1041,7 @@ onStart();
   notify,
   controlIndicator,
   pageIndicators,
+  phoneLink,
   /** Runs use this brain instead of the real ones (null: back to the real ones). */
   setBrainOverride: (fn: typeof brainOverride) => void (brainOverride = fn),
   /** Google sign-in uses this client ID and auth flow (a fake Google). */

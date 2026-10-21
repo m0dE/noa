@@ -16,7 +16,7 @@ function deps(reply: { status: number; body: unknown }, extra: Partial<Summarize
     calls,
     helperCalls,
     deps: {
-      settings: async () => ({ anthropicApiKey: "user-key" }),
+      settings: async () => ({ anthropicApiKey: "user-key", localModelUrl: "http://localhost:11434", localModel: "qwen3:8b" }),
       hosted: () => ({ token: "session-token", apiBase: "https://api.example.test/" }),
       helper: {
         get connected() {
@@ -58,8 +58,18 @@ describe("memorySummarizer", () => {
     await memorySummarizer("claude-api", d.deps)!(req);
     expect(d.calls[0]!.url).toBe("https://api.anthropic.com/v1/messages");
     expect(d.calls[0]!.headers["x-api-key"]).toBe("user-key");
-    await expect(memorySummarizer("claude-api", deps(OK, { settings: async () => ({ anthropicApiKey: " " }) }).deps)!(req)).rejects.toThrow(/No Anthropic API key/);
+    await expect(memorySummarizer("claude-api", deps(OK, { settings: async () => ({ anthropicApiKey: " ", localModelUrl: "", localModel: "" }) }).deps)!(req)).rejects.toThrow(/No Anthropic API key/);
     await expect(memorySummarizer("claude-api", deps({ status: 529, body: {} }).deps)!(req)).rejects.toThrow(/overloaded/);
+  });
+
+  it("Local model: the helper asks the user's own server, with the conversation's model (Ollama turns away an extension's posts)", async () => {
+    const d = deps(OK);
+    expect(await memorySummarizer("local", d.deps)!(req)).toEqual({ text: "{}", costUsd: 0.002 });
+    expect(d.calls).toEqual([]);
+    expect(d.helperCalls).toEqual([
+      { method: "memory.summarize", params: { system: "SYS", prompt: "PROMPT", local: { serverUrl: "http://localhost:11434", model: "qwen3:8b" } }, opts: { timeoutMs: expect.any(Number) }, connected: true },
+    ]);
+    await expect(memorySummarizer("local", deps(OK, { settings: async () => ({ anthropicApiKey: "", localModelUrl: "http://localhost:11434", localModel: "" }) }).deps)!(req)).rejects.toThrow(/No local model/);
   });
 
   it("Claude Code: the helper's memory.summarize, connecting it first", async () => {

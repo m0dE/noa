@@ -129,6 +129,8 @@ export interface Harness {
   settings: ExtensionSettings;
   notifications: { title: string; message: string }[];
   sleeps: number[];
+  /** Each time a turn's end asked the slot to bring its tab forward for the user (AgentSlot.showForUser). */
+  shown: { chat: boolean }[];
   materialized: { sessionId: string; sources: MediaSource[] }[];
   cleanups: number;
   results: { taskId: string; body: ResultInput }[];
@@ -174,6 +176,10 @@ function oneSlot(h: Harness): SlotPool {
       waits.add(start);
       return () => void waits.delete(start);
     },
+    showForUser: async (opts) => {
+      h.shown.push(opts);
+      return true;
+    },
   };
   const waits = new Set<() => () => void>();
   h.slotWait = () => {
@@ -202,6 +208,7 @@ export function harness(overrides: Partial<ExtensionSettings> = {}, opts: { sign
     settings: { ...DEFAULT_SETTINGS, delayMinSec: 1, delayMaxSec: 2, automationLevel: "full", ...overrides },
     notifications: [],
     sleeps: [],
+    shown: [],
     materialized: [],
     cleanups: 0,
     results: [],

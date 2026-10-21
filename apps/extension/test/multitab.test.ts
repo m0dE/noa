@@ -9,6 +9,7 @@ import { BACKGROUND_SHOT_SKIPPED } from "../src/driver-common.js";
 import { FALLBACK_NOTE } from "../src/fallback-driver.js";
 import { snapshotPage } from "../src/page-snapshot.js";
 import { coverInPage } from "../src/page-cover.js";
+import { enteredFieldsInPage } from "../src/page-entered.js";
 
 let chrome: ChromeFake;
 let cdp: Cdp;
@@ -161,6 +162,53 @@ describe("Driver with several tabs", () => {
     expect(driver.inFallback).toBe(true);
     await driver.click({ index: 2 });
     expect(chrome.scripting.calls.at(-1)!.tabId).toBe(blocked);
+  });
+
+  describe("navigate from a page whose form holds entries", () => {
+    /** The current page's form holds `n` entries (enteredFieldsInPage), through the debugger and chrome.scripting. */
+    const entries = (n: number) => {
+      const respond = chrome.debugger.respond!;
+      chrome.debugger.respond = (method, params) =>
+        method === "Runtime.evaluate" && String((params as { expression: string }).expression).includes("enteredFieldsInPage") ? { result: { value: n } } : respond(method, params);
+      const scripted = chrome.scripting.respond!;
+      chrome.scripting.respond = (func, args) => (func === enteredFieldsInPage ? n : scripted(func, args));
+    };
+    const navigations = () => chrome.debugger.commands.filter((c) => c.method === "Page.navigate");
+
+    it("to another site leaves the page as it is and opens the address in a new tab, the current one from then on", async () => {
+      entries(2);
+      const r = await driver.navigate({ url: "https://shop.test/cart" });
+      expect(r).toMatchObject({ url: "https://shop.test/cart", kept: "t1", tab: "t2" });
+      expect(navigations()).toEqual([]);
+      expect(chrome.tabs.byId.get(mainTab)!.url).toBe("https://mail.test/");
+      const opened = await agent.resolve("t2");
+      expect(chrome.tabs.byId.get(opened)!.url).toBe("https://shop.test/cart");
+      expect(await agent.tabId()).toBe(opened);
+      expect(activations()).toEqual([]);
+      expect((await driver.readPage()).url).toBe("https://shop.test/cart");
+    });
+
+    it("in a tab that refuses the debugger too", async () => {
+      chrome.debugger.blocked.add(mainTab);
+      entries(1);
+      const r = await driver.navigate({ url: "https://shop.test/cart" });
+      expect(r).toMatchObject({ kept: "t1", tab: "t2" });
+      expect(chrome.tabs.updateCalls.filter((c) => c.props.url)).toEqual([]);
+      expect(chrome.tabs.byId.get(mainTab)!.url).toBe("https://mail.test/");
+    });
+
+    it("on the same site, or from a page without entries, navigates the tab itself", async () => {
+      // The fake page never loads: a navigation that went through to Chrome ends in its error.
+      const respond = chrome.debugger.respond!;
+      chrome.debugger.respond = (method, params) => (method === "Page.navigate" ? { errorText: "net::ERR_FAKE" } : respond(method, params));
+      entries(2);
+      await expect(driver.navigate({ url: "https://www.mail.test/inbox" })).rejects.toThrow("net::ERR_FAKE");
+      entries(0);
+      await expect(driver.navigate({ url: "https://shop.test/cart" })).rejects.toThrow("net::ERR_FAKE");
+      expect(navigations().map((c) => c.tabId)).toEqual([mainTab, mainTab]);
+      expect(await agent.tabId()).toBe(mainTab);
+      expect(chrome.tabs.createCalls).toEqual([]);
+    });
   });
 
   it("switch_tab makes later calls act on that tab without activating it", async () => {

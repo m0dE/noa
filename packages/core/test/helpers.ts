@@ -86,13 +86,17 @@ export function fakeMessagesServer(replies: FakeReplySource[]) {
 
 type MessageShape = { id: string; content: Block[]; stop_reason: string | null };
 
-/** A message as the Messages API streams it: text in small deltas, tool input in input_json_delta parts. */
+/** A message as the Messages API streams it: text and thinking in small deltas, tool input in input_json_delta parts. */
 export function messageSseEvents(m: MessageShape): [string, unknown][] {
   const out: [string, unknown][] = [["message_start", { type: "message_start", message: { ...m, content: [], stop_reason: null } }], ["ping", { type: "ping" }]];
   m.content.forEach((b, index) => {
     if (b.type === "text") {
       out.push(["content_block_start", { type: "content_block_start", index, content_block: { type: "text", text: "" } }]);
       for (const part of (b.text as string).match(/.{1,5}/gs) ?? []) out.push(["content_block_delta", { type: "content_block_delta", index, delta: { type: "text_delta", text: part } }]);
+    } else if (b.type === "thinking") {
+      out.push(["content_block_start", { type: "content_block_start", index, content_block: { type: "thinking", thinking: "", signature: "" } }]);
+      for (const part of (b.thinking as string).match(/.{1,7}/gs) ?? []) out.push(["content_block_delta", { type: "content_block_delta", index, delta: { type: "thinking_delta", thinking: part } }]);
+      out.push(["content_block_delta", { type: "content_block_delta", index, delta: { type: "signature_delta", signature: b.signature } }]);
     } else if (b.type === "tool_use") {
       out.push(["content_block_start", { type: "content_block_start", index, content_block: { ...b, input: {} } }]);
       const json = JSON.stringify(b.input ?? {});

@@ -21,7 +21,7 @@ import type {
   TraceEvent,
 } from "@noa/shared";
 import type { TraceBook } from "./trace/trace-book.js";
-import type { MemorySyncStatus } from "./memory/sync.js";
+import type { MemorySyncStatus, MemoryWhere } from "./memory/sync.js";
 import type { RealtimeTicketResult, VoiceEnginesResult } from "./voice/realtime-access.js";
 import type { VoiceSpeakResult } from "./voice/deepgram-speaker.js";
 import type { VoiceClipRequest, VoiceTranscribeResult } from "./voice/transcribe.js";
@@ -89,6 +89,8 @@ export interface BrainStatus {
   note?: string;
   helper: HelperInfo | null;
   helperError?: string;
+  /** Chrome's own message behind helperError (HelperLink.lastErrorDetail). */
+  helperErrorDetail?: string;
   hasApiKey: boolean;
   /** Jev is on and the effective brain has a Jev (jevSource). */
   jevActive: boolean;
@@ -100,6 +102,18 @@ export interface BrainStatus {
 
 /** A Jev key in Settings, the helper's own key, or Noa's cloud Jev (billed to usage credit). */
 export type JevSource = "key" | "helper" | "cloud";
+
+/** Settings > Storage (storage.summary). */
+export interface StorageSummary {
+  /** The Noa folder, absolute; null when it could not be found (folderError says why). */
+  folder: string | null;
+  folderError?: string;
+  /** Files in it, read by the helper; null without the helper. */
+  localFiles: number | null;
+  /** The account's cloud files; null signed out (or cloudError: they could not be loaded). */
+  cloud: { files: number; usedBytes: number; quotaBytes: number; locked: boolean } | null;
+  cloudError?: string;
+}
 
 /** The Noa account (Google sign-in) as the UI shows it. */
 export interface AccountView {
@@ -198,6 +212,8 @@ export type UiRequest =
   /** Partial update. Secret fields: omit to keep, "" to clear, a value to set. */
   | { type: "settings.save"; settings: Partial<ExtensionSettings> }
   | { type: "settings.testClaude" }
+  /** Asks the local model's server for its models (GET /v1/models): reachable, Noa let in, the picked model there. */
+  | { type: "settings.testLocalModel" }
   | { type: "settings.testJev" }
   | { type: "helper.connect" }
   /** Start a one-off task now ("Do this now"). tabId: the browser tab it is started from (it acts there, the chat belongs to it). */
@@ -259,6 +275,11 @@ export type UiRequest =
   | { type: "run.newChat"; sessionId?: string; tabId?: number }
   /** A job opened in the side panel: its conversation now belongs to this browser tab (it leaves any other tab). */
   | { type: "chat.bind"; sessionId: string; tabId: number }
+  /**
+   * Hands-free voice starts where there is no chat: a new, empty one for the tab (SessionInfo.empty), so what is said
+   * shows in it from the first word; its first message starts its first turn there.
+   */
+  | { type: "chat.open"; tabId?: number; memoryOff?: boolean }
   /** Dismissals of jobs, by job key (added to those kept). */
   | { type: "jobs.dismiss"; dismissals: Record<string, JobDismissal> }
   /** Undo on a scheduled card: the task the agent put in the TODO list (schedule_task) is deleted, and the card says so. */
@@ -286,6 +307,8 @@ export type UiRequest =
   | { type: "memory.clear" }
   /** The answer to "Add this computer's memory to <account>?" (UiState.memoryQuestion): add it, or keep it separate. */
   | { type: "memory.syncChoice"; add: boolean }
+  /** Settings > Memory: keep memory on this computer only, or in the account too (a paid plan). */
+  | { type: "memory.where"; where: MemoryWhere }
   /**
    * The user's answer on an approval card (or by voice): the waiting action runs or is refused. On a card its run
    * paused for: allow goes on with that action allowed once, deny ends the run as not done (paused-decision.ts).
@@ -297,6 +320,8 @@ export type UiRequest =
   | { type: "agent.show"; sessionId?: string }
   /** Open the user's Noa folder (Downloads/Noa) in the system's file manager, creating it first. */
   | { type: "folder.open" }
+  /** Settings > Storage: where the Noa folder is and how many files it has, and the account's cloud files' usage. */
+  | { type: "storage.summary" }
   /** Type into a running agent session (default: the one started last). */
   | { type: "run.say"; text: string; sessionId?: string }
   /** Try again to pause the account's jobs for the old pause of every scheduled run (UiState.pauseMigration). */
@@ -360,7 +385,7 @@ export type UiRequest =
   | { type: "voice.speak"; text: string; voice: string; sessionId?: string }
   /** Hands-free voice said a line in this conversation: kept in its thread (a "spoken" event). */
   | { type: "voice.spoken"; sessionId: string; text: string }
-  /** What the user said in Realtime hands-free voice that led to no request, word for word: kept for the record (a "heard" event). */
+  /** What the user said in Realtime hands-free voice that led to no request, word for word: shown in the chat as the user's message (a "heard" event). */
   | { type: "voice.heard"; sessionId: string; text: string }
   /** The side panel's timings of a conversation (voice, sending), for its trace. */
   | { type: "trace.add"; sessionId: string; events: TraceEvent[] }
@@ -383,6 +408,8 @@ export interface UiResults {
   "state.get": UiState;
   "settings.save": UiState;
   "settings.testClaude": { ok: boolean; detail: string };
+  /** models: what the server offers (empty when it could not be asked). */
+  "settings.testLocalModel": { ok: boolean; detail: string; models: string[] };
   "settings.testJev": { ok: boolean; detail: string };
   "helper.connect": UiState;
   "run.adhoc": { sessionId: string };
@@ -393,6 +420,7 @@ export interface UiResults {
   "run.message": { sessionId: string; mode: MessageMode };
   "run.newChat": { ok: boolean };
   "chat.bind": UiState;
+  "chat.open": { session: SessionInfo };
   "jobs.dismiss": UiState;
   "chat.undoScheduled": { ok: boolean };
   "chat.undoTaskChange": { ok: boolean };
@@ -412,12 +440,14 @@ export interface UiResults {
   "memory.clear": { removed: number };
   /** Whether memory syncs now. */
   "memory.syncChoice": { sync: MemorySyncStatus };
+  "memory.where": { sync: MemorySyncStatus };
   /** ok false: the request no longer waits (answered, timed out, its turn ended, or its paused run was decided or went on). */
   "approval.answer": { ok: boolean };
   "tab.focus": { ok: boolean };
   "agent.show": { ok: boolean };
   /** path: the folder's absolute path. */
   "folder.open": { path: string };
+  "storage.summary": StorageSummary;
   "run.say": { ok: boolean };
   "pause.migrate": UiState;
   /** source: the signed-in account's tasks, or this browser's (signed out). */
@@ -488,6 +518,8 @@ export type UiPush =
   | { type: "event"; event: StampedAgentEvent }
   | { type: "session"; session: SessionInfo }
   | { type: "tasks.changed" }
+  /** Conversations came or went other than by a turn (the account's chat history, chat-sync.ts): the list is read again. */
+  | { type: "sessions.changed" }
   /**
    * A keyboard shortcut: put the cursor in the input (see panel-command.ts); `draft` and `job`: the text the box had
    * and the job the page showed before the shortcut recreated the panel.

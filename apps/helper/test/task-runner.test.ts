@@ -468,9 +468,23 @@ describe("TaskRunner with ScriptedBrain", () => {
     });
     const r = await runner.run(params({}, { config: { ...CONFIG, maxToolCalls: 3 } }));
     expect(texts.slice(0, 3).every((t) => t?.startsWith("URL:"))).toBe(true);
-    expect(texts[3]).toBe("Tool call limit of 3 reached. Call task_fail now with a short reason.");
+    expect(texts[3]).toBe("Tool call limit reached: the last 3 tool calls got almost nowhere new. Call task_fail now with a short reason: what was done and what is left.");
     expect(texts).toHaveLength(8);
-    expect(r).toMatchObject({ outcome: "failed", reason: "Tool call limit exceeded (3 calls)" });
+    expect(r).toMatchObject({ outcome: "failed", reason: "Tool call limit: the last 3 tool calls got almost nowhere new" });
+  });
+
+  it("runs past the tool call limit while each round gets somewhere new", async () => {
+    const texts: (string | undefined)[] = [];
+    const { runner } = setup(new FakeX(), {
+      brain: (router) =>
+        customBrain(async (ctx) => {
+          for (let i = 1; i <= 10; i++) texts.push((await router.call(ctx.taskId, "navigate", { url: `https://x.com/statements/${i}` })).text);
+          await router.call(ctx.taskId, "task_complete", { summary: "all 10" });
+        }),
+    });
+    const r = await runner.run(params({}, { config: { ...CONFIG, maxToolCalls: 3 } }));
+    expect(texts.filter((t) => t?.startsWith("Tool call limit"))).toEqual([]);
+    expect(r).toMatchObject({ outcome: "done", summary: "all 10" });
   });
 
   it("still accepts task_fail past the tool call limit", async () => {

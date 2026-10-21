@@ -47,7 +47,8 @@ export interface ChatTitlerDeps {
  * instructions and series (see above). Never a title the user gave.
  */
 export function titleDue(s: SessionInfo): boolean {
-  if (!s.endedAt || s.titleBy === "user") return false;
+  // A chat voice opened before anything was asked: nothing to name yet.
+  if (!s.endedAt || s.titleBy === "user" || s.empty) return false;
   if (s.source !== "adhoc") return !s.titleBy && !!s.instructions && !!s.seriesId;
   if (s.titleBy !== "model") return true;
   return (s.turns ?? 1) >= RETITLE_AT_TURN && (s.titledTurn ?? 1) < RETITLE_AT_TURN;

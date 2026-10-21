@@ -346,13 +346,22 @@ describe("the click's input check, armed with the cover check (debugger)", () =>
     return { session, evaluates, driver: new CdpActions(cdp, async () => {}) };
   }
 
-  it("a click the page gets: two scripts (the cover check, which arms the input check, and its read), and it lands", async () => {
-    await load(TOAST);
+  it("a click the page gets, on a button in view: two scripts (the cover check, which arms the input check, and its read), and it lands", async () => {
+    await load(`<button id="save">Save changes</button>`);
     const snap = await snapshot();
     const { evaluates, driver } = await counted();
     await driver.click(1, { index: indexOf(snap, "Save changes") });
     expect(await clicks()).toEqual(["save"]);
     expect(evaluates.map((e) => /^\(function (\w+)/.exec(e)?.[1] ?? "read")).toEqual(["coverInPage", "read"]);
+  });
+
+  it("a button scrolled into view is aimed at again, once the page had its moment to answer the scroll, and the click lands", async () => {
+    await load(TOAST);
+    const snap = await snapshot();
+    const { evaluates, driver } = await counted();
+    await driver.click(1, { index: indexOf(snap, "Save changes") });
+    expect(await clicks()).toEqual(["save"]);
+    expect(evaluates.map((e) => /^\(function (\w+)/.exec(e)?.[1] ?? "read")).toEqual(["coverInPage", "coverInPage", "read"]);
   });
 
   it("input held outside the page (Chrome ignores the tab's input): the click fails with the input-blocked error", async () => {
@@ -370,3 +379,70 @@ describe("the click's input check, armed with the cover check (debugger)", () =>
     expect(await clicks()).toEqual(["save"]);
   });
 });
+
+/**
+ * A dropdown whose options the page moves in answer to the scroll that brought one into view. The click was measured
+ * in the same moment as that scroll, before the page moved it, and landed on another option (live on Cloudflare's
+ * dashboard, 2026-10-19: TXT chose TLSA, MX chose DNSKEY, five tries on one record type; there the page behind the
+ * dialog scrolled too, and the list, placed against it, was put back a frame later). Here a scroll arrow (as Base UI's
+ * Select can show) pushes the options a row lower once the list is scrolled down.
+ */
+const TYPES = ["A", "AAAA", "CAA", "CERT", "CNAME", "DNSKEY", "DS", "HTTPS", "LOC", "MX", "NAPTR", "NS", "OPENPGPKEY", "PTR", "SMIMEA", "SRV", "SSHFP", "SVCB", "TLSA", "TXT", "URI"];
+const SHIFTING_LIST = `<style>body{margin:0;font-family:sans-serif}#pop{position:fixed;top:60px;left:20px;width:200px;height:240px;display:flex;flex-direction:column;background:#fff;border:1px solid #888}
+#up{height:32px;flex:none}#types{flex:1;overflow-y:auto;margin:0;padding:0;list-style:none}[role=option]{height:32px;line-height:32px}</style>
+<span id="type-label">Type</span>
+<button id="type" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="types" aria-labelledby="type-label type">A</button>
+<div id="pop" hidden><div id="up" hidden>▲</div><ul id="types" role="listbox" aria-labelledby="type-label">${TYPES.map((t) => `<li role="option" aria-selected="${t === "A"}">${t}</li>`).join("")}</ul></div>
+<script>
+{
+const trigger = document.getElementById("type"), pop = document.getElementById("pop"), list = document.getElementById("types"), up = document.getElementById("up");
+trigger.addEventListener("click", () => { pop.hidden = false; trigger.setAttribute("aria-expanded", "true"); });
+// The page's answer to a scroll: the arrow shows while the list is scrolled down, over the options' first row.
+list.addEventListener("scroll", () => { up.hidden = list.scrollTop === 0; });
+list.addEventListener("click", (e) => {
+  const o = e.target.closest("[role=option]");
+  if (!o) return;
+  for (const x of list.children) x.setAttribute("aria-selected", String(x === o));
+  trigger.textContent = o.textContent;
+  pop.hidden = true;
+  trigger.setAttribute("aria-expanded", "false");
+});
+}
+</script>`;
+
+for (const [name, make] of Object.entries({
+  cdp: async () => {
+    const session = await tab.context().newCDPSession(tab);
+    const cdp = { sendTo: (_tabId: number, method: string, params: Record<string, unknown> = {}) => session.send(method as never, params as never) } as unknown as Cdp;
+    return new CdpActions(cdp, (ms) => new Promise((r) => setTimeout(r, ms)));
+  },
+  fallback: async () => {
+    await drivers.fallback();
+    return new FallbackDriver({ sleep: (ms) => new Promise((r) => setTimeout(r, ms)) });
+  },
+})) {
+  describe(`an option the list moves when it is scrolled into view (${name})`, () => {
+    const chosen = () => tab.evaluate(() => document.getElementById("type")!.textContent);
+
+    it("clicked by number: the option clicked is chosen, not its neighbour", async () => {
+      for (const want of ["TXT", "NS", "MX", "URI"]) {
+        await load(SHIFTING_LIST);
+        await tab.click("#type");
+        const snap = await snapshot();
+        const driver = await make();
+        await driver.click(1, { index: indexOf(snap, want) });
+        expect(await chosen()).toBe(want);
+      }
+    });
+
+    it("typed into the dropdown: the option named is chosen", async () => {
+      for (const want of ["TXT", "NS", "MX"]) {
+        await load(SHIFTING_LIST);
+        const snap = await snapshot();
+        const driver = await make();
+        await expect(driver.type(1, { index: indexOf(snap, "Type A"), text: want })).resolves.toMatchObject({ selected: want });
+        expect(await chosen()).toBe(want);
+      }
+    });
+  });
+}

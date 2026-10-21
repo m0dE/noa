@@ -164,6 +164,8 @@ export interface Aim {
   target?: TypeTarget;
   /** With an InputProbe: whether the click's input check was armed at the free point (armInputProbe). */
   armed?: boolean;
+  /** Scrolling it into view moved it (coverInPage). */
+  moved?: boolean;
 }
 
 /** Whether a page's answer is a Cover. */
@@ -219,11 +221,37 @@ async function inPage<T>(page: PageDriver, fn: PageFunction<T>, args: unknown[])
  * that follows finds out what is there.
  */
 async function aimAt(page: PageDriver, index: number, act: AimFor): Promise<{ aim: Aim; armed?: { probe: InputProbe; armed: boolean } }> {
-  const probe = page.inputProbe?.();
-  const out = await page.run<Aim>(coverInPage, probe ? [index, act, probe] : [index, act]);
-  if (out?.ok === false) throw new Error(out.error);
-  const aim = out?.ok === true && isAim(out.value) ? out.value : {};
-  return probe && typeof aim.armed === "boolean" ? { aim, armed: { probe, armed: aim.armed } } : { aim };
+  for (let aims = 1; ; aims++) {
+    const probe = page.inputProbe?.();
+    const out = await page.run<Aim>(coverInPage, probe ? [index, act, probe] : [index, act]);
+    if (out?.ok === false) throw new Error(out.error);
+    const aim = out?.ok === true && isAim(out.value) ? out.value : {};
+    // Scrolled into view: the page may move it in answer to the scroll (a dropdown's list, placed against the page that
+    // scrolled with it, is put back a frame later), and a click at the point measured would land on a neighbouring
+    // option. Aimed again after that moment, until it holds still.
+    if (aim.moved && aims < MAX_AIMS) {
+      await page.sleep(SCROLL_REFLOW_MS);
+      continue;
+    }
+    return probe && typeof aim.armed === "boolean" ? { aim, armed: { probe, armed: aim.armed } } : { aim };
+  }
+}
+
+/** How long a page may take to move an element in answer to the scroll that brought it into view (its scroll events). */
+const SCROLL_REFLOW_MS = 50;
+/** Most times an element is aimed at while scrolling it into view keeps moving it. */
+const MAX_AIMS = 3;
+
+/**
+ * A plain click on element `index` (an option of a list, a suggestion), at a point of it aimed at like any click
+ * (aimAt): never measured in the same moment as the scroll that brought it into view. Something over it, or no
+ * verdict: its center.
+ */
+async function clickSteady(page: PageDriver, index: number): Promise<void> {
+  const { aim, armed } = await aimAt(page, index, "click");
+  const cover = aim.cover ?? null;
+  const at = cover !== null && typeof cover === "object" && "x" in cover ? cover : undefined;
+  await page.clickAt(index, at, at ? armed : undefined);
 }
 
 /** The check state of element `index` (after a click); null when the page gave no answer. */
@@ -355,7 +383,7 @@ export async function typeIntoElement(p: Params<"browser.type">, page: PageDrive
     }
     // Clicking a selected option unselects it in a multi-select.
     if (option.selected) return { ok: true, selected: option.label };
-    await page.clickAt(option.index);
+    await clickSteady(page, option.index);
     const chosen = option;
     const shown = await waitFor(() => inPage<{ chosen: boolean; shows: string }>(page, optionChosenInPage, [index, chosen.index, chosen.label]), (s) => s.chosen, page.sleep);
     if (!shown.chosen) {
@@ -409,7 +437,7 @@ async function suggestionAfterTyping(page: PageDriver, index: number, text: stri
     const s = out?.ok === true ? out.value : null;
     if (s?.kind !== "waiting" && s?.kind !== "pick" && s?.kind !== "shown") return { ok: true };
     if (s.kind === "pick") {
-      await page.clickAt(s.index);
+      await clickSteady(page, s.index);
       return { ok: true, selected: s.label };
     }
     if (s.kind === "shown") {

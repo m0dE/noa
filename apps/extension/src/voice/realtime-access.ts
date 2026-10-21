@@ -1,8 +1,8 @@
 /**
  * What the side panel asks the background for hands-free voice: the voice
  * engines with their prices (GET VOICE_ENGINES_PATH, public), and the relay
- * address with the session token to open Realtime voice (the background
- * holds the session). Failures travel as data, like voice.transcribe.
+ * address with a single-use ticket to open Realtime voice (the background
+ * holds the session token and gets a ticket for each connection). Failures travel as data, like voice.transcribe.
  */
 import type { SpeakRequest, VoiceEnginesResponse } from "@noa/shared";
 import { bytesToBase64 } from "../base64.js";

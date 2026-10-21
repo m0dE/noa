@@ -23,7 +23,7 @@ export { formatSnapshot, parseSnapshotText, type ParsedPage } from "./page-forma
 /** Failure reasons the agents report, and their sorting into temporary (retry later) or permanent. */
 export { agentError, classifyFailure, ENDED_WITHOUT_RESULT, EXITED_WITHOUT_RESULT } from "./failures.js";
 /** A turn's tool call budget, time limit and closing events, the same for both brains. */
-export { isTaskEndTool, timeLimitReached, toolBudget, toolCallLimitExceeded, toolCallLimitReached, turnEndEvents, type ToolBudget } from "./turn-rules.js";
+export { isTaskEndTool, madeProgress, PROGRESS_SHARE, timeLimitReached, ToolProgress, toolBudget, toolCallLimitExceeded, toolCallLimitReached, TurnBudget, turnEndEvents, type ToolBudget } from "./turn-rules.js";
 /** Marker in act results when Jev was not sure about a step (the result then lists candidates for it). */
 export { NOT_CONFIDENT } from "./act.js";
 /** Checks independently that an X post exists and shows the expected text. */

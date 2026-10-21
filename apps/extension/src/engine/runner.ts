@@ -21,7 +21,7 @@ import type { SlotPool } from "../agent-slots.js";
 import { callSafely } from "../listeners.js";
 import type { TabChatsLike } from "../tab-chats.js";
 import type { BrainStatus, MessageMode } from "../ui-protocol.js";
-import { autoSwitchRefusal, NO_AI } from "./brain-resolver.js";
+import { NO_AI } from "./brain-resolver.js";
 import type { Brain, CoreApi } from "./brains.js";
 import type { StorageLike } from "./kv.js";
 import type { LocalStore } from "./local-store.js";
@@ -106,6 +106,9 @@ export interface RunnerDeps {
   newId?(): string;
   log?(message: string): void;
 }
+
+/** The title of a chat hands-free voice opened before anything was asked (its first message names it). */
+export const OPENED_CHAT_TITLE = "Voice chat";
 
 export class Runner {
   /** Sessions running right now, and the slots, X turn and local tasks they hold. */
@@ -348,15 +351,18 @@ export class Runner {
     const heard = voice && opts.heard?.length ? { heard: opts.heard } : {};
     const context = screen ? undefined : opts.context?.trim() || undefined;
     const attachments = !screen && opts.attachments?.length ? { attachments: opts.attachments } : {};
-    if (!sessionId) {
+    // A chat voice opened empty: this message is its first, and starts its first turn there.
+    const opened = sessionId && !this.live.has(sessionId) && !this.startingTurns.has(sessionId) ? await this.deps.sessions.get(sessionId) : null;
+    if (!sessionId || opened?.empty) {
       const input: AdhocInput = {
+        ...(opened?.empty ? { sessionId: opened.sessionId } : {}),
         instructions: t,
         ...tab,
         ...(screen ? { screen } : {}),
         ...(voice ? { voice } : {}),
         ...heard,
         ...(context ? { context } : {}),
-        ...(opts.memoryOff ? { memoryOff: true } : {}),
+        ...(opts.memoryOff || opened?.memoryOff ? { memoryOff: true } : {}),
         ...attachments,
       };
       return { ...(await this.runAdhoc(input, opts.cid)), mode: "new" };
@@ -405,6 +411,32 @@ export class Runner {
    * tabs its agent opened are closed (a running turn is left alone; the UI
    * just stops targeting it).
    */
+  /**
+   * A new, empty chat (hands-free voice, where the tab has none): stored and bound to `tabId` at once, so what is said
+   * shows in it; its first message starts its first turn in it (message()).
+   */
+  async openChat(opts: { tabId?: number; memoryOff?: boolean } = {}): Promise<SessionInfo> {
+    const settings = await this.deps.loadSettings();
+    const { brain, status } = await this.deps.resolveBrain(settings).catch(() => ({ brain: null, status: { jevActive: false } }));
+    const at = new Date().toISOString();
+    const info: SessionInfo = {
+      sessionId: this.newId(),
+      source: "adhoc",
+      title: OPENED_CHAT_TITLE,
+      // The brain its first turn will use, as far as known now (that turn records the one it ran on).
+      brain: brain?.kind ?? "noa",
+      jev: !!status.jevActive,
+      startedAt: at,
+      endedAt: at,
+      empty: true,
+      voice: true,
+      ...(opts.memoryOff ? { memoryOff: true } : {}),
+    };
+    await this.deps.sessions.create(info);
+    if (opts.tabId !== undefined) await this.turns.bindChat(opts.tabId, info.sessionId);
+    return info;
+  }
+
   async newChat(sessionId?: string | null): Promise<{ ok: boolean }> {
     if (!sessionId || this.live.has(sessionId)) return { ok: true };
     const session = await this.deps.sessions.get(sessionId);
@@ -496,7 +528,7 @@ export class Runner {
       // It may have ended or been stopped while the tab was checked.
       if (a.forced || this.live.get(a.session.sessionId) !== a) continue;
       this.turns.emit(a, { type: "status", text: `Pausing: ${reason}` });
-      this.live.force(a, pauseUrlStop(reason));
+      this.live.force(a, pauseUrlStop(reason, tabId));
     }
   }
 
@@ -540,17 +572,15 @@ export class Runner {
       settings = await this.deps.loadSettings();
       const { brain, status } = await this.deps.resolveBrain(settings);
       resolveMs = resolving.elapsed();
-      resolved = { brain: brain?.kind ?? null, mode: settings.brain, model: settings.anthropicModel, jev: status.jevActive };
+      resolved = { brain: brain?.kind ?? null, mode: settings.brain, model: brain?.kind === "local" ? settings.localModel : settings.anthropicModel, jev: status.jevActive };
       if (!brain) throw new Error(status.note ?? NO_AI);
-      const refusal = job.source === "turn" ? autoSwitchRefusal(settings.brain, job.from.brain, brain.kind) : null;
-      if (refusal) throw new Error(refusal);
       run = { brain, status };
     } catch (err) {
       slots.unassign(slotIndex);
       this.drop();
       throw err;
     }
-    const sessionId = job.source === "turn" ? job.from.sessionId : this.newId();
+    const sessionId = job.source === "turn" ? job.from.sessionId : (job.source === "adhoc" && job.input.sessionId) || this.newId();
     slots.assign(slotIndex, sessionId);
     let created!: () => void;
     const sessionReady = new Promise<void>((r) => (created = r));

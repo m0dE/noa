@@ -134,21 +134,42 @@ function daysPhrase(l: CronLine, interval: RepeatInterval | undefined): string {
 
 const dayKey = (l: CronLine) => l.source.split(" ").slice(2).join(" ");
 
-/** A cron text with an optional interval in words, e.g. "Every weekday at 9:00 AM". Invalid cron: "Custom schedule". */
-export function describeCron(cron: string, interval?: RepeatInterval, opts: TextOptions = {}): string {
+/** A cron's lines grouped by their days, each as its days and its times ("Every weekday", "at 9:00 AM"); null: invalid cron. */
+function cronPhrases(cron: string, interval: RepeatInterval | undefined, hour12: boolean): { days: string; times: string }[] | null {
   const parsed = parseCron(cron);
-  if (!parsed.ok) return "Custom schedule";
-  const hour12 = opts.hour12 ?? prefersHour12();
+  if (!parsed.ok) return null;
   // Lines on the same days read as one phrase with all their times.
   const groups = new Map<string, CronLine[]>();
   for (const l of parsed.lines) groups.set(dayKey(l), [...(groups.get(dayKey(l)) ?? []), l]);
-  const parts = [...groups.values()].map((lines) => {
-    const days = daysPhrase(lines[0]!, interval);
-    const times = timesPhrase(lines, hour12);
-    if (times.startsWith("at ")) return `${days} ${times}`;
-    return days === "Daily" ? times[0]!.toUpperCase() + times.slice(1) : `${days}, ${times}`;
-  });
-  return parts.map((p, i) => (i === 0 ? p : p[0]!.toLowerCase() + p.slice(1))).join("; ");
+  return [...groups.values()].map((lines) => ({ days: daysPhrase(lines[0]!, interval), times: timesPhrase(lines, hour12) }));
+}
+
+/** Phrases as one text: the first keeps its capital, the rest follow after "; ". */
+const joinPhrases = (parts: readonly string[]): string => parts.map((p, i) => (i === 0 ? p : p[0]!.toLowerCase() + p.slice(1))).join("; ");
+
+/** True when the times are a list of clock times ("at 9:00 AM"), not a rate ("every hour"). */
+const atTimes = (times: string): boolean => times.startsWith("at ");
+
+/** Days and a rate as one phrase: "Every 4 hours" (daily), "Every weekday, every hour from 9:00 AM to 5:00 PM". */
+const ratePhrase = (days: string, times: string): string => (days === "Daily" ? times[0]!.toUpperCase() + times.slice(1) : `${days}, ${times}`);
+
+/** A cron text with an optional interval in words, e.g. "Every weekday at 9:00 AM". Invalid cron: "Custom schedule". */
+export function describeCron(cron: string, interval?: RepeatInterval, opts: TextOptions = {}): string {
+  const phrases = cronPhrases(cron, interval, opts.hour12 ?? prefersHour12());
+  if (!phrases) return "Custom schedule";
+  return joinPhrases(phrases.map(({ days, times }) => (atTimes(times) ? `${days} ${times}` : ratePhrase(days, times))));
+}
+
+/**
+ * How often a rule runs, without its clock times, start, end or count: "Daily", "Every weekday", "Monthly on the
+ * 1st", "Every 4 hours"; for a list row that shows the next run's time by itself. Invalid cron: "Custom schedule".
+ */
+export function cadenceText(stored: RepeatSchedule | LegacyRepeatRule, opts: TextOptions = {}): string {
+  const repeat = readStoredRepeat(stored, localTimeZone());
+  if (!repeat) return "Repeats";
+  const phrases = cronPhrases(repeat.cron, repeat.interval, opts.hour12 ?? prefersHour12());
+  if (!phrases) return "Custom schedule";
+  return joinPhrases(phrases.map(({ days, times }) => (atTimes(times) ? days : ratePhrase(days, times))));
 }
 
 /** A repeat rule in words: the days and times, then its start, end and run count ("…, starting Sep 28, until Dec 31"). */

@@ -14,7 +14,7 @@ import { box, installMiniDom, type MiniElement } from "./mini-dom.js";
 
 const HINT =
   "Noa switched to its tab (tab t2 on docs.test) because it needs the tab visible to see the page (to take a screenshot). " +
-  "Please don't type while it works. You can turn Auto tab switching off in Settings, but then Noa can't see tabs you're not looking at, which limits what it can do.";
+  "Please don't type while it works. You can turn Auto tab switching off in Settings (Permission), but then Noa can't see tabs you're not looking at, which limits what it can do.";
 
 const request: ApprovalRequest = { id: "s1", action: "Switch to tab t2", site: "docs.test", why: "Noa needs to see this tab to take a screenshot", switchTo: { tabId: 42 }, expiresAt: "2026-10-13T09:00:00.000Z" };
 const ask: Extract<AgentEvent, { type: "approval_request" }> = { type: "approval_request", request };
@@ -23,6 +23,15 @@ describe("the Auto tab switching notice", () => {
   it("says it is on, and why, what not to do and how to turn it off", () => {
     expect(describeEvent({ type: "auto_tab_switching", tab: "t2", url: "https://docs.test/a" })).toEqual({ kind: "tabswitch", text: "Auto tab switching on", hint: HINT, settings: "tab-switching" });
     expect((describeEvent({ type: "auto_tab_switching" }) as { hint: string }).hint).toMatch(/^Noa switched to its tab because it needs the tab visible/);
+  });
+
+  it("a switch for the user (why needs_you): says it needs them there, and how else to find its tab with it off", () => {
+    const v = describeEvent({ type: "auto_tab_switching", tab: "t14", url: "https://login.newrelic.com/login", why: "needs_you" }) as { text: string; hint: string; settings: string };
+    expect(v).toMatchObject({ kind: "tabswitch", text: "Auto tab switching on", settings: "tab-switching" });
+    expect(v.hint).toBe(
+      'Noa switched to its tab (tab t14 on login.newrelic.com) because it needs you there. You can turn Auto tab switching off in Settings (Permission), but then Noa can\'t see tabs you\'re not looking at, which limits what it can do, and when it needs you, you find its tab from the "Noa needs you" pill on yours.',
+    );
+    expect(v.hint).not.toContain("don't type");
   });
 
   it("under full autonomy (full): says that did it, not the setting, and links to the Permission tab", () => {
@@ -121,12 +130,17 @@ describe("the card that asks to switch (Auto tab switching off)", () => {
 describe("the options page's toggle", () => {
   const html = readFileSync(new URL("../../static/options.html", import.meta.url), "utf8");
 
-  it("a switch labelled Auto tab switching that says what it does and what turning it off costs", () => {
+  it("a switch labelled Auto tab switching, on the Permission panel, that says what it does and what turning it off costs", () => {
     const row = /<div class="srow" id="tab-switching-row">([\s\S]*?)<\/div>\s*<\/div>/.exec(html)?.[1] ?? "";
     expect(row).toContain('<label class="srow-label" for="f-autoTabSwitching"><b>Auto tab switching</b>');
-    expect(row).toContain("Noa switches to its tab when it needs to see the page (to take a screenshot)");
+    expect(row).toContain("Noa switches to its tab when it needs to see the page (to take a screenshot) or needs you there (a sign-in, a code)");
     expect(row).toContain("without your OK it can't see tabs you're not looking at, which limits what it can do");
+    expect(row).toContain('when it needs you, the "Noa needs you" pill on your tab opens its chat');
     expect(row).toContain('<input id="f-autoTabSwitching" type="checkbox" role="switch" />');
+    // Its row, and Use my other tabs, are on the Permission panel (what Noa may do), not under Tasks any more.
+    const panel = (id: string) => [...html.matchAll(/<section class="panel" id="panel-(\w+)"[\s\S]*?<\/section>/g)].find((m) => m[0].includes(`id="${id}"`))?.[1];
+    expect(panel("tab-switching-row")).toBe("permission");
+    expect(panel("share-tabs-row")).toBe("permission");
   });
 
   it("shows the setting (on by default) and saves it as switched", () => {
@@ -134,8 +148,8 @@ describe("the options page's toggle", () => {
     expect(parseForm({ ...formValues(DEFAULT_SETTINGS), autoTabSwitching: false }).autoTabSwitching).toBe(false);
   });
 
-  it("options.html#tab-switching opens Tasks at the toggle", () => {
-    expect(sectionFromHash("#tab-switching")).toBe("tasks");
+  it("options.html#tab-switching opens Permission at the toggle", () => {
+    expect(sectionFromHash("#tab-switching")).toBe("permission");
     expect(anchorFromHash("#tab-switching")).toBe("tab-switching-row");
   });
 });

@@ -24,11 +24,13 @@ export interface FilesLike {
   list(params: BrowserMethods["files.list"]["params"]): Promise<BrowserMethods["files.list"]["result"]>;
   /** upload's paths, each on this computer (a listed cloud file is downloaded first). */
   fetch(paths: string[]): Promise<string[]>;
-  /** save_file (file-saver.ts); screenshot: the session's tab. */
+  /** save_file (file-saver.ts); screenshot and page: the session's tab. */
   save(
     params: BrowserMethods["files.save"]["params"],
-    ctx: { screenshot: () => Promise<{ base64: string; mimeType: string }> },
+    ctx: { screenshot: () => Promise<{ base64: string; mimeType: string }>; page: () => Promise<{ url: string; title: string } | null> },
   ): Promise<BrowserMethods["files.save"]["result"]>;
+  /** view_file: a picture in the user's files, made small enough to look at (noa-folder.ts NoaFiles.view). */
+  view(params: BrowserMethods["files.view"]["params"]): Promise<BrowserMethods["files.view"]["result"]>;
 }
 
 interface Targets {
@@ -65,7 +67,14 @@ const METHODS: { [M in BrowserMethod]: (t: Targets, params: BrowserMethods[M]["p
   },
   "files.save": async ({ driver, files }, p) => {
     if (!files) throw new Error("Files cannot be saved here.");
-    return files.save(p, { screenshot: () => driver.screenshot({}) });
+    return files.save(p, {
+      screenshot: () => driver.screenshot({}),
+      page: async () => (await driver.listTabs({})).tabs.find((t) => t.current) ?? null,
+    });
+  },
+  "files.view": async ({ files }, p) => {
+    if (!files) throw new Error("The user's files cannot be opened here.");
+    return files.view(p);
   },
   "media.generateImage": async ({ images }, p) => {
     if (!images) throw new Error("Image generation is not available here.");

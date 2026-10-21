@@ -25,6 +25,7 @@ import {
 import { keyEvents } from "./keys.js";
 import { armInputProbe } from "./page-cover.js";
 import { scrollViewInPage, searchFieldInPage } from "./page-input.js";
+import { enteredFieldsInPage } from "./page-entered.js";
 import { loadProbeInPage, waitForUsablePage, type LoadProbe } from "./page-load.js";
 import { FIND_LIMITS, findTextInPage } from "./page-find.js";
 import { snapshotExpression } from "./page-snapshot.js";
@@ -113,6 +114,14 @@ export class CdpActions {
         if (isDebuggerBlocked(err) || err instanceof DialogOpenError) throw err;
         return null;
       },
+    );
+  }
+
+  /** Form fields holding what was entered (page-entered.ts); 0 when the page gives no answer. */
+  enteredFields(tabId: number): Promise<number> {
+    return this.evaluate<number>(tabId, `(${enteredFieldsInPage.toString()})()`).then(
+      (n) => (typeof n === "number" ? n : 0),
+      () => 0,
     );
   }
 

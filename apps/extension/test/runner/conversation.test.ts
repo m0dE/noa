@@ -4,7 +4,6 @@ import { localTimeZone, type AgentEvent } from "@noa/shared";
 import type { AgentSession, ApiAgentOptions } from "@noa/core";
 import { ApiBrain } from "../../src/engine/api-brain.js";
 import { stopOf } from "../../src/engine/run/active.js";
-import { CLAUDE_CODE_GONE } from "../../src/engine/brain-resolver.js";
 import { CONTINUE_TEXT, FRESH_SESSION_STATUS } from "../../src/engine/run/conversation.js";
 import { env, FakeBrain, harness, setupRunnerTests, status, withoutClock, WAITS, type Harness } from "./harness.js";
 
@@ -441,22 +440,18 @@ describe("Runner: conversations", () => {
     expect(users).toEqual(["and the return one", "book it"]);
   });
 
-  it("Auto: a Claude Code chat whose helper went away is not moved to the paid hosted AI; a chosen brain or a new chat is", async () => {
+  it("Auto: a Claude Code chat moves to Noa AI once it can run (logged in), like a new chat", async () => {
     const h = harness();
     h.brain = new FakeBrain("claude-code");
     const sessionId = await firstTurn(h);
     const hosted = new FakeBrain("noa");
     h.deps.resolveBrain = async () => ({ brain: hosted, status: status("noa") });
-    await expect(h.runner.message(sessionId, "and reply to the first comment")).rejects.toThrow(CLAUDE_CODE_GONE);
-    expect(hosted.starts).toHaveLength(0);
-    // A new chat resolves as usual.
-    await h.runner.runAdhoc({ instructions: "Summarize my inbox" });
+    await h.runner.message(sessionId, "and reply to the first comment");
     await settle(h);
     expect(hosted.starts).toHaveLength(1);
-    // Chosen by the user: theirs to pay for.
-    h.settings = { ...h.settings, brain: "noa" };
-    await h.runner.message(sessionId, "and reply to the first comment");
+    await h.runner.runAdhoc({ instructions: "Summarize my inbox" });
     await settle(h);
     expect(hosted.starts).toHaveLength(2);
   });
+
 });

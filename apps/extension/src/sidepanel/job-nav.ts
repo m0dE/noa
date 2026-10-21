@@ -3,13 +3,13 @@
  * with (its search, its scroll, the row that was opened), so the user lands where they were. DOM-free.
  */
 
-import type { JobView } from "./jobs.js";
+import { JOB_VIEWS, type JobView } from "./jobs.js";
 
 export type PanelView = { kind: "list" } | { kind: "job"; key: string };
 
 /** What the list was left with when a job was opened. */
 export interface ListPlace {
-  /** Home or Scheduled. */
+  /** Home, Scheduled or History. */
   view: JobView;
   query: string;
   scrollTop: number;
@@ -94,7 +94,8 @@ const VIEW_KEY = "noa.jobs.view";
 /** The list's view this panel showed last (Home when none, or storage is blocked). */
 export function storedView(storage: Pick<Storage, "getItem">): JobView {
   try {
-    return storage.getItem(VIEW_KEY) === "scheduled" ? "scheduled" : "home";
+    const v = storage.getItem(VIEW_KEY);
+    return JOB_VIEWS.find((view) => view === v) ?? "home";
   } catch {
     return "home";
   }

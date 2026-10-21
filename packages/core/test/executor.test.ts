@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { clipEventText, MAX_ACT_STEPS, MAX_EVENT_TEXT, OUT_OF_CREDIT, type TaskRunResult } from "@noa/shared";
 import { createToolExecutor, SecretRedactor } from "../src/index.js";
 import { REDACTED } from "../src/redact.js";
-import { formatFileList, formatSavedFile, picksEvent } from "../src/executor.js";
+import { formatFileList, formatFileMeta, formatSavedFile, picksEvent } from "../src/executor.js";
 import { OutOfCreditError } from "../src/api-errors.js";
 import { goalKey, rankCandidates } from "../src/act.js";
 import { formatElementsInWords } from "../src/page-format.js";
@@ -70,6 +70,21 @@ describe("createToolExecutor: plain tools", () => {
     expect(r.text).toMatch(/^Navigated to https:\/\/x\.com\/home\n\nURL: https:\/\/x\.com\/home/);
     expect(r.text).toContain('textbox "Post text"');
     expect(exec.takePicks()).toEqual({ jev: 0, claude: 0, byAddress: 1 });
+  });
+
+  it("navigate that kept the page it would have left says where the address opened and how to get back", async () => {
+    const x = new FakeX();
+    const caller = x.caller();
+    const browser: BrowserCaller = {
+      call: (async (method: string, params: unknown) => {
+        const r = await caller.call(method as never, params as never);
+        return method === "browser.navigate" ? { ...(r as object), kept: "t1", tab: "t3" } : r;
+      }) as BrowserCaller["call"],
+    };
+    const { exec } = setup(x, { browser });
+    const r = await exec.call("navigate", { url: "https://x.com/home" });
+    expect(r.text).toMatch(/^Opened https:\/\/x\.com\/home in a new tab, t3, now your current tab: t1 was left as it is, because its form holds what was entered there.*switch_tab t1/);
+    expect(r.text).toContain("\n\nURL: https://x.com/home");
   });
 
   it("read_page returns compact text including element text", async () => {
@@ -907,7 +922,9 @@ describe("createToolExecutor: list_files", () => {
     expect(r.isError).toBeUndefined();
     expect(r.text).toContain(`The user's Noa folder: ${folder}`);
     expect(r.text).toContain(`- ${resume} (47 KB, 2026-10-01)`);
-    expect(r.text).toContain("the newest 2 of 5");
+    expect(r.text).toContain('5 file(s) match "resume" (by name, words and date only: the account\'s meaning search is not available), best first (the best 2).');
+    expect(formatFileList(listing)).toContain("Files, newest first, the newest 2 of 5: give search to find any of the others");
+    expect(formatFileList({ ...listing, searched: { meaning: true, pending: 3 } }, "resume")).toContain('5 file(s) match "resume", best first (the best 2). 3 of the user\'s cloud files are still being indexed');
 
     const up = await exec.call("upload", { index: 3, paths: [resume.toLowerCase()] });
     expect(up.isError).toBeUndefined();
@@ -916,16 +933,58 @@ describe("createToolExecutor: list_files", () => {
 
   it("says when the folder is empty, and when only Chrome's own downloads could be listed", () => {
     expect(formatFileList({ folder, files: [], total: 0 }, "cv")).toBe(
-      `The user's Noa folder: ${folder}\nIt has no files matching "cv". The user can put files there (or attach them to the message) for you to use.`,
+      `The user's Noa folder: ${folder}\nNo file matches "cv" by its name, note, page, site or date. Try other words (what it shows, where it came from), or list_files without a search for the newest files.`,
     );
+    expect(formatFileList({ folder, files: [], total: 0 })).toMatch(/It has no files\. The user can put files there/);
     expect(formatFileList({ ...listing, total: 2, partial: true })).toMatch(/Only the files Chrome saved there itself are listed/);
     const cloud = { path: `${folder}\\images\\banner.png`, name: "images/banner.png", size: 2048, modified: "2026-09-30T10:00:00.000Z", cloud: true as const };
     expect(formatFileList({ folder, files: [cloud], total: 1 })).toContain(`- ${cloud.path} (2 KB, 2026-09-30, in the user's cloud files: saved to this path when you upload it)`);
   });
 });
 
+describe("createToolExecutor: what is known about files, and view_file", () => {
+  const folder = "C:\\Users\\me\\Downloads\\Noa";
+  const mug = `${folder}\\IMG_3302.png`;
+  const lamp = { path: `${folder}\\products\\lamp.png`, name: "products/lamp.png", size: 2048, modified: "2026-10-01T09:00:00.000Z" };
+
+  it("lists each file's picture size, source, page and note under it", () => {
+    const meta = { width: 800, height: 600, source: "https://cdn.test/7f.png", page: "https://shop.test/lamp", pageTitle: "Lamp", about: "The lamp, front" };
+    expect(formatFileList({ folder, files: [{ ...lamp, meta }], total: 1 })).toContain(
+      `- ${lamp.path} (2 KB, 2026-10-01)\n  800x600 px; from https://cdn.test/7f.png; found on "Lamp" (https://shop.test/lamp); note: The lamp, front`,
+    );
+    expect(formatFileMeta({ source: "https://a.test/x", page: "https://a.test/x" })).toBe("from https://a.test/x");
+    expect(formatSavedFile({ ...lamp, local: true, folder: "", contentType: "image/gif", cloud: "saved", meta: { width: 1, height: 1 } })).toMatch(/only 1x1 px: a placeholder or tracking pixel/);
+    expect(formatSavedFile({ ...lamp, local: true, folder: "", contentType: "image/png", cloud: "saved", meta })).not.toMatch(/placeholder/);
+    expect(formatSavedFile({ ...lamp, local: true, folder: "products", contentType: "image/png", cloud: "saved", meta })).toMatch(/^Saved products\/lamp.png \(2 KB, 800x600 px\)[^\n]*\nKept with it: 800x600 px; from/);
+  });
+
+  it("view_file shows only a picture the agent was given, and passes save_file's note on", async () => {
+    const x = new FakeX();
+    const calls: [string, unknown][] = [];
+    const browser: BrowserCaller = {
+      call: async (method, params) => {
+        calls.push([method, params]);
+        if (method === "files.list") return { folder, files: [{ path: mug, name: "IMG_3302.png", size: 4, modified: "2026-10-01T09:00:00.000Z", cloud: true }], total: 1 } as never;
+        if (method === "files.view") return { image: { base64: "AAAA", mimeType: "image/jpeg" }, width: 1600, height: 1200, size: 4 } as never;
+        if (method === "files.save") return { path: `${folder}\\a.png`, name: "a.png", folder: "", size: 1, contentType: "image/png", cloud: "saved" } as never;
+        return x.caller().call(method, params);
+      },
+    };
+    const { exec } = setup(x, { browser });
+    const refused = await exec.call("view_file", { path: "C:\\Users\\me\\secret.png" });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toMatch(/not a file you were given/);
+    await exec.call("list_files", {});
+    const r = await exec.call("view_file", { path: mug.toLowerCase() });
+    expect(r).toMatchObject({ text: `${mug}: 1600x1200 px, 4 B.`, image: { base64: "AAAA", mimeType: "image/jpeg" } });
+    expect(calls.find(([m]) => m === "files.view")).toEqual(["files.view", { path: mug }]);
+    await exec.call("save_file", { url: "https://a.test/a.png", about: "A mug, side view" });
+    expect(calls.find(([m]) => m === "files.save")![1]).toEqual({ url: "https://a.test/a.png", about: "A mug, side view" });
+  });
+});
+
 describe("createToolExecutor: save_file", () => {
-  const kept = { path: "C:\\Users\\me\\Downloads\\Noa\\invoices\\neon-2026-09.pdf", name: "neon-2026-09.pdf", folder: "invoices", size: 48_210, contentType: "application/pdf", cloud: "saved" as const };
+  const kept = { path: "C:\\Users\\me\\Downloads\\Noa\\invoices\\neon-2026-09.pdf", local: true, name: "neon-2026-09.pdf", folder: "invoices", size: 48_210, contentType: "application/pdf", cloud: "saved" as const };
   const saveBrowser = (x: FakeX, calls: unknown[], result: unknown = kept): BrowserCaller => ({
     call: async (method, params) => {
       if (method !== "files.save") return x.caller().call(method, params);
@@ -974,6 +1033,12 @@ describe("createToolExecutor: save_file", () => {
   it("says why the cloud has no copy", () => {
     expect(formatSavedFile({ ...kept, cloud: "no-plan" })).toMatch(/No cloud copy: the user's plan has no cloud files/);
     expect(formatSavedFile({ ...kept, cloud: "signed-out" })).toMatch(/not signed in to a Noa account/);
+    expect(formatSavedFile({ ...kept, cloud: "off" })).toMatch(/the user keeps files on this computer only \(Settings > Storage\)/);
+    // Cloud only: where it is, and the path upload downloads it to.
+    const cloudOnly = formatSavedFile({ ...kept, local: false });
+    expect(cloudOnly).toMatch(/^Saved neon-2026-09\.pdf \(47 KB\) in the user's cloud files, the invoices folder, only: they keep files in the cloud/);
+    expect(cloudOnly).toContain(`upload this path (it is downloaded there first): ${kept.path}`);
+    expect(cloudOnly).not.toMatch(/Noa folder: /);
     expect(formatSavedFile({ ...kept, cloud: "failed", cloudError: "full" })).toMatch(/storing it failed \(full\)/);
     expect(formatSavedFile({ ...kept, cloudFolder: "" })).toMatch(/top folder \(the account server does not take the folder "invoices" yet\)/);
   });

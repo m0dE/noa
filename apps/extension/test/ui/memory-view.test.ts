@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent, MemoryEntry } from "@noa/shared";
-import { backfillText, dayTimeText, EPISODES_PAGE, forgetAllText, forgetTaskText, kindsOffAfter, memoryPanel, PINNABLE_KINDS, RECORDS_PAGE, syncText } from "../../src/options/memory-view.js";
+import { backfillText, dayTimeText, EPISODES_PAGE, forgetAllText, forgetTaskText, kindsOffAfter, memoryPanel, PINNABLE_KINDS, RECORDS_PAGE, syncText, whereView } from "../../src/options/memory-view.js";
 import { memoryNoteView, undoneText } from "../../src/sidepanel/memory-note.js";
 import { chatMemoryView } from "../../src/sidepanel/chat-memory.js";
 import { describeEvent } from "../../src/sidepanel/event-format.js";
@@ -137,6 +137,18 @@ describe("memoryPanel (Settings > Memory)", () => {
   it("says when it waits for the user about another account, or was kept separate", () => {
     expect(syncText({ state: "ask", account: "bob@example.com" })).toEqual({ text: "Add this computer's memory to bob@example.com? Nothing is sent until you choose.", tone: "", action: "ask", account: "bob@example.com" });
     expect(syncText({ state: "separate", account: "bob@example.com" })).toMatchObject({ text: "Kept on this computer only: you chose not to add it to bob@example.com.", action: "add" });
+  });
+
+  it("offers this computer or the account, the account only signed in on a plan that syncs memory", () => {
+    const pick = (s: Parameters<typeof whereView>[0]) => whereView(s).map((o) => `${o.id}${o.checked ? "*" : ""}${o.disabled ? "-" : ""}`).join();
+    expect(pick({ state: "local", cloud: "signed-out" })).toBe("local*,cloud-");
+    expect(pick({ state: "local", cloud: "no-plan" })).toBe("local*,cloud-");
+    expect(pick({ state: "local", cloud: "allowed" })).toBe("local*,cloud");
+    // Chosen, the account stays checked (and can be left) while signed out or on Free.
+    expect(pick({ state: "signed-out" })).toBe("local,cloud*");
+    expect(pick({ state: "no-plan" })).toBe("local,cloud*");
+    expect(pick({ state: "on" })).toBe("local,cloud*");
+    expect(whereView(undefined)).toEqual([]);
   });
 
   it("shows paused memory and kinds that are off", () => {
